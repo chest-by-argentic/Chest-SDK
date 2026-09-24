@@ -7,7 +7,7 @@ Ouvrez ce dossier dans votre outil habituel et demandez à votre agent de modifi
 le métier. Le SDK est fourni en sources pour cette preuve ; il n’est pas publié
 sur npm et ses imports ne constituent pas encore un format définitif.
 
-D’où vient ce projet : le dépôt Chest l’assemble par `scripts/export/export-creator.mjs`
+D’où vient ce projet : le dépôt Chest l’assemble par `tests/export/export-creator.mjs`
 à partir de trois sources — ce gabarit (dossier `template/` du SDK
 `chest-by-argentic/Chest-SDK` : ce README, `AGENTS.md`, `chest.template.json`,
 `.containerignore`, `scripts/package.mjs`), le client du SDK (`client/src` et
