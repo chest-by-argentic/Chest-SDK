@@ -28,7 +28,7 @@ le propriétaire est Paul Witczak, on lui écrit en français.
 
 | Si tu changes… | …tu mets à jour |
 |---|---|
-| `client/src`, `client/test` | les tests (`npm test` vert), puis la copie vendue du dépôt Chest : `node scripts/sync-sdk.mjs` dans `03_code/01_chest` (il écrit `packages/chest-client/VENDORED.md`), puis les outils du store par `scripts/export-store.mjs` ou la même recopie dans `forms/packages/chest-client` |
+| `client/src`, `client/test` | les tests (`npm test` vert), puis la copie vendue du dépôt Chest : `npm run sync:sdk` dans `03_code/01_chest-by-argentic` (il écrit `tests/sdk/chest-client/VENDORED.md` et `tests/creator/VENDORED.md`), puis chaque outil du store (`03_code/03_argentic-store/<outil>/packages/chest-client`, son `VENDORED.md` nomme le commit) : par `scripts/export/export-store.mjs` pour un outil exporté, sinon la même recopie à la main |
 | `template/*` | la copie du dépôt Chest (`templates/creator`, même script `sync-sdk.mjs`), et son test `tests/creator/export.test.mjs` s’il liste les fichiers |
 | le contrat (ce que le canal demande, l’enveloppe) | `docs/architecture.md` du dépôt Chest, section « Contrat applicatif actuel » ; le README de ce dépôt |
 
