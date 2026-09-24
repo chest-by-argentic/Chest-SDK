@@ -1,0 +1,12 @@
+**
+!Containerfile
+!package.json
+!dist
+!dist/apps
+!dist/apps/testapp
+!dist/apps/testapp/src
+!dist/apps/testapp/src/**
+!dist/packages
+!dist/packages/chest-client
+!dist/packages/chest-client/src
+!dist/packages/chest-client/src/**
