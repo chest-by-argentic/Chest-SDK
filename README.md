@@ -32,14 +32,15 @@ Le SDK n’est pas publié sur npm. Un outil en porte une **copie vendue** de
 `client/src` (et `client/test`) sous `packages/chest-client`, compilée avec
 ses propres sources :
 
-- dans le dépôt Chest, `packages/chest-client` et `templates/creator` sont
-  remis à jour depuis ce dépôt par `node scripts/sync-sdk.mjs`
-  (`npm run sync:sdk`) ;
-- un projet de départ est assemblé par `scripts/export-creator.mjs` du dépôt
-  Chest (ce gabarit + le client + l’outil d’exemple `apps/testapp`) ;
-- un outil du catalogue est exporté par `scripts/export-store.mjs`, qui y
-  copie le client ; les outils du store (`chest-by-argentic/forms`…) gardent
-  la même disposition, `forms/packages/chest-client`.
+- dans le dépôt Chest, `tests/sdk/chest-client` et `tests/creator` sont
+  remis à jour depuis ce dépôt par `npm run sync:sdk`
+  (`scripts/sync-sdk.mjs`), qui écrit leur `VENDORED.md` ;
+- un projet de départ est assemblé par `tests/export/export-creator.mjs` du
+  dépôt Chest (ce gabarit + le client + l’outil d’exemple `apps/testapp`) ;
+- un outil est exporté par `tests/export/export-store.mjs`, qui y copie le
+  client ; les outils du store (`chest-by-argentic/forms`, le banc d’essai
+  `PaulWCZ/TestAppChestGithub`…) gardent la même disposition,
+  `packages/chest-client` avec son `VENDORED.md`.
 
 ## Version
 
