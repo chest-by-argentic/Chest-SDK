@@ -6,7 +6,7 @@ SDK `chest-by-argentic/Chest-SDK` (son dossier `client/src`), à ne pas modifier
 ici — un changement du client se fait dans le SDK, puis la copie est remise à
 jour. Son contrat est expérimental ; ne pas inventer de capacités ni de
 permissions supplémentaires. Ce projet a été assemblé par
-`scripts/export-creator.mjs` du dépôt Chest à partir du gabarit du SDK
+`scripts/export/export-creator.mjs` du dépôt Chest à partir du gabarit du SDK
 (`template/`), de son client et de l’outil d’exemple `apps/testapp`.
 
 - Séparer modèle, logique métier, adaptation des requêtes et stockage.
