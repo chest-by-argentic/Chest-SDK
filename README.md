@@ -3,8 +3,8 @@
 Le SDK est ce qu’un outil embarque pour parler avec son Chest : le canal privé
 que le Core lui attache et les trois services qu’il y trouve (outil v1, un
 worker), et, pour un outil serveur (outil v2), le membre que le Chest lui
-affirme et l’adresse de sa base de données. Il tient en sept fichiers
-TypeScript, sans dépendance :
+affirme, l’adresse de sa base de données et ses fichiers. Il tient en huit
+fichiers TypeScript, sans dépendance :
 
 | Fichier | Rôle |
 |---|---|
@@ -14,13 +14,16 @@ TypeScript, sans dépendance :
 | `client/src/worker.ts` | `serve` / `runWorker` : la boucle d’un worker, une invocation à la fois, 503 `expired` passée l’échéance, jamais de rejeu d’une écriture au résultat incertain |
 | `client/src/member.ts` | `member(request)` : le membre d’une requête de l’hôte d’équipe d’un outil serveur, lu dans l’assertion `Chest-Member` et vérifié ; `null` sans assertion valable |
 | `client/src/database.ts` | `databaseUrl()` : l’adresse de la base PostgreSQL propre à l’outil serveur (capacité `database`) ; `CapabilityNotGranted` sans elle |
-| `client/src/errors.ts` | `ChestError` (`code`, `status`) et `CapabilityNotGranted` (403, `capability_not_granted`) : ce que le SDK lève quand le Chest ne donne pas ce qu’un outil demande |
+| `client/src/files.ts` | `put`, `get`, `list`, `delete`, `url` : les fichiers privés de l’outil serveur (capacité `files`), gardés par le Chest, et un lien signé de 15 minutes vers l’un d’eux |
+| `client/src/errors.ts` | `ChestError` (`code`, `status`), `CapabilityNotGranted` (403, `capability_not_granted`), `TooLarge` (413), `QuotaExceeded` (429), `Unavailable` (503) : ce que le SDK lève quand le Chest ne donne pas ce qu’un outil demande |
 
 `client/test/worker.test.ts` éprouve la boucle sur un canal simulé ;
 `client/test/member.test.ts` lit une assertion signée par le Chest lui-même
 (vecteur produit par `chest/toolfront`) et refuse tout le reste ;
 `client/test/database.test.ts` lit l’adresse que donne le lanceur du Chest et
-refuse toute autre.
+refuse toute autre ; `client/test/files.test.ts` joue l’API du Chest en
+mémoire (routes et codes du broker) et vérifie que rien ne part sans
+`CHEST_API` ni avec un nom hors grammaire.
 `template/` est le gabarit du projet qu’un auteur d’outil reçoit (voir plus bas).
 
 ## Le contrat, en bref
@@ -103,6 +106,39 @@ fichier en échec garde la version en service. Le Chest tient la liste des
 fichiers joués (table `chest_migrations`) : une version qui en perd un ou en
 change un est refusée. Une migration doit laisser la version précédente
 fonctionner — le retour à la version précédente ne défait rien.
+
+## `files` — fichiers d’un outil serveur
+
+Un outil v2 qui déclare `"capabilities": ["files"]` (« Fichiers » à
+l’approbation) garde des fichiers privés **par son Chest**, jamais sur son
+disque (la racine du conteneur est en lecture seule) : 1 Gio et 10 000
+objets par outil, 32 Mio par objet. Le lanceur donne à l’outil
+`CHEST_API=http://127.0.0.1:<port>` — son propre port, relayé au Chest ; le
+conteneur n’a pas de réseau — et l’instance est l’identité : l’outil
+n’atteint que ses fichiers.
+
+```ts
+import * as files from "../../packages/chest-client/src/files.js";
+await files.put("photos/chat.png", octets, "image/png");  // Uint8Array ou texte
+const fichier = await files.get("photos/chat.png");        // {data, type, size} ou null
+const { files: liste, next } = await files.list({ prefix: "photos/" }); // 1000 par page
+await files.delete("photos/chat.png");                     // true, ou false s’il n’existait pas
+const { url, expiresIn } = await files.url("photos/chat.png");
+```
+
+Un nom : jusqu’à 8 segments de 1 à 100 lettres, chiffres, `.`, `_` ou `-`,
+séparés par `/`, aucun commençant par `.` ou `-` ; refusé avant tout envoi
+sinon (`ChestError`, `invalid_name`). `url` signe un lien vers le fichier tel
+qu’il est, sur l’**hôte d’équipe** de l’outil (`/_chest/files/…`) : qui l’a
+l’ouvre sans se connecter pendant 15 minutes, ou jusqu’à ce que le fichier
+change ou parte ; le Chest le sert dans un bac à sable, affiché pour une
+image, un PDF ou du texte brut, téléchargé sinon. Le donner au navigateur
+d’un membre, jamais à une page publique. Erreurs : `CapabilityNotGranted`
+(version sans la capacité, ou pas de `CHEST_API`), `TooLarge` (413),
+`QuotaExceeded` (429), `Unavailable` (Chest injoignable ou réponse qui n’est
+pas la sienne : une écriture a pu avoir lieu ou non), `ChestError` pour le
+reste (`invalid_type`, `not_found` pour `url`…). Retirer l’outil retire ses
+fichiers ; une nouvelle version les garde.
 
 ## Comment un outil l’embarque aujourd’hui
 
