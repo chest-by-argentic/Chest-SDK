@@ -15,14 +15,12 @@ const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
 const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const name = manifest.name;
 
-// What each subpath gives at run time; the root gives them all, files as a
-// namespace.
+// What each subpath gives at run time (tool contract v2); the root gives them
+// all, files as a namespace. The retired v1 modules (channel, record,
+// requests, worker) stay in client/src for the Chest repository's vendored
+// copy and must never reach the package.
 const expected = {
   errors: ["CapabilityNotGranted", "ChestError", "QuotaExceeded", "TooLarge", "Unavailable"],
-  channel: ["ChestChannel", "ChestServiceError"],
-  record: ["ChestRecord"],
-  requests: ["ChestRequests", "invocation"],
-  worker: ["runWorker", "serve"],
   member: ["member"],
   database: ["databaseUrl"],
   files: ["delete", "get", "list", "put", "url"],
@@ -53,6 +51,7 @@ try {
   for (const path of shipped) console.log("  " + path);
   for (const path of shipped) {
     assert.ok(/^(package\.json|README\.md|LICENSE|dist\/.+\.(js|d\.ts)(\.map)?|client\/index\.ts|client\/src\/[a-z]+\.ts)$/u.test(path), `unexpected file in the package: ${path}`);
+    assert.ok(!/(^|\/)(channel|record|requests|worker)\.(ts|js|d\.ts)(\.map)?$/u.test(path), `retired v1 module in the package: ${path}`);
   }
   for (const target of Object.values(manifest.exports).flatMap(entry => typeof entry === "string" ? [entry] : Object.values(entry))) {
     assert.ok(shipped.includes(target.slice(2)), `export target missing from the package: ${target}`);
@@ -98,6 +97,13 @@ try {
   writeFileSync(join(consumer, "probe.mjs"), probe);
   verify(run(process.execPath, ["probe.mjs"], consumer), "Node");
 
+  step("the retired v1 subpaths are not exported");
+  for (const sub of ["channel", "record", "requests", "worker"]) {
+    const answer = run(process.execPath, ["--input-type=module", "-e", `import(${JSON.stringify(`${name}/${sub}`)}).then(() => console.log("resolved"), error => console.log(error.code))`], consumer).trim();
+    assert.equal(answer, "ERR_PACKAGE_PATH_NOT_EXPORTED", `${name}/${sub} must not be exported`);
+    console.log(`  ${name}/${sub}: ${answer}`);
+  }
+
   step("bundle every subpath with esbuild");
   const esbuild = await import(pathToFileURL(join(root, "node_modules", "esbuild", "lib", "main.js")).href);
   const bundled = await esbuild.build({
@@ -119,10 +125,6 @@ try {
   writeFileSync(join(consumer, "consumer.ts"), `import type { IncomingMessage } from "node:http";
 import * as sdk from "${name}";
 import { CapabilityNotGranted, ChestError, QuotaExceeded, TooLarge, Unavailable } from "${name}/errors";
-import { ChestChannel, ChestServiceError } from "${name}/channel";
-import { ChestRecord, type RecordRepository } from "${name}/record";
-import { ChestRequests, invocation, type Actor, type Invocation } from "${name}/requests";
-import { runWorker, serve, type Handler } from "${name}/worker";
 import { member, type Member } from "${name}/member";
 import { databaseUrl } from "${name}/database";
 import * as files from "${name}/files";
@@ -130,21 +132,11 @@ import type { FileData, FileObject, FilePage } from "${name}/files";
 
 export function who(request: Request | IncomingMessage): Member | null { return member(request); }
 export const url: string = databaseUrl();
-export const handler: Handler = async (request: Invocation, record: ChestRecord) => {
-  const actor: Actor = request.actor;
-  await record.write(await record.read());
-  return { status: 200, body: { operation: request.operation, subject: actor.subject } };
-};
-export const repository: RecordRepository = new ChestRecord(ChestChannel.stdio());
-export const requests = new ChestRequests(ChestChannel.stdio());
-export const parsed: Invocation = invocation({});
-export const loops: Array<(handler: Handler) => Promise<void>> = [runWorker, serve];
 export async function keep(): Promise<[FileObject, FileData | null, FilePage, boolean, { url: string; expiresIn: number }]> {
   return [await files.put("a.txt", "a", "text/plain"), await files.get("a.txt"), await files.list({ prefix: "a" }), await files.delete("a.txt"), await sdk.files.url("a.txt")];
 }
 export function code(error: unknown): string | null {
   if (error instanceof CapabilityNotGranted || error instanceof QuotaExceeded || error instanceof TooLarge || error instanceof Unavailable) return error.code;
-  if (error instanceof ChestServiceError) return String(error.status);
   return error instanceof ChestError && error === (error satisfies sdk.ChestError) ? error.code : null;
 }
 `);

@@ -35,7 +35,10 @@ two-factor authentication and disallow tokens ».
   Authentication**.
 - Node 22 ou plus sur le Mac (`node --version`). La version de npm n’importe
   pas pour cette étape.
-- La PR « npm publish » est fusionnée dans `main`.
+- **La PR #5 (« Publish on npm as @argentic/chest-sdk 0.1.0 ») est
+  fusionnée dans `main`.** Pas avant : tant qu’elle ne l’est pas, `main` porte
+  encore `"private": true` et aucune version, et npm refuse avec `EPRIVATE`
+  (« This package has been marked as private »).
 
 ### Se connecter à npm
 
@@ -63,11 +66,23 @@ cd ~/Documents/Chest-by-Argentic/03_code/02_chest-sdk
 git switch main
 git pull --ff-only
 git status          # doit dire : nothing to commit, working tree clean
+node -p "require('./package.json').name+'@'+require('./package.json').version"
+                    # doit afficher exactement : @argentic/chest-sdk@0.1.0
 npm ci
 npm test
 npm publish --dry-run --provenance=false   # répétition : liste les fichiers, n’envoie rien
 npm publish --access public --provenance=false
 ```
+
+Si la commande `node -p …` affiche autre chose (par exemple
+`chest-sdk@undefined`), s’arrêter : la PR #5 n’est pas encore fusionnée, ou
+`git pull` n’a pas été fait. `npm publish` échouerait avec `EPRIVATE`.
+
+La répétition doit lister 28 fichiers : `LICENSE`, `README.md`,
+`package.json`, `client/index.ts`, `client/src/{database,errors,files,member}.ts`
+et `dist/` (`index` et ces quatre modules, `.js`, `.d.ts` et leurs `.map`).
+Aucun `channel`, `record`, `requests` ni `worker` : le contrat v1 est retiré et
+ne se publie pas.
 
 Ce que fait `npm publish` : il relance d’abord les tests et la vérification du
 paquet (`prepublishOnly` : `npm test` puis `npm run check:package`, quelques

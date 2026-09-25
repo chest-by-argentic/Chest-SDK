@@ -1,7 +1,7 @@
 {
   "name": "@argentic/chest-sdk",
   "version": "0.1.0",
-  "description": "The client a Chest tool embeds: the signed member of a request, its own database and files, and the private channel of a worker.",
+  "description": "The client a Chest server tool embeds: the member the Chest asserts on a request, the tool's own database and its private files.",
   "keywords": [
     "chest",
     "argentic",
@@ -35,22 +35,6 @@
       "types": "./dist/src/errors.d.ts",
       "default": "./dist/src/errors.js"
     },
-    "./channel": {
-      "types": "./dist/src/channel.d.ts",
-      "default": "./dist/src/channel.js"
-    },
-    "./record": {
-      "types": "./dist/src/record.d.ts",
-      "default": "./dist/src/record.js"
-    },
-    "./requests": {
-      "types": "./dist/src/requests.d.ts",
-      "default": "./dist/src/requests.js"
-    },
-    "./worker": {
-      "types": "./dist/src/worker.d.ts",
-      "default": "./dist/src/worker.js"
-    },
     "./member": {
       "types": "./dist/src/member.d.ts",
       "default": "./dist/src/member.js"
@@ -68,7 +52,10 @@
   "files": [
     "dist",
     "client/index.ts",
-    "client/src"
+    "client/src/errors.ts",
+    "client/src/member.ts",
+    "client/src/database.ts",
+    "client/src/files.ts"
   ],
   "publishConfig": {
     "access": "public",

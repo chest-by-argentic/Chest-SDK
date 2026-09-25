@@ -50,6 +50,10 @@ Le SDK est en anglais : code, commentaires, messages d’erreur, `README.md`
 
 TypeScript strict (ES2022, NodeNext). Rien d’autre que les fichiers de
 `scripts/sync-sdk.mjs` du dépôt Chest dans `client/src` et `client/test` : ce
-script refuse tout fichier en plus (d’où `client/index.ts` à part). La version
+script refuse tout fichier en plus (d’où `client/index.ts` à part). Le paquet
+npm ne publie que le contrat v2 (`errors`, `member`, `database`, `files`) ;
+`channel`, `record`, `requests`, `worker` et `template/` sont le contrat v1
+retiré, gardés tant que le dépôt Chest les copie, jamais construits dans
+`dist/` ni exportés. La version
 est celle de `package.json`, publiée par un tag `vX.Y.Z` (`PUBLISHING.md`).
 Branche + PR ; les tests doivent passer avant de rendre la main.
