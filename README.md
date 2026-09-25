@@ -2,8 +2,9 @@
 
 Le SDK est ce qu’un outil embarque pour parler avec son Chest : le canal privé
 que le Core lui attache et les trois services qu’il y trouve (outil v1, un
-worker), et le membre que le Chest affirme à un outil serveur (outil v2). Il
-tient en cinq fichiers TypeScript, sans dépendance :
+worker), et, pour un outil serveur (outil v2), le membre que le Chest lui
+affirme et l’adresse de sa base de données. Il tient en sept fichiers
+TypeScript, sans dépendance :
 
 | Fichier | Rôle |
 |---|---|
@@ -12,10 +13,14 @@ tient en cinq fichiers TypeScript, sans dépendance :
 | `client/src/requests.ts` | `ChestRequests` et `invocation()` : les invocations que le Chest remet à l’outil (permission `requests`), leur enveloppe validée — `id`, `operation`, `input`, `actor` (`subject`, `manage`, `publish`, `role`), `deadline` — et la réponse |
 | `client/src/worker.ts` | `serve` / `runWorker` : la boucle d’un worker, une invocation à la fois, 503 `expired` passée l’échéance, jamais de rejeu d’une écriture au résultat incertain |
 | `client/src/member.ts` | `member(request)` : le membre d’une requête de l’hôte d’équipe d’un outil serveur, lu dans l’assertion `Chest-Member` et vérifié ; `null` sans assertion valable |
+| `client/src/database.ts` | `databaseUrl()` : l’adresse de la base PostgreSQL propre à l’outil serveur (capacité `database`) ; `CapabilityNotGranted` sans elle |
+| `client/src/errors.ts` | `ChestError` (`code`, `status`) et `CapabilityNotGranted` (403, `capability_not_granted`) : ce que le SDK lève quand le Chest ne donne pas ce qu’un outil demande |
 
 `client/test/worker.test.ts` éprouve la boucle sur un canal simulé ;
 `client/test/member.test.ts` lit une assertion signée par le Chest lui-même
-(vecteur produit par `chest/toolfront`) et refuse tout le reste.
+(vecteur produit par `chest/toolfront`) et refuse tout le reste ;
+`client/test/database.test.ts` lit l’adresse que donne le lanceur du Chest et
+refuse toute autre.
 `template/` est le gabarit du projet qu’un auteur d’outil reçoit (voir plus bas).
 
 ## Le contrat, en bref
@@ -61,6 +66,43 @@ if (!who) { response.writeHead(401).end(); return; }
 Chest donne au membre parmi ceux que le manifeste déclare. Seul le frontal du
 Chest joint le conteneur : la signature est une seconde défense ; les règles
 métier (qui écrit quoi) restent celles de l’outil.
+
+## `databaseUrl()` — base de données d’un outil serveur
+
+Un outil v2 qui déclare `"capabilities": ["database"]` dans son `chest.json`
+reçoit une base PostgreSQL à lui seul (la capacité est montrée et approuvée
+comme une permission, « Base de données »). Le conteneur n’a pas de réseau :
+son lanceur écoute sur `127.0.0.1` et relaie chaque connexion au Chest. Le
+lanceur pose `DATABASE_URL` —
+`postgres://<utilisateur>:<mot de passe>@127.0.0.1:<port>/<base>?sslmode=disable`,
+l’utilisateur et la base portant le même nom `t_<outil>` — et `PGHOST`,
+`PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, qui priment sur une variable
+de l’outil du même nom. `databaseUrl()` rend `DATABASE_URL` s’il a exactement
+cette forme, et lève `CapabilityNotGranted` sinon (version sans la capacité,
+ou `DATABASE_URL` propre à l’outil). La valeur est un secret : ne jamais la
+journaliser ni l’envoyer au navigateur.
+
+Le SDK n’embarque pas de client PostgreSQL : l’outil choisit le sien, par
+exemple [`postgres`](https://github.com/porsager/postgres) (porsager, sans
+dépendance) ou [`pg`](https://node-postgres.com) :
+
+```ts
+import postgres from "postgres";
+import { databaseUrl } from "../../packages/chest-client/src/database.js";
+const sql = postgres(databaseUrl(), { max: 5 });
+const notes = await sql`SELECT id, text FROM notes ORDER BY id`;
+```
+
+Dix connexions au plus par instance ; une requête de plus de 30 s, une
+transaction inactive plus de 60 s sont interrompues par le Chest.
+**Migrations** : les fichiers `migrations/NNNN_nom.sql` du dépôt
+(`^[0-9]{4}_[a-z0-9_-]{1,64}\.sql$`, 256 au plus, 1 Mio chacun) sont joués
+par le Chest, dans l’ordre, chacun dans sa transaction, à l’installation et à
+chaque mise à jour, avant que la nouvelle version reçoive le trafic ; un
+fichier en échec garde la version en service. Le Chest tient la liste des
+fichiers joués (table `chest_migrations`) : une version qui en perd un ou en
+change un est refusée. Une migration doit laisser la version précédente
+fonctionner — le retour à la version précédente ne défait rien.
 
 ## Comment un outil l’embarque aujourd’hui
 
