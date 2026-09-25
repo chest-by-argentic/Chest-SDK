@@ -164,18 +164,6 @@ Chest not reached, or an answer that is not its own: a write may or may not
 have happened), `ChestError` for the rest (`invalid_type`, `not_found` for
 `url`…). Removing the tool removes its files; a new version keeps them.
 
-## Retired v1 contract
-
-Tool contract v1 (a worker talking over stdout/stdin: invocations, a record)
-is retired and **not part of the package**. Its modules,
-`client/src/{channel,record,requests,worker}.ts` and
-`client/test/worker.test.ts`, stay in this repository only because the Chest
-repository vendors `client/src`, `client/test` and `template/` by exact file
-list (`scripts/sync-sdk.mjs`, copies under `tests/sdk/chest-client` and
-`tests/creator`, each with a `VENDORED.md` naming the commit); they go once the
-Chest repository drops them. They are not built into `dist/`, not exported and
-not published. `template/` (the v1 starter project) is not published either.
-
 ## Version
 
 The package version is `version` in `package.json` (semver), published by a
@@ -191,7 +179,7 @@ that carry a manifest — never offers it.
 
 ```sh
 npm ci
-npm test               # build dist/, compile all tests (v1 included) into build/, run them
+npm test               # build dist/, compile the tests into build/, run them
 npm run check:package  # npm pack, install into a temp project, import every subpath
                        # from Node and through esbuild, type-check a TS consumer
 ```
