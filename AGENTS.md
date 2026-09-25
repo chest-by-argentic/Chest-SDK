@@ -8,9 +8,12 @@ le propriétaire est Paul Witczak, on lui écrit en français.
 
 - **Aucune dépendance.** Le client n’importe que `node:*` ; `typescript` et
   `@types/node` sont les seules dépendances de développement.
-- **Aucun serveur HTTP, aucune sortie réseau.** Le client parle sur le canal
-  privé que le Chest lui attache (stdout/stdin), un échange à la fois, réponses
-  bornées. Ne pas ouvrir de socket, de port ni de connexion de remplacement.
+- **Aucun serveur HTTP, aucune sortie réseau.** Le client d’un worker (v1)
+  parle sur le canal privé que le Chest lui attache (stdout/stdin), un échange
+  à la fois, réponses bornées. Celui d’un outil serveur (v2) ne joint que ce
+  que le lanceur du Chest lui donne sur `127.0.0.1` : l’API du Chest à
+  `CHEST_API` (fichiers), réponses bornées. Ne pas ouvrir de socket, de port
+  ni de connexion de remplacement, ni joindre une autre adresse.
 - **L’enveloppe est la seule autorité.** Les droits d’une invocation viennent
   de l’enveloppe validée par `invocation()` ; le client ne déduit aucun droit
   d’un champ métier, ne rejoue jamais une écriture au résultat incertain, et
