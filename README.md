@@ -178,5 +178,4 @@ npm test
 `npm test` compile (`tsc`, strict, ES2022, NodeNext) puis lance
 `node --test dist/client/test/*.test.js`. Lire `AGENTS.md` avant de modifier.
 
-Licence : à fixer par le propriétaire (Argentic) ; aucune licence n’est
-encore déclarée.
+Licence : MIT (`LICENSE`), © 2026 Argentic.
