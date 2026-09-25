@@ -6,8 +6,9 @@ le propriétaire est Paul Witczak, on lui écrit en français.
 
 ## Règles
 
-- **Aucune dépendance.** Le client n’importe que `node:*` ; `typescript` et
-  `@types/node` sont les seules dépendances de développement.
+- **Aucune dépendance.** Le client n’importe que `node:*` ; `typescript`,
+  `@types/node` et `esbuild` (vérification du paquet par un bundler) sont les
+  seules dépendances de développement.
 - **Aucun serveur HTTP, aucune sortie réseau.** Le client d’un worker (v1)
   parle sur le canal privé que le Chest lui attache (stdout/stdin), un échange
   à la fois, réponses bornées. Celui d’un outil serveur (v2) ne joint que ce
@@ -31,7 +32,7 @@ le propriétaire est Paul Witczak, on lui écrit en français.
 
 | Si tu changes… | …tu mets à jour |
 |---|---|
-| `client/src`, `client/test` | les tests (`npm test` vert), puis la copie vendue du dépôt Chest : `npm run sync:sdk` dans `03_code/01_chest-by-argentic` (il écrit `tests/sdk/chest-client/VENDORED.md` et `tests/creator/VENDORED.md`), puis chaque outil du store (`03_code/03_argentic-store/<outil>/packages/chest-client`, son `VENDORED.md` nomme le commit) : par `tests/export/export-store.mjs` pour un outil exporté, sinon la même recopie à la main |
+| `client/src`, `client/test` | les tests (`npm test` et `npm run check:package` verts ; un module ajouté ou renommé : `client/index.ts`, `exports` de `package.json`, la liste de `scripts/check-package.mjs` et le README), puis la copie vendue du dépôt Chest : `npm run sync:sdk` dans `03_code/01_chest-by-argentic` (il écrit `tests/sdk/chest-client/VENDORED.md` et `tests/creator/VENDORED.md`), puis chaque outil du store (`03_code/03_argentic-store/<outil>/packages/chest-client`, son `VENDORED.md` nomme le commit) : par `tests/export/export-store.mjs` pour un outil exporté, sinon la même recopie à la main |
 | `template/*` | la copie du dépôt Chest (`templates/creator`, même script `sync-sdk.mjs`), et son test `tests/creator/export.test.mjs` s’il liste les fichiers |
 | `client/src/member.ts` (l’assertion `Chest-Member`) | `chest/toolfront/assertion.go` du dépôt Chest (dérivation de la clé, revendications) : ils changent ensemble, et le vecteur signé par le Chest de `client/test/member.test.ts` se régénère depuis le Go ; `docs/architecture.md` du dépôt Chest, « Outils serveurs » |
 | le contrat (ce que le canal demande, l’enveloppe) | `docs/architecture.md` du dépôt Chest, section « Contrat applicatif actuel » ; le README de ce dépôt |
@@ -42,6 +43,17 @@ la main.
 
 ## Langue et forme
 
-Documentation en français ; commentaires de code et messages d’erreur en
-anglais. TypeScript strict (ES2022, NodeNext). Branche + PR ; les tests
-doivent passer avant de rendre la main.
+Le SDK est en anglais : code, commentaires, messages d’erreur, `README.md`
+(c’est la page du paquet sur npm). Les consignes (`AGENTS.md`) et
+`PUBLISHING.md`, écrits pour le propriétaire, sont en français ; le gabarit
+`template/` garde sa langue.
+
+TypeScript strict (ES2022, NodeNext). Rien d’autre que les fichiers de
+`scripts/sync-sdk.mjs` du dépôt Chest dans `client/src` et `client/test` : ce
+script refuse tout fichier en plus (d’où `client/index.ts` à part). Le paquet
+npm ne publie que le contrat v2 (`errors`, `member`, `database`, `files`) ;
+`channel`, `record`, `requests`, `worker` et `template/` sont le contrat v1
+retiré, gardés tant que le dépôt Chest les copie, jamais construits dans
+`dist/` ni exportés. La version
+est celle de `package.json`, publiée par un tag `vX.Y.Z` (`PUBLISHING.md`).
+Branche + PR ; les tests doivent passer avant de rendre la main.

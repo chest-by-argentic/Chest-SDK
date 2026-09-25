@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "client",
+    "outDir": "dist",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "files": [
+    "client/index.ts",
+    "client/src/errors.ts",
+    "client/src/member.ts",
+    "client/src/database.ts",
+    "client/src/files.ts"
+  ],
+  "include": []
+}

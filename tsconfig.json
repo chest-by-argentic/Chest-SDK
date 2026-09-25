@@ -12,7 +12,7 @@
     "noFallthroughCasesInSwitch": true,
     "verbatimModuleSyntax": true,
     "rootDir": ".",
-    "outDir": "dist",
+    "outDir": "build",
     "types": ["node"]
   },
   "include": ["client/**/*.ts"]
