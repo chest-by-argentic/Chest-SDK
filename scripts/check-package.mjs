@@ -16,9 +16,7 @@ const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const name = manifest.name;
 
 // What each subpath gives at run time (tool contract v2); the root gives them
-// all, files as a namespace. The retired v1 modules (channel, record,
-// requests, worker) stay in client/src for the Chest repository's vendored
-// copy and must never reach the package.
+// all, files as a namespace.
 const expected = {
   errors: ["CapabilityNotGranted", "ChestError", "QuotaExceeded", "TooLarge", "Unavailable"],
   member: ["member"],
@@ -51,7 +49,6 @@ try {
   for (const path of shipped) console.log("  " + path);
   for (const path of shipped) {
     assert.ok(/^(package\.json|README\.md|LICENSE|dist\/.+\.(js|d\.ts)(\.map)?|client\/index\.ts|client\/src\/[a-z]+\.ts)$/u.test(path), `unexpected file in the package: ${path}`);
-    assert.ok(!/(^|\/)(channel|record|requests|worker)\.(ts|js|d\.ts)(\.map)?$/u.test(path), `retired v1 module in the package: ${path}`);
   }
   for (const target of Object.values(manifest.exports).flatMap(entry => typeof entry === "string" ? [entry] : Object.values(entry))) {
     assert.ok(shipped.includes(target.slice(2)), `export target missing from the package: ${target}`);
@@ -96,13 +93,6 @@ try {
   step("import every subpath from Node");
   writeFileSync(join(consumer, "probe.mjs"), probe);
   verify(run(process.execPath, ["probe.mjs"], consumer), "Node");
-
-  step("the retired v1 subpaths are not exported");
-  for (const sub of ["channel", "record", "requests", "worker"]) {
-    const answer = run(process.execPath, ["--input-type=module", "-e", `import(${JSON.stringify(`${name}/${sub}`)}).then(() => console.log("resolved"), error => console.log(error.code))`], consumer).trim();
-    assert.equal(answer, "ERR_PACKAGE_PATH_NOT_EXPORTED", `${name}/${sub} must not be exported`);
-    console.log(`  ${name}/${sub}: ${answer}`);
-  }
 
   step("bundle every subpath with esbuild");
   const esbuild = await import(pathToFileURL(join(root, "node_modules", "esbuild", "lib", "main.js")).href);

@@ -81,8 +81,6 @@ Si la commande `node -p …` affiche autre chose (par exemple
 La répétition doit lister 28 fichiers : `LICENSE`, `README.md`,
 `package.json`, `client/index.ts`, `client/src/{database,errors,files,member}.ts`
 et `dist/` (`index` et ces quatre modules, `.js`, `.d.ts` et leurs `.map`).
-Aucun `channel`, `record`, `requests` ni `worker` : le contrat v1 est retiré et
-ne se publie pas.
 
 Ce que fait `npm publish` : il relance d’abord les tests et la vérification du
 paquet (`prepublishOnly` : `npm test` puis `npm run check:package`, quelques
