@@ -7,5 +7,12 @@
     "declarationMap": true,
     "sourceMap": true
   },
-  "include": ["client/index.ts", "client/src/**/*.ts"]
+  "files": [
+    "client/index.ts",
+    "client/src/errors.ts",
+    "client/src/member.ts",
+    "client/src/database.ts",
+    "client/src/files.ts"
+  ],
+  "include": []
 }

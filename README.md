@@ -1,10 +1,9 @@
 # Chest SDK
 
-`@argentic/chest-sdk` is what a tool embeds to talk with its Chest. A server
-tool (contract v2) reads the member the Chest asserts on a request, the address
-of its own database and its private files. A worker (contract v1) reads its
-invocations and its record on the private channel the Core attaches to it. The
-SDK has no dependency: it only imports `node:*`.
+`@argentic/chest-sdk` is what a server tool (tool contract v2) embeds to talk
+with its Chest: the member the Chest asserts on a request, the address of the
+tool's own database and its private files. The SDK has no dependency: it only
+imports `node:*`.
 
 ```sh
 npm install @argentic/chest-sdk
@@ -23,10 +22,6 @@ all, with the files API as the namespace `files`.
 | `@argentic/chest-sdk/database` | `databaseUrl()`: the address of the tool's own PostgreSQL database (capability `database`) |
 | `@argentic/chest-sdk/files` | `put`, `get`, `list`, `delete`, `url`, types `FileObject`, `FileData`, `FilePage`: the tool's private files (capability `files`), kept by the Chest, and a 15-minute signed link to one |
 | `@argentic/chest-sdk/errors` | `ChestError` (`code`, `status`), `CapabilityNotGranted` (403), `TooLarge` (413), `QuotaExceeded` (429), `Unavailable` (503): what the SDK throws when the Chest does not give what a tool asks |
-| `@argentic/chest-sdk/worker` | `serve`, `runWorker`, type `Handler`: the loop of a worker, one invocation at a time, 503 `expired` past the deadline, never a replay of a write whose result is uncertain |
-| `@argentic/chest-sdk/requests` | `ChestRequests`, `invocation()`, types `Invocation`, `Actor`: the invocations the Chest hands to a worker (permission `requests`) and their validated envelope — `id`, `operation`, `input`, `actor` (`subject`, `manage`, `publish`, `role`), `deadline` |
-| `@argentic/chest-sdk/record` | `ChestRecord`, type `RecordRepository`: the worker's persistent value (permission `record`), read and written whole |
-| `@argentic/chest-sdk/channel` | `ChestChannel`, `ChestServiceError`: one HTTP exchange at a time on the private channel (stdout/stdin of the worker), bounded answers |
 | `@argentic/chest-sdk` | all of the above; `files` as a namespace |
 
 ```ts
@@ -61,14 +56,14 @@ export function GET(request: Request) {
 
 ## The contract, in short
 
-The Core picks the tool's instance and attaches its private pipes; a worker
-asks for its services by HTTP on those pipes and nothing else: no HTTP server,
-no network access, no secret. Rights come only from the envelope the Chest
-hands over — a business field never grants a right — and the Chest's broker
-enforces the manifest's permissions even outside the SDK: the SDK makes the
-calls easier, it is not a security boundary. The full contract (permissions,
-`chest.json` manifest, build from source, catalogue) is described in the Chest
-repository, `docs/architecture.md`, section « Contrat applicatif actuel ».
+A v2 tool is an ordinary web server in a container without network, run by
+its Chest. The Chest's front is the only one to reach it; the tool reaches only
+what its launcher gives it on `127.0.0.1` (its database, the Chest's API for
+its files). Rights come from the Chest — the signed member, the capabilities
+approved for the version — and the Chest enforces them even outside the SDK:
+the SDK makes the calls easier, it is not a security boundary. The full
+contract (manifest `chest.json`, capabilities, build from source, catalogue)
+is described in the Chest repository, `docs/architecture.md`.
 
 ## `member(request)` — server tool (contract v2)
 
@@ -169,32 +164,22 @@ Chest not reached, or an answer that is not its own: a write may or may not
 have happened), `ChestError` for the rest (`invalid_type`, `not_found` for
 `url`…). Removing the tool removes its files; a new version keeps them.
 
-## Vendored copies
+## Retired v1 contract
 
-Before the npm package, a tool carried a **vendored copy** of `client/src`
-(and `client/test`) under `packages/chest-client`, compiled with its own
-sources; these copies still exist:
-
-- in the Chest repository, `tests/sdk/chest-client` and `tests/creator` are
-  refreshed from this repository by `npm run sync:sdk`
-  (`scripts/sync-sdk.mjs`, an exact file list), which writes their
-  `VENDORED.md`;
-- a starter project is assembled by `tests/export/export-creator.mjs` of the
-  Chest repository (the template + the client + the sample tool
-  `apps/testapp`);
-- a tool is exported by `tests/export/export-store.mjs`, which copies the
-  client into it; the store's tools (`chest-by-argentic/forms`, the test bench
-  `PaulWCZ/TestAppChestGithub`…) keep the same layout, `packages/chest-client`
-  with its `VENDORED.md`.
-
-`template/` is the starter project a tool author receives; it is not part of
-the npm package.
+Tool contract v1 (a worker talking over stdout/stdin: invocations, a record)
+is retired and **not part of the package**. Its modules,
+`client/src/{channel,record,requests,worker}.ts` and
+`client/test/worker.test.ts`, stay in this repository only because the Chest
+repository vendors `client/src`, `client/test` and `template/` by exact file
+list (`scripts/sync-sdk.mjs`, copies under `tests/sdk/chest-client` and
+`tests/creator`, each with a `VENDORED.md` naming the commit); they go once the
+Chest repository drops them. They are not built into `dist/`, not exported and
+not published. `template/` (the v1 starter project) is not published either.
 
 ## Version
 
 The package version is `version` in `package.json` (semver), published by a
-tag `vX.Y.Z` (see `PUBLISHING.md`). A vendored copy names the Git commit it
-was taken from in its `VENDORED.md`.
+tag `vX.Y.Z` (see `PUBLISHING.md`).
 
 ## What this repository is not
 
@@ -206,15 +191,15 @@ that carry a manifest — never offers it.
 
 ```sh
 npm ci
-npm test               # build dist/, compile the tests into build/, run them
+npm test               # build dist/, compile all tests (v1 included) into build/, run them
 npm run check:package  # npm pack, install into a temp project, import every subpath
                        # from Node and through esbuild, type-check a TS consumer
 ```
 
 `client/src` holds the modules, `client/index.ts` the package root,
-`client/test` the tests. `npm run build` compiles `client/index.ts` and
-`client/src` (TypeScript strict, ES2022, NodeNext) into `dist/`: ESM `.js`,
-`.d.ts` and their maps. Read `AGENTS.md` before changing anything.
+`client/test` the tests. `npm run build` compiles `client/index.ts` and the
+four published modules (`errors`, `member`, `database`, `files`; TypeScript
+strict, ES2022, NodeNext) into `dist/`: ESM `.js`, `.d.ts` and their maps. Read `AGENTS.md` before changing anything.
 
 ## Licence
 
