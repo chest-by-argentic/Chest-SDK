@@ -1,181 +1,206 @@
 # Chest SDK
 
-Le SDK est ce qu’un outil embarque pour parler avec son Chest : le canal privé
-que le Core lui attache et les trois services qu’il y trouve (outil v1, un
-worker), et, pour un outil serveur (outil v2), le membre que le Chest lui
-affirme, l’adresse de sa base de données et ses fichiers. Il tient en huit
-fichiers TypeScript, sans dépendance :
+`@argentic/chest-sdk` is what a server tool (tool contract v2) embeds to talk
+with its Chest: the member the Chest asserts on a request, the address of the
+tool's own database and its private files. The SDK has no dependency: it only
+imports `node:*`.
 
-| Fichier | Rôle |
+```sh
+npm install @argentic/chest-sdk
+```
+
+Node 22 or later. ESM only, compiled JavaScript with its type declarations.
+
+## Imports
+
+Each module is its own subpath and pulls in nothing else; the root gives them
+all, with the files API as the namespace `files`.
+
+| Import | Gives |
 |---|---|
-| `client/src/channel.ts` | `ChestChannel` : un échange HTTP à la fois sur le canal privé (stdout/stdin du worker), réponses bornées, `ChestServiceError` quand le Chest ne confirme pas |
-| `client/src/record.ts` | `ChestRecord` : la valeur persistante de l’outil (permission `record`), lue et écrite entière |
-| `client/src/requests.ts` | `ChestRequests` et `invocation()` : les invocations que le Chest remet à l’outil (permission `requests`), leur enveloppe validée — `id`, `operation`, `input`, `actor` (`subject`, `manage`, `publish`, `role`), `deadline` — et la réponse |
-| `client/src/worker.ts` | `serve` / `runWorker` : la boucle d’un worker, une invocation à la fois, 503 `expired` passée l’échéance, jamais de rejeu d’une écriture au résultat incertain |
-| `client/src/member.ts` | `member(request)` : le membre d’une requête de l’hôte d’équipe d’un outil serveur, lu dans l’assertion `Chest-Member` et vérifié ; `null` sans assertion valable |
-| `client/src/database.ts` | `databaseUrl()` : l’adresse de la base PostgreSQL propre à l’outil serveur (capacité `database`) ; `CapabilityNotGranted` sans elle |
-| `client/src/files.ts` | `put`, `get`, `list`, `delete`, `url` : les fichiers privés de l’outil serveur (capacité `files`), gardés par le Chest, et un lien signé de 15 minutes vers l’un d’eux |
-| `client/src/errors.ts` | `ChestError` (`code`, `status`), `CapabilityNotGranted` (403, `capability_not_granted`), `TooLarge` (413), `QuotaExceeded` (429), `Unavailable` (503) : ce que le SDK lève quand le Chest ne donne pas ce qu’un outil demande |
+| `@argentic/chest-sdk/member` | `member(request)`, type `Member`: the member of a request on the team host of a server tool, read from the `Chest-Member` assertion and verified; `null` without a valid assertion |
+| `@argentic/chest-sdk/database` | `databaseUrl()`: the address of the tool's own PostgreSQL database (capability `database`) |
+| `@argentic/chest-sdk/files` | `put`, `get`, `list`, `delete`, `url`, types `FileObject`, `FileData`, `FilePage`: the tool's private files (capability `files`), kept by the Chest, and a 15-minute signed link to one |
+| `@argentic/chest-sdk/errors` | `ChestError` (`code`, `status`), `CapabilityNotGranted` (403), `TooLarge` (413), `QuotaExceeded` (429), `Unavailable` (503): what the SDK throws when the Chest does not give what a tool asks |
+| `@argentic/chest-sdk` | all of the above; `files` as a namespace |
 
-`client/test/worker.test.ts` éprouve la boucle sur un canal simulé ;
-`client/test/member.test.ts` lit une assertion signée par le Chest lui-même
-(vecteur produit par `chest/toolfront`) et refuse tout le reste ;
-`client/test/database.test.ts` lit l’adresse que donne le lanceur du Chest et
-refuse toute autre ; `client/test/files.test.ts` joue l’API du Chest en
-mémoire (routes et codes du broker) et vérifie que rien ne part sans
-`CHEST_API` ni avec un nom hors grammaire.
-`template/` est le gabarit du projet qu’un auteur d’outil reçoit (voir plus bas).
+```ts
+import { member } from "@argentic/chest-sdk/member";
+import { databaseUrl } from "@argentic/chest-sdk/database";
+import * as files from "@argentic/chest-sdk/files";
+import { CapabilityNotGranted } from "@argentic/chest-sdk/errors";
+// or: import { member, databaseUrl, files } from "@argentic/chest-sdk";
+```
 
-## Le contrat, en bref
+Types refer to `node:http` (`IncomingMessage`): a TypeScript project needs
+`@types/node`, as any Node project does. Both `moduleResolution` `bundler` and
+`nodenext` work.
 
-Le Core choisit l’instance de l’outil et lui attache ses pipes privés ; le
-worker demande ses services par HTTP sur ces pipes, et rien d’autre : aucun
-serveur HTTP, aucune sortie réseau, aucun secret. Les droits viennent
-uniquement de l’enveloppe transmise par le Chest — un champ métier n’accorde
-jamais un droit — et le broker du Chest applique les permissions du manifeste
-même hors SDK : le SDK facilite les appels, il n’est pas une frontière de
-sécurité. Le contrat complet (permissions, manifeste `chest.json`, construction
-depuis le code, catalogue) est décrit dans le dépôt Chest,
-`docs/architecture.md`, section « Contrat applicatif actuel ».
+### Next.js
 
-## `member(request)` — outil serveur (contrat v2)
+The SDK runs on the server only — it reads the tool's environment
+(`CHEST_TOKEN`, `DATABASE_URL`, `CHEST_API`) and uses Node built-ins. Import it
+in route handlers, server components or server actions, never in a
+`"use client"` module. Webpack and Turbopack resolve the
+compiled package with no configuration (no `transpilePackages`):
 
-Un outil v2 est un serveur web ordinaire ; sur son hôte d’équipe, le Chest
-relaie `/chest` et ce qui est dessous avec l’en-tête `Chest-Member` du membre
-connecté. `member(request)` accepte une requête Node (`IncomingMessage`) ou
-Web (`Request`) et rend :
+```ts
+// app/chest/api/me/route.ts
+import { member } from "@argentic/chest-sdk/member";
+
+export function GET(request: Request) {
+  const who = member(request);
+  return who ? Response.json(who) : new Response(null, { status: 401 });
+}
+```
+
+## The contract, in short
+
+A v2 tool is an ordinary web server in a container without network, run by
+its Chest. The Chest's front is the only one to reach it; the tool reaches only
+what its launcher gives it on `127.0.0.1` (its database, the Chest's API for
+its files). Rights come from the Chest — the signed member, the capabilities
+approved for the version — and the Chest enforces them even outside the SDK:
+the SDK makes the calls easier, it is not a security boundary. The full
+contract (manifest `chest.json`, capabilities, build from source, catalogue)
+is described in the Chest repository, `docs/architecture.md`.
+
+## `member(request)` — server tool (contract v2)
+
+A v2 tool is an ordinary web server; on its team host, the Chest relays
+`/chest` and everything below it with the `Chest-Member` header of the
+signed-in member. `member(request)` accepts a Node request (`IncomingMessage`)
+or a Web `Request` and returns:
 
 ```ts
 type Member = { id: string; firstName: string; lastName: string; name: string; email: string; photo?: string; role?: string; isAdmin: boolean; isBuilder: boolean };
 ```
 
-ou `null` : sans en-tête, sur l’hôte public (le Chest n’y envoie jamais
-d’assertion et retire celle d’un client), ou pour toute assertion qui n’est
-pas exactement la sienne. Vérifications : JWS compact, en-tête exactement
-`{"alg":"HS256","typ":"JWT"}`, signature HMAC-SHA256 comparée en temps
-constant sous la clé HMAC-SHA256(« Chest-Member v1 ») du texte de
-`CHEST_TOKEN` — la dérivation du Chest —, `aud` égal à `CHEST_TOOL`, `iat` et
-`exp` à 5 s près, forme de chaque revendication (une revendication inconnue
-est ignorée). Sans `CHEST_TOKEN` ou `CHEST_TOOL`, personne n’est membre. La
-fonction ne lève jamais d’erreur pour ce qu’une requête porte.
+or `null`: without the header, on the public host (the Chest never sends an
+assertion there and strips a client's), or for any assertion that is not
+exactly its own. Checks: compact JWS, header exactly
+`{"alg":"HS256","typ":"JWT"}`, HMAC-SHA256 signature compared in constant time
+under the key HMAC-SHA256("Chest-Member v1") of the text of `CHEST_TOKEN` —
+the Chest's derivation —, `aud` equal to `CHEST_TOOL`, `iat` and `exp` within
+5 s, the shape of each claim (an unknown claim is ignored). Without
+`CHEST_TOKEN` or `CHEST_TOOL`, nobody is a member. The function never throws
+for what a request carries.
 
 ```ts
-import { member } from "../../packages/chest-client/src/member.js";
+import { member } from "@argentic/chest-sdk/member";
 const who = member(request);
 if (!who) { response.writeHead(401).end(); return; }
 ```
 
-`photo` est l’adresse de la photo sur l’hôte d’équipe, `role` le rôle que le
-Chest donne au membre parmi ceux que le manifeste déclare. Seul le frontal du
-Chest joint le conteneur : la signature est une seconde défense ; les règles
-métier (qui écrit quoi) restent celles de l’outil.
+`photo` is the address of the photo on the team host, `role` the role the
+Chest gives the member among those the manifest declares. Only the Chest's
+front reaches the container: the signature is a second defence; business rules
+(who writes what) remain the tool's.
 
-## `databaseUrl()` — base de données d’un outil serveur
+## `databaseUrl()` — database of a server tool
 
-Un outil v2 qui déclare `"capabilities": ["database"]` dans son `chest.json`
-reçoit une base PostgreSQL à lui seul (la capacité est montrée et approuvée
-comme une permission, « Base de données »). Le conteneur n’a pas de réseau :
-son lanceur écoute sur `127.0.0.1` et relaie chaque connexion au Chest. Le
-lanceur pose `DATABASE_URL` —
-`postgres://<utilisateur>:<mot de passe>@127.0.0.1:<port>/<base>?sslmode=disable`,
-l’utilisateur et la base portant le même nom `t_<outil>` — et `PGHOST`,
-`PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE`, qui priment sur une variable
-de l’outil du même nom. `databaseUrl()` rend `DATABASE_URL` s’il a exactement
-cette forme, et lève `CapabilityNotGranted` sinon (version sans la capacité,
-ou `DATABASE_URL` propre à l’outil). La valeur est un secret : ne jamais la
-journaliser ni l’envoyer au navigateur.
+A v2 tool that declares `"capabilities": ["database"]` in its `chest.json`
+gets a PostgreSQL database of its own (the capability is shown and approved
+like a permission, « Base de données »). The container has no network: its
+launcher listens on `127.0.0.1` and relays each connection to the Chest. The
+launcher sets `DATABASE_URL` —
+`postgres://<user>:<password>@127.0.0.1:<port>/<database>?sslmode=disable`,
+the user and the database both named `t_<tool>` — and `PGHOST`, `PGPORT`,
+`PGUSER`, `PGPASSWORD`, `PGDATABASE`, which take precedence over a variable of
+the tool with the same name. `databaseUrl()` returns `DATABASE_URL` when it has
+exactly this shape, and throws `CapabilityNotGranted` otherwise (a version
+without the capability, or a `DATABASE_URL` of the tool's own). The value is a
+secret: never log it, never send it to a browser.
 
-Le SDK n’embarque pas de client PostgreSQL : l’outil choisit le sien, par
-exemple [`postgres`](https://github.com/porsager/postgres) (porsager, sans
-dépendance) ou [`pg`](https://node-postgres.com) :
+The SDK carries no PostgreSQL client: the tool picks its own, for example
+[`postgres`](https://github.com/porsager/postgres) (porsager, no dependency) or
+[`pg`](https://node-postgres.com):
 
 ```ts
 import postgres from "postgres";
-import { databaseUrl } from "../../packages/chest-client/src/database.js";
+import { databaseUrl } from "@argentic/chest-sdk/database";
 const sql = postgres(databaseUrl(), { max: 5 });
 const notes = await sql`SELECT id, text FROM notes ORDER BY id`;
 ```
 
-Dix connexions au plus par instance ; une requête de plus de 30 s, une
-transaction inactive plus de 60 s sont interrompues par le Chest.
-**Migrations** : les fichiers `migrations/NNNN_nom.sql` du dépôt
-(`^[0-9]{4}_[a-z0-9_-]{1,64}\.sql$`, 256 au plus, 1 Mio chacun) sont joués
-par le Chest, dans l’ordre, chacun dans sa transaction, à l’installation et à
-chaque mise à jour, avant que la nouvelle version reçoive le trafic ; un
-fichier en échec garde la version en service. Le Chest tient la liste des
-fichiers joués (table `chest_migrations`) : une version qui en perd un ou en
-change un est refusée. Une migration doit laisser la version précédente
-fonctionner — le retour à la version précédente ne défait rien.
+Ten connections at most per instance; a query longer than 30 s, a transaction
+idle longer than 60 s are interrupted by the Chest. **Migrations**: the
+repository's `migrations/NNNN_name.sql` files
+(`^[0-9]{4}_[a-z0-9_-]{1,64}\.sql$`, 256 at most, 1 MiB each) are run by the
+Chest, in order, each in its own transaction, at install and at every update,
+before the new version receives traffic; a failing file keeps the version in
+service. The Chest keeps the list of files run (table `chest_migrations`): a
+version that loses one or changes one is refused. A migration must leave the
+previous version working — going back to the previous version undoes nothing.
 
-## `files` — fichiers d’un outil serveur
+## `files` — files of a server tool
 
-Un outil v2 qui déclare `"capabilities": ["files"]` (« Fichiers » à
-l’approbation) garde des fichiers privés **par son Chest**, jamais sur son
-disque (la racine du conteneur est en lecture seule) : 1 Gio et 10 000
-objets par outil, 32 Mio par objet. Le lanceur donne à l’outil
-`CHEST_API=http://127.0.0.1:<port>` — son propre port, relayé au Chest ; le
-conteneur n’a pas de réseau — et l’instance est l’identité : l’outil
-n’atteint que ses fichiers.
+A v2 tool that declares `"capabilities": ["files"]` (« Fichiers » at approval)
+keeps private files **through its Chest**, never on its disk (the container's
+root is read-only): 1 GiB and 10,000 objects per tool, 32 MiB per object. The
+launcher gives the tool `CHEST_API=http://127.0.0.1:<port>` — its own port,
+relayed to the Chest; the container has no network — and the instance is the
+identity: the tool reaches its own files only.
 
 ```ts
-import * as files from "../../packages/chest-client/src/files.js";
-await files.put("photos/chat.png", octets, "image/png");  // Uint8Array ou texte
-const fichier = await files.get("photos/chat.png");        // {data, type, size} ou null
-const { files: liste, next } = await files.list({ prefix: "photos/" }); // 1000 par page
-await files.delete("photos/chat.png");                     // true, ou false s’il n’existait pas
-const { url, expiresIn } = await files.url("photos/chat.png");
+import * as files from "@argentic/chest-sdk/files";
+await files.put("photos/cat.png", bytes, "image/png");       // Uint8Array or text
+const file = await files.get("photos/cat.png");              // {data, type, size} or null
+const { files: page, next } = await files.list({ prefix: "photos/" }); // 1000 per page
+await files.delete("photos/cat.png");                        // true, or false if it did not exist
+const { url, expiresIn } = await files.url("photos/cat.png");
 ```
 
-Un nom : jusqu’à 8 segments de 1 à 100 lettres, chiffres, `.`, `_` ou `-`,
-séparés par `/`, aucun commençant par `.` ou `-` ; refusé avant tout envoi
-sinon (`ChestError`, `invalid_name`). `url` signe un lien vers le fichier tel
-qu’il est, sur l’**hôte d’équipe** de l’outil (`/_chest/files/…`) : qui l’a
-l’ouvre sans se connecter pendant 15 minutes, ou jusqu’à ce que le fichier
-change ou parte ; le Chest le sert dans un bac à sable, affiché pour une
-image, un PDF ou du texte brut, téléchargé sinon. Le donner au navigateur
-d’un membre, jamais à une page publique. Erreurs : `CapabilityNotGranted`
-(version sans la capacité, ou pas de `CHEST_API`), `TooLarge` (413),
-`QuotaExceeded` (429), `Unavailable` (Chest injoignable ou réponse qui n’est
-pas la sienne : une écriture a pu avoir lieu ou non), `ChestError` pour le
-reste (`invalid_type`, `not_found` pour `url`…). Retirer l’outil retire ses
-fichiers ; une nouvelle version les garde.
+A name: up to 8 segments of 1 to 100 letters, digits, `.`, `_` or `-`,
+separated by `/`, none starting with `.` or `-`; refused before anything is
+sent otherwise (`ChestError`, `invalid_name`). `url` signs a link to the file
+as it is, on the tool's **team host** (`/_chest/files/…`): whoever has it opens
+it without signing in for 15 minutes, or until the file changes or goes; the
+Chest serves it in a sandbox, displayed for an image, a PDF or plain text,
+downloaded otherwise. Give it to a member's browser, never to a public page.
+Errors: `CapabilityNotGranted` (a version without the capability, or no
+`CHEST_API`), `TooLarge` (413), `QuotaExceeded` (429), `Unavailable` (the
+Chest not reached, or an answer that is not its own: a write may or may not
+have happened), `ChestError` for the rest (`invalid_type`, `not_found` for
+`url`…). Removing the tool removes its files; a new version keeps them.
 
-## Comment un outil l’embarque aujourd’hui
+## Retired v1 contract
 
-Le SDK n’est pas publié sur npm. Un outil en porte une **copie vendue** de
-`client/src` (et `client/test`) sous `packages/chest-client`, compilée avec
-ses propres sources :
-
-- dans le dépôt Chest, `tests/sdk/chest-client` et `tests/creator` sont
-  remis à jour depuis ce dépôt par `npm run sync:sdk`
-  (`scripts/sync-sdk.mjs`), qui écrit leur `VENDORED.md` ;
-- un projet de départ est assemblé par `tests/export/export-creator.mjs` du
-  dépôt Chest (ce gabarit + le client + l’outil d’exemple `apps/testapp`) ;
-- un outil est exporté par `tests/export/export-store.mjs`, qui y copie le
-  client ; les outils du store (`chest-by-argentic/forms`, le banc d’essai
-  `PaulWCZ/TestAppChestGithub`…) gardent la même disposition,
-  `packages/chest-client` avec son `VENDORED.md`.
+Tool contract v1 (a worker talking over stdout/stdin: invocations, a record)
+is retired and **not part of the package**. Its modules,
+`client/src/{channel,record,requests,worker}.ts` and
+`client/test/worker.test.ts`, stay in this repository only because the Chest
+repository vendors `client/src`, `client/test` and `template/` by exact file
+list (`scripts/sync-sdk.mjs`, copies under `tests/sdk/chest-client` and
+`tests/creator`, each with a `VENDORED.md` naming the commit); they go once the
+Chest repository drops them. They are not built into `dist/`, not exported and
+not published. `template/` (the v1 starter project) is not published either.
 
 ## Version
 
-La version du SDK est le commit Git de ce dépôt. Chaque copie vendue porte un
-`VENDORED.md` qui nomme ce commit et la date de la copie ; c’est là qu’on lit
-quelle version un outil embarque.
+The package version is `version` in `package.json` (semver), published by a
+tag `vX.Y.Z` (see `PUBLISHING.md`).
 
-## Ce que ce dépôt n’est pas
+## What this repository is not
 
-Ce dépôt est public et **n’est pas un outil** : il n’a pas de `chest.json`, et
-le catalogue d’un Chest — qui ne liste que les dépôts publics de
-l’organisation porteurs d’un manifeste — ne le propose jamais.
+This repository is public and **is not a tool**: it has no `chest.json`, and a
+Chest's catalogue — which only lists the organisation's public repositories
+that carry a manifest — never offers it.
 
-## Développer
+## Develop
 
 ```sh
 npm ci
-npm test
+npm test               # build dist/, compile all tests (v1 included) into build/, run them
+npm run check:package  # npm pack, install into a temp project, import every subpath
+                       # from Node and through esbuild, type-check a TS consumer
 ```
 
-`npm test` compile (`tsc`, strict, ES2022, NodeNext) puis lance
-`node --test dist/client/test/*.test.js`. Lire `AGENTS.md` avant de modifier.
+`client/src` holds the modules, `client/index.ts` the package root,
+`client/test` the tests. `npm run build` compiles `client/index.ts` and the
+four published modules (`errors`, `member`, `database`, `files`; TypeScript
+strict, ES2022, NodeNext) into `dist/`: ESM `.js`, `.d.ts` and their maps. Read `AGENTS.md` before changing anything.
 
-Licence : MIT (`LICENSE`), © 2026 Argentic.
+## Licence
+
+MIT (`LICENSE`), © 2026 Argentic.
