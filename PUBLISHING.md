@@ -1,20 +1,8 @@
-# Publier les paquets de ce dépôt sur npm
+# Publier `@argentic/chest-sdk` sur npm
 
-Pour Paul. Ce dépôt publie deux paquets, chacun avec ses tags et son
-workflow :
-
-| Paquet | Dossier | Tag | Workflow |
-|---|---|---|---|
-| `@argentic/chest-sdk` | la racine | `vX.Y.Z` | `publish.yml` |
-| `@argentic/chest-mcp` | `mcp/` | `mcp-vX.Y.Z` | `publish-mcp.yml` |
-
-Les deux suivent le même chemin ; la première partie ci-dessous décrit le SDK,
-la dernière (« `@argentic/chest-mcp` ») ce qui change pour le serveur MCP.
-
-## `@argentic/chest-sdk`
-
-Le paquet se publie depuis le compte npm `paulwcz`, propriétaire de
-l’organisation npm `argentic`. Trois temps :
+Pour Paul. Le paquet se publie depuis le compte npm `paulwcz`, propriétaire de
+l’organisation npm `argentic` (le serveur MCP, `@argentic/chest-mcp`, se publie
+depuis son propre dépôt, `chest-by-argentic/Chest-MCP`). Trois temps :
 
 1. **la première version (0.1.0) à la main**, une seule fois : npm ne permet de
    régler la publication de confiance (« trusted publishing ») que sur un
@@ -39,9 +27,9 @@ two-factor authentication and disallow tokens ».
 
 ---
 
-### 1. Première publication, à la main
+## 1. Première publication, à la main
 
-#### Avant de commencer
+### Avant de commencer
 
 - Le compte `paulwcz` a la double authentification (2FA) activée : sur
   npmjs.com, avatar en haut à droite → **Account** → **Two-Factor
@@ -53,7 +41,7 @@ two-factor authentication and disallow tokens ».
   encore `"private": true` et aucune version, et npm refuse avec `EPRIVATE`
   (« This package has been marked as private »).
 
-#### Se connecter à npm
+### Se connecter à npm
 
 ```sh
 npm login
@@ -69,7 +57,7 @@ npm whoami          # doit répondre : paulwcz
 npm org ls argentic # doit lister paulwcz (owner)
 ```
 
-#### Publier depuis un `main` propre
+### Publier depuis un `main` propre
 
 Toujours depuis une copie propre de `main` fusionné, jamais depuis une branche
 ou un dossier avec des modifications en cours :
@@ -128,7 +116,7 @@ licence MIT, README).
 
 ---
 
-### 2. Brancher GitHub Actions (trusted publishing)
+## 2. Brancher GitHub Actions (trusted publishing)
 
 Sur npmjs.com, connecté en `paulwcz` :
 
@@ -164,7 +152,7 @@ npm trust github @argentic/chest-sdk --file publish.yml --repo chest-by-argentic
 
 ---
 
-### 3. Les versions suivantes
+## 3. Les versions suivantes
 
 1. Dans une PR, changer la version (le `package-lock.json` suit) :
 
@@ -204,99 +192,3 @@ Une version publiée ne se republie jamais sous le même numéro : en cas
 d’erreur, publier la suivante. `npm deprecate @argentic/chest-sdk@0.1.1 "…"`
 signale une version fautive ; `npm unpublish` n’est possible que dans les 72 h
 et sous conditions, à éviter.
-
----
-
-## `@argentic/chest-mcp` (le serveur MCP, dossier `mcp/`)
-
-Mêmes trois temps, même compte `paulwcz`, même organisation `argentic` ; ce
-qui change : le dossier (`mcp/`, où l’on lance toutes les commandes), le tag
-(`mcp-vX.Y.Z`, jamais `vX.Y.Z` qui publie le SDK) et le workflow
-(`publish-mcp.yml`). Le paquet n’a aucune dépendance d’exécution ; il livre
-`dist/*.js`, `README.md`, `LICENSE` et `package.json`.
-
-### 1. Première publication (0.1.0), à la main
-
-Une seule fois, après la fusion dans `main` de la PR qui ajoute `mcp/` :
-
-```sh
-cd ~/Documents/Chest-by-Argentic/03_code/02_chest-sdk
-git switch main
-git pull --ff-only
-git status          # doit dire : nothing to commit, working tree clean
-cd mcp
-node -p "require('./package.json').name+'@'+require('./package.json').version"
-                    # doit afficher exactement : @argentic/chest-mcp@0.1.0
-npm whoami          # doit répondre : paulwcz (sinon : npm login, comme plus haut)
-npm ci
-npm test
-npm publish --dry-run --provenance=false   # répétition : 15 fichiers, n’envoie rien
-npm publish --access public --provenance=false
-```
-
-La répétition doit lister 15 fichiers : `LICENSE`, `README.md`,
-`package.json` et les douze modules de `dist/` (`chest.js`, `cli.js`,
-`config.js`, `confirm.js`, `results.js`, `rpc.js`, `rules.js`, `schema.js`,
-`server.js`, `tools.js`, `untrusted.js`, `version.js`). `npm publish` relance
-d’abord les tests et la vérification du paquet (`prepublishOnly`), puis
-demande le code 2FA comme pour le SDK. Le terminal finit par
-`+ @argentic/chest-mcp@0.1.0`. Vérifier :
-
-```sh
-npm view @argentic/chest-mcp
-npx -y @argentic/chest-mcp   # doit répondre : chest-mcp: CHEST_URL is not set…
-```
-
-et la page <https://www.npmjs.com/package/@argentic/chest-mcp>.
-
-### 2. Brancher GitHub Actions
-
-Sur npmjs.com, connecté en `paulwcz` : ouvrir
-<https://www.npmjs.com/package/@argentic/chest-mcp> → onglet **Settings** →
-section **Trusted Publisher** → **GitHub Actions**, et remplir exactement :
-
-- **Organization or user** : `chest-by-argentic`
-- **Repository** : `Chest-SDK`
-- **Workflow filename** : `publish-mcp.yml` (et non `publish.yml`, qui est
-  celui du SDK)
-- **Environment name** : laisser vide
-- **Allowed actions**, si la ligne apparaît : cocher la publication directe.
-
-Valider, puis dans **Publishing access** choisir **Require two-factor
-authentication and disallow tokens** → **Update Package Settings**.
-
-Ou, en ligne de commande (npm 11.15.0 ou plus) :
-
-```sh
-npm trust github @argentic/chest-mcp --file publish-mcp.yml --repo chest-by-argentic/Chest-SDK --allow-publish
-```
-
-### 3. Les versions suivantes
-
-1. Dans une PR, changer la version dans `mcp/` et dans le code, qui la dit au
-   client (`src/version.ts` ; un test vérifie que les deux sont égales) :
-
-   ```sh
-   cd mcp
-   npm version 0.1.1 --no-git-tag-version
-   # puis mettre la même version dans src/version.ts
-   ```
-
-2. Fusionner la PR (les deux jobs de la CI, `test` et `mcp`, doivent être
-   verts).
-3. Poser le tag sur `main` fusionné et le pousser :
-
-   ```sh
-   git switch main
-   git pull --ff-only
-   git tag mcp-v0.1.1
-   git push origin mcp-v0.1.1
-   ```
-
-   — ou demander à Claude : « publie la 0.1.1 du serveur MCP ».
-4. Suivre sur GitHub : onglet **Actions** → workflow **Publish MCP**. Il
-   vérifie que le tag est `mcp-v` suivi de la version de `mcp/package.json`,
-   lance les tests et la vérification du paquet, puis publie avec provenance.
-
-Un mauvais tag se retire comme pour le SDK (`git tag -d mcp-v0.1.1` puis
-`git push origin --delete mcp-v0.1.1`).
