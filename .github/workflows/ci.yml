@@ -1,5 +1,7 @@
-# Every pull request and every push to main: the tests, then the package as a
-# consumer receives it (npm pack, Node, esbuild, TypeScript bundler/nodenext).
+# Every pull request and every push to main, for each package of the
+# repository: the tests, then the package as a consumer receives it — the SDK
+# (npm pack, Node, esbuild, TypeScript bundler/nodenext) and the MCP server
+# in mcp/ (npm pack, its bin over stdio).
 name: CI
 
 on:
@@ -16,6 +18,24 @@ jobs:
     strategy:
       matrix:
         node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm test
+      - run: npm run check:package
+
+  mcp:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: ["22", "24"]
+    defaults:
+      run:
+        working-directory: mcp
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
