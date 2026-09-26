@@ -97,7 +97,7 @@ async function refusal(response: Response): Promise<ChestError> {
     const given = (body as { error?: unknown } | null)?.error;
     if (typeof given === "string" && /^[a-z_]{1,40}$/u.test(given)) code = given;
   } catch {
-    // The code stays « refused ».
+    // The code stays "refused".
   }
   return new ChestError(code, response.status, `the Chest refused: ${code}`);
 }

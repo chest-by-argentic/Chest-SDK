@@ -1,55 +1,100 @@
-# Chest SDK — consignes de développement
+# Using `@argentic/chest-sdk` — a guide for AI agents
 
-Ce dépôt est la source du client qu’un outil serveur (contrat v2, le seul)
-embarque pour parler avec son Chest. Il appartient à Chest by Argentic ;
-le propriétaire est Argentic, on lui écrit en français. Le serveur MCP,
-`@argentic/chest-mcp`, a son propre dépôt : `chest-by-argentic/Chest-MCP`.
+This file is for an AI coding agent (and its developer) building a **Chest
+server tool** with this package. `README.md` is the full reference; this page
+is the short path and the mistakes to avoid.
 
-## Règles
+## What it is
 
-- **Aucune dépendance.** Le client n’importe que `node:*` ; `typescript`,
-  `@types/node` et `esbuild` (vérification du paquet par un bundler) sont les
-  seules dépendances de développement.
-- **Aucun serveur HTTP, aucune sortie réseau.** Le client ne joint que ce
-  que le lanceur du Chest lui donne sur `127.0.0.1` : l’API du Chest à
-  `CHEST_API` (fichiers), réponses bornées. Ne pas ouvrir de socket, de port
-  ni de connexion de remplacement, ni joindre une autre adresse.
-- **L’assertion est la seule autorité.** Le membre d’une requête vient de
-  l’assertion `Chest-Member` vérifiée par `member()` ; le client ne déduit
-  aucun droit d’un champ métier, ne rejoue jamais une écriture au résultat
-  incertain, et refuse une réponse qui ne se lit pas exactement.
-- **Le SDK n’est pas une frontière de sécurité.** Le Chest applique les
-  capacités accordées même hors SDK ; ne pas y ajouter de règle d’accès qui ne
-  serait vérifiée que côté outil.
-- **Pas de format inventé.** Le manifeste et le SDK évoluent avec les usages
-  observés (banc d’essai serveur du dépôt Chest, Formulaires) ; ne pas anticiper un
-  catalogue de capacités.
-- **Aucun code mort**, pas de dépendance inutile, pas de secret dans le dépôt
-  ni dans les tests.
+A Chest server tool (tool contract v2) is an ordinary web server that runs in
+a container without network, started by its Chest. The SDK gives it three
+things, all server-side:
 
-## Ce qui doit rester ensemble
+| Need | Import | Requires |
+|---|---|---|
+| Who is signed in on this request | `member(request)` from `@argentic/chest-sdk/member` | nothing (the Chest sets `CHEST_TOKEN`, `CHEST_TOOL`) |
+| The tool's own PostgreSQL database | `databaseUrl()` from `@argentic/chest-sdk/database` | `"capabilities": ["database"]` in `chest.json` |
+| The tool's private files | `put`, `get`, `list`, `delete`, `url` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` |
+| Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `Unavailable` from `@argentic/chest-sdk/errors` | — |
 
-| Si tu changes… | …tu mets à jour |
+## Install
+
+```sh
+npm install @argentic/chest-sdk
+```
+
+Node 22 or later, ESM only, no runtime dependency. TypeScript projects need
+`@types/node`; `moduleResolution` `bundler` and `nodenext` both work.
+
+## Minimal tool
+
+```jsonc
+// chest.json (repository root)
+{ "capabilities": ["database", "files"] }
+```
+
+```ts
+// app/chest/api/me/route.ts (Next.js route handler)
+import { member } from "@argentic/chest-sdk/member";
+
+export function GET(request: Request) {
+  const who = member(request);
+  return who ? Response.json(who) : new Response(null, { status: 401 });
+}
+```
+
+```ts
+import postgres from "postgres";
+import { databaseUrl } from "@argentic/chest-sdk/database";
+const sql = postgres(databaseUrl(), { max: 5 });
+```
+
+```ts
+import * as files from "@argentic/chest-sdk/files";
+await files.put("reports/2026.pdf", bytes, "application/pdf");
+const { url } = await files.url("reports/2026.pdf"); // 15-minute signed link
+```
+
+Schema changes go in `migrations/NNNN_name.sql`; the Chest runs them in order
+at install and at every update.
+
+## Rules that keep a tool correct
+
+- **Server only.** Never import the SDK in a `"use client"` module or ship it
+  to a browser: it reads secrets from the environment.
+- **`member()` is the only source of identity.** Check it on every request
+  under `/chest`; `null` means "not a member" — answer 401/403. Never trust a
+  user id, email or role sent in a body, query or cookie of your own.
+- **The public host has no member.** The Chest never sends an assertion there;
+  public pages must work for anonymous visitors.
+- **Business rules are yours.** The SDK is not a security boundary: the Chest
+  enforces capabilities, but who may edit what inside your tool is your code.
+- **`databaseUrl()` is a secret.** Never log it, never send it to a browser.
+- **Do not retry an uncertain write.** `Unavailable` means the Chest was not
+  reached or did not answer as expected: the write may or may not have
+  happened. Re-read before writing again.
+- **Handle `CapabilityNotGranted`.** It is thrown when `chest.json` does not
+  declare the capability or the version was not approved; show a clear message
+  instead of crashing.
+- **Keep migrations backward compatible.** A rollback does not undo a
+  migration: the previous version must keep working on the new schema. Never
+  edit or delete a migration that already ran.
+- **No network, no local disk.** The container has no outbound network and a
+  read-only root; store files through `files`, data in the database.
+- **Give signed file links only to members.** A `files.url()` link opens
+  without sign-in for 15 minutes; never put it on a public page.
+
+## Common pitfalls
+
+| Symptom | Cause |
 |---|---|
-| `client/src`, `client/test` | les tests (`npm test` et `npm run check:package` verts ; un module ajouté ou renommé : `client/index.ts`, `exports` de `package.json`, la liste de `scripts/check-package.mjs` et le README), puis la copie vendue du dépôt Chest : `npm run sync:sdk` dans `03_code/01_chest-by-argentic` (il écrit `tests/sdk/chest-client/VENDORED.md`), puis chaque outil du store (`03_code/04_argentic-store/<outil>/packages/chest-client`, son `VENDORED.md` nomme le commit) : par `tests/export/export-store.mjs` pour un outil exporté, sinon la même recopie à la main |
-| `client/src/member.ts` (l’assertion `Chest-Member`) | `chest/toolfront/assertion.go` du dépôt Chest (dérivation de la clé, revendications) : ils changent ensemble, et le vecteur signé par le Chest de `client/test/member.test.ts` se régénère depuis le Go ; `docs/architecture.md` du dépôt Chest, « Outils serveurs » |
-| le contrat (ce qu’un outil serveur reçoit du Chest) | `docs/architecture.md` du dépôt Chest, sections « Outils serveurs » et « Contrat applicatif » ; le README de ce dépôt |
+| `member()` always returns `null` locally | No `CHEST_TOKEN` / `CHEST_TOOL` in the environment: outside a Chest, nobody is a member. |
+| `CapabilityNotGranted` from `databaseUrl()` | Capability missing in `chest.json`, not approved yet, or `DATABASE_URL` set by the tool itself. |
+| `ChestError` with `invalid_name` | A file name outside the allowed shape (up to 8 segments of `[A-Za-z0-9._-]`, none starting with `.` or `-`). |
+| Build fails in the browser bundle | The SDK was imported from client code. |
 
-Tout changement d’ici doit donc être synchronisé dans le dépôt Chest et dans
-les outils du store par ces scripts ; on ne modifie jamais une copie vendue à
-la main.
+## Contributing to this package
 
-## Langue et forme
-
-Le SDK est en anglais : code, commentaires, messages d’erreur, `README.md`
-(c’est la page du paquet sur npm). Les consignes (`AGENTS.md`) et
-`PUBLISHING.md`, écrits pour le propriétaire, sont en français.
-
-TypeScript strict (ES2022, NodeNext). Rien d’autre que les fichiers de
-`scripts/sync-sdk.mjs` du dépôt Chest dans `client/src` et `client/test` : ce
-script refuse tout fichier en plus (d’où `client/index.ts` à part). Le paquet
-npm publie les quatre modules (`errors`, `member`, `database`, `files`). Le
-contrat v1 (un worker relié par un canal privé) est retiré du Chest : ni son
-client ni son gabarit ne reviennent ici. La version
-est celle de `package.json`, publiée par un tag `vX.Y.Z` (`PUBLISHING.md`).
-Branche + PR ; les tests doivent passer avant de rendre la main.
+Keep it dependency-free (`node:*` only), with no network access other than the
+Chest's API on `127.0.0.1`, and run `npm test` and `npm run check:package`
+before opening a pull request.

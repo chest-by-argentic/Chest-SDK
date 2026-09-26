@@ -6,7 +6,7 @@ import { afterEach, beforeEach, mock, test } from "node:test";
 import { member } from "../src/member.js";
 
 // An assertion the Chest's front signed (chest/toolfront.Assertion, Go), for
-// the tool « web », at 1790000000, with the instance key 00 01 … 1f: the
+// the tool "web", at 1790000000, with the instance key 00 01 … 1f: the
 // derivation of the key and the encoding are the Chest's, not this test's.
 const chestToken = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 const signedByChest = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZG1pbiI6dHJ1ZSwiYXVkIjoid2ViIiwiYnVpbGRlciI6ZmFsc2UsImVtYWlsIjoiYWxpY2VAZXhhbXBsZS50ZXN0IiwiZXhwIjoxNzkwMDAwMDYwLCJmYW1pbHlfbmFtZSI6Ik1hcnRpbiIsImdpdmVuX25hbWUiOiJBbGljZSIsImlhdCI6MTc5MDAwMDAwMCwiaXNzIjoiaHR0cHM6Ly93ZWItY2hlc3QuYXRlbGllci5leGFtcGxlIiwibmFtZSI6IkFsaWNlIE1hcnRpbiIsInBpY3R1cmUiOiJodHRwczovL3dlYi1jaGVzdC5hdGVsaWVyLmV4YW1wbGUvX2NoZXN0L21lbWJlcnMvYWxpY2UvcGhvdG8iLCJyb2xlIjoiZWRpdGV1ciIsInN1YiI6ImFsaWNlIn0.O9r0oOReZLNjzd4SNrH2f8qRSUGIJwyDMNa9D6xZP9I";
