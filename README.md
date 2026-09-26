@@ -101,7 +101,7 @@ front reaches the container: the signature is a second defence; business rules
 
 A v2 tool that declares `"capabilities": ["database"]` in its `chest.json`
 gets a PostgreSQL database of its own (the capability is shown and approved
-like a permission, « Base de données »). The container has no network: its
+like a permission, in the approval screen). The container has no network: its
 launcher listens on `127.0.0.1` and relays each connection to the Chest. The
 launcher sets `DATABASE_URL` —
 `postgres://<user>:<password>@127.0.0.1:<port>/<database>?sslmode=disable`,
@@ -135,7 +135,7 @@ previous version working — going back to the previous version undoes nothing.
 
 ## `files` — files of a server tool
 
-A v2 tool that declares `"capabilities": ["files"]` (« Fichiers » at approval)
+A v2 tool that declares `"capabilities": ["files"]` (approved like a permission)
 keeps private files **through its Chest**, never on its disk (the container's
 root is read-only): 1 GiB and 10,000 objects per tool, 32 MiB per object. The
 launcher gives the tool `CHEST_API=http://127.0.0.1:<port>` — its own port,
@@ -193,7 +193,10 @@ npm run check:package  # npm pack, install into a temp project, import every sub
 `client/src` holds the modules, `client/index.ts` the package root,
 `client/test` the tests. `npm run build` compiles `client/index.ts` and the
 four published modules (`errors`, `member`, `database`, `files`; TypeScript
-strict, ES2022, NodeNext) into `dist/`: ESM `.js`, `.d.ts` and their maps. Read `AGENTS.md` before changing anything.
+strict, ES2022, NodeNext) into `dist/`: ESM `.js`, `.d.ts` and their maps.
+The package stays dependency-free (`node:*` only) and reaches nothing but the
+Chest's API on `127.0.0.1`. `AGENTS.md` is a usage guide for AI agents
+building a tool with this package.
 
 ## Licence
 
