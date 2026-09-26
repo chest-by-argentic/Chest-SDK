@@ -169,6 +169,13 @@ have happened), `ChestError` for the rest (`invalid_type`, `not_found` for
 The package version is `version` in `package.json` (semver), published by a
 tag `vX.Y.Z` (see `PUBLISHING.md`).
 
+## The MCP server
+
+This repository also holds [`@argentic/chest-mcp`](mcp/README.md) (in
+`mcp/`): the MCP server an assistant — Claude Code, Claude Desktop, any MCP
+client — runs to work on a Chest with a member's personal access token. It is
+its own package, with its own version and tags (`mcp-vX.Y.Z`).
+
 ## What this repository is not
 
 This repository is public and **is not a tool**: it has no `chest.json`, and a
