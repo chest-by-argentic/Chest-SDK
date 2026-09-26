@@ -7,7 +7,7 @@ import { CapabilityNotGranted, ChestError, QuotaExceeded, TooLarge, Unavailable 
 // which relays each request to the Chest). A call reaches the tool's files
 // only: its instance is its identity.
 //
-//   import * as files from "../../packages/chest-client/src/files.js";
+//   import * as files from "@argentic/chest-sdk/files";
 //   await files.put("photos/cat.png", bytes, "image/png");
 //   const { url } = await files.url("photos/cat.png");   // 15 min, team host
 //
@@ -23,6 +23,7 @@ export type FilePage = { files: FileObject[]; next: string | null };
 const maxObject = 32 << 20;
 const maxAnswer = 4 << 20;
 const deadline = 120000;
+// The grammar of a name, the same as the Chest's (chest/toolfiles, name).
 const namePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,7}$/u;
 
 // base is the Chest's API as the launcher gives it; without, the version
