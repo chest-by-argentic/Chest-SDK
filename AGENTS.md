@@ -14,7 +14,7 @@ things, all server-side:
 |---|---|---|
 | Who is signed in on this request | `member(request)` from `@argentic/chest-sdk/member` | nothing (the Chest sets `CHEST_TOKEN`, `CHEST_TOOL`) |
 | The tool's own PostgreSQL database | `databaseUrl()` from `@argentic/chest-sdk/database` | `"capabilities": ["database"]` in `chest.json` |
-| The tool's private files | `put`, `get`, `list`, `delete`, `url` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` |
+| The tool's private files | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` (and `"files": {"quota", "maxObject"}` beyond 1 GiB, 32 MiB per object) |
 | Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `Unavailable` from `@argentic/chest-sdk/errors` | — |
 
 ## Install
@@ -55,6 +55,33 @@ await files.put("reports/2026.pdf", bytes, "application/pdf");
 const { url } = await files.url("reports/2026.pdf"); // 15-minute signed link
 ```
 
+## Let a member upload a file
+
+The browser sends the bytes to the Chest itself; the tool only authorises one
+upload and checks what came.
+
+```ts
+// app/chest/api/avatar/route.ts — authorise one upload
+import { member } from "@argentic/chest-sdk/member";
+import * as files from "@argentic/chest-sdk/files";
+
+export async function POST(request: Request) {
+  const who = member(request);
+  if (!who) return new Response(null, { status: 401 });
+  // A folder: the Chest names the object (20 hex characters + an extension).
+  const up = await files.uploadUrl("photos/", { maxSize: 5 << 20, types: ["image/*"] });
+  return Response.json(up); // { url, method: "PUT", expiresIn }
+}
+```
+
+```ts
+// In the browser, on a /chest page: the member's session goes with it
+const sent = await fetch(up.url, { method: "PUT", body: file, headers: { "Content-Type": file.type } });
+const { name } = await sent.json(); // 201 {name, type, size}
+// then tell the tool: it calls files.stat(name) (and checks the name is under
+// photos/) before recording it in its database
+```
+
 Schema changes go in `migrations/NNNN_name.sql`; the Chest runs them in order
 at install and at every update.
 
@@ -83,6 +110,15 @@ at install and at every update.
   read-only root; store files through `files`, data in the database.
 - **Give signed file links only to members.** A `files.url()` link opens
   without sign-in for 15 minutes; never put it on a public page.
+- **Authorise uploads only in `/chest` routes, after `member()`.** The
+  `uploadUrl()` answer goes to that member's browser, never to a public page;
+  it serves once, within its `expiresIn`.
+- **Record an uploaded file after `stat` confirms it.** The browser may never
+  send it, or the Chest may refuse it: write the name in your database only
+  once `files.stat(name)` returns it (its type and size as the Chest kept
+  them).
+- **Large files go through `uploadUrl`, not `put`.** `put` and `get` carry the
+  bytes through the tool's memory (256 MiB by default).
 
 ## Common pitfalls
 
@@ -90,6 +126,9 @@ at install and at every update.
 |---|---|
 | `member()` always returns `null` locally | No `CHEST_TOKEN` / `CHEST_TOOL` in the environment: outside a Chest, nobody is a member. |
 | `CapabilityNotGranted` from `databaseUrl()` | Capability missing in `chest.json`, not approved yet, or `DATABASE_URL` set by the tool itself. |
+| The browser's `PUT` answers 403 `invalid_token` | The upload token was already used, expired (`expiresIn`), or was not made for this host: ask a new `uploadUrl` for each upload. |
+| The browser's `PUT` answers 415 `type_refused` or 400 `type_mismatch` | The file's `Content-Type` is not one of `types`, or its first bytes are not of the type sent. |
+| `TooLarge` from `uploadUrl` or `put` | Beyond the tool's largest object (32 MiB unless `chest.json` asks `"files": {"maxObject": …}`). |
 | `ChestError` with `invalid_name` | A file name outside the allowed shape (up to 8 segments of `[A-Za-z0-9._-]`, none starting with `.` or `-`). |
 | Build fails in the browser bundle | The SDK was imported from client code. |
 
