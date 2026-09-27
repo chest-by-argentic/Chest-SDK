@@ -10,7 +10,6 @@
   "files": [
     "client/index.ts",
     "client/src/api.ts",
-    "client/src/assertion.ts",
     "client/src/errors.ts",
     "client/src/member.ts",
     "client/src/members.ts",

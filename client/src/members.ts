@@ -1,7 +1,6 @@
 import { ask, json, refusal } from "./api.js";
-import { groupIdPattern, memberIdPattern } from "./assertion.js";
 import { ChestError, Unavailable } from "./errors.js";
-import type { Member } from "./member.js";
+import { groupIdPattern, memberIdPattern, type Member } from "./member.js";
 
 // Who has the tool, for a server tool whose chest.json declares
 // "capabilities": ["members"] (and "members.email" for their addresses):

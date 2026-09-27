@@ -1,6 +1,5 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import { assertionKey, claims, groupIdPattern, memberIdPattern } from "./assertion.js";
 
 // A member of the Chest, as the tool sees them: on a request of its team host
 // (member), and in its members (members.ts).
@@ -29,6 +28,19 @@ export type Member = {
   email?: string;
 };
 
+// The grammars of the identifiers the Chest mints: a tool may check with them
+// the identifiers it stores.
+export const memberIdPattern = /^mbr_[a-z2-7]{26}$/u;
+export const groupIdPattern = /^grp_[a-z2-7]{26}$/u;
+
+// The key of the assertions is HMAC-SHA256 of this label under the text of
+// CHEST_TOKEN, exactly as the Chest derives it (chest/toolfront). Its version
+// is the shape of the claims: an assertion of another shape is refused. This
+// module stands alone (node:* only), so that it can be copied by itself.
+const label = "Chest-Member v2";
+// The claims every assertion carries; email only for a tool that holds
+// members.email.
+const claims = ["iss", "aud", "iat", "exp", "sub", "given_name", "family_name", "name", "picture", "role", "admin", "builder", "groups"] as const;
 // Clocks of the Chest and of the container may differ by this much, in seconds.
 const skew = 5;
 // An assertion is a few hundred bytes; anything longer is not one.
@@ -69,7 +81,8 @@ export function member(request: IncomingMessage | Request): Member | null {
   const [, encodedHeader = "", encodedPayload = "", encodedSignature = ""] = parts;
   const header = json(encodedHeader);
   if (!header || Object.keys(header).length !== 2 || header["alg"] !== "HS256" || header["typ"] !== "JWT") return null;
-  const expected = createHmac("sha256", assertionKey(token)).update(encodedHeader + "." + encodedPayload).digest();
+  const key = createHmac("sha256", Buffer.from(token, "utf8")).update(label).digest();
+  const expected = createHmac("sha256", key).update(encodedHeader + "." + encodedPayload).digest();
   const signature = Buffer.from(encodedSignature, "base64url");
   if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) return null;
   const payload = json(encodedPayload);

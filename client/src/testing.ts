@@ -1,9 +1,8 @@
 import { createHmac, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { assertionKey, groupIdPattern, memberIdPattern } from "./assertion.js";
+import { groupIdPattern, memberIdPattern, type Member } from "./member.js";
 import { forget } from "./members.js";
-import type { Member } from "./member.js";
 
 // For a tool's own tests, never imported by its production code: a member's
 // assertion signed as the Chest signs it, and a Chest's API in the test's
@@ -62,7 +61,10 @@ export function signAssertion(member: Member, options: { token?: string; tool?: 
     given_name: member.firstName, family_name: member.lastName, name: member.name, picture: member.photo ?? "", role: member.role ?? "",
     admin: member.isAdmin, builder: member.isBuilder, groups: member.groups, ...(member.email === undefined ? {} : { email: member.email }),
   });
-  return body + "." + createHmac("sha256", assertionKey(token)).update(body).digest("base64url");
+  // The key as the Chest derives it, and member() reads it: HMAC-SHA256 of
+  // the label of the assertion's shape under the text of the token.
+  const key = createHmac("sha256", Buffer.from(token, "utf8")).update("Chest-Member v2").digest();
+  return body + "." + createHmac("sha256", key).update(body).digest("base64url");
 }
 
 // withMember is the request carrying that member's assertion: a new Web

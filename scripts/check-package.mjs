@@ -19,7 +19,7 @@ const name = manifest.name;
 // all, files and members as namespaces, never testing.
 const expected = {
   errors: ["CapabilityNotGranted", "ChestError", "QuotaExceeded", "RateLimited", "TooLarge", "Unavailable"],
-  member: ["member"],
+  member: ["groupIdPattern", "member", "memberIdPattern"],
   database: ["databaseUrl"],
   files: ["delete", "get", "list", "put", "url"],
   members: ["forget", "get", "groups", "list", "lookup"],

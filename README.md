@@ -20,7 +20,7 @@ all, with the files and members APIs as the namespaces `files` and `members`
 
 | Import | Gives |
 |---|---|
-| `@argentic/chest-sdk/member` | `member(request)`, type `Member`: the member of a request on the team host of a server tool, read from the `Chest-Member` assertion and verified; `null` without a valid assertion |
+| `@argentic/chest-sdk/member` | `member(request)`, type `Member`: the member of a request on the team host of a server tool, read from the `Chest-Member` assertion and verified; `null` without a valid assertion. `memberIdPattern`, `groupIdPattern`: the grammars of the identifiers (`mbr_…`, `grp_…`) |
 | `@argentic/chest-sdk/members` | `list`, `get`, `lookup`, `groups.list`, `forget`, types `MemberPage`, `Lookup`, `FormerMember`, `Group`: the members who have the tool (capability `members`, their addresses with `members.email`) |
 | `@argentic/chest-sdk/database` | `databaseUrl()`: the address of the tool's own PostgreSQL database (capability `database`) |
 | `@argentic/chest-sdk/files` | `put`, `get`, `list`, `delete`, `url`, types `FileObject`, `FileData`, `FilePage`: the tool's private files (capability `files`), kept by the Chest, and a 15-minute signed link to one |
@@ -297,9 +297,10 @@ npm run check:package  # npm pack, install into a temp project, import every sub
 `client/src` holds the modules, `client/index.ts` the package root,
 `client/test` the tests. `npm run build` compiles `client/index.ts`, the six
 published modules (`errors`, `member`, `members`, `database`, `files`,
-`testing`) and the two they share (`api`, the Chest's API; `assertion`, the
-`Chest-Member` key and claims) — TypeScript strict, ES2022, NodeNext — into
-`dist/`: ESM `.js`, `.d.ts` and their maps.
+`testing`) and the one files and members share (`api`, the Chest's API) —
+TypeScript strict, ES2022, NodeNext — into `dist/`: ESM `.js`, `.d.ts` and
+their maps. `member.ts` imports nothing but `node:*`, so that a tool may copy
+it alone.
 The package stays dependency-free (`node:*` only) and reaches nothing but the
 Chest's API on `127.0.0.1`. `AGENTS.md` is a usage guide for AI agents
 building a tool with this package.
