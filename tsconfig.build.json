@@ -9,10 +9,14 @@
   },
   "files": [
     "client/index.ts",
+    "client/src/api.ts",
+    "client/src/assertion.ts",
     "client/src/errors.ts",
     "client/src/member.ts",
+    "client/src/members.ts",
     "client/src/database.ts",
-    "client/src/files.ts"
+    "client/src/files.ts",
+    "client/src/testing.ts"
   ],
   "include": []
 }
