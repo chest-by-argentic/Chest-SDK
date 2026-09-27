@@ -1,6 +1,6 @@
 {
   "name": "@argentic/chest-sdk",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "The client a Chest server tool embeds: the member the Chest asserts on a request, the tool's own database and its private files.",
   "keywords": [
     "chest",
