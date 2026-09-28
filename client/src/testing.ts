@@ -98,10 +98,19 @@ export type FakeChest = {
 
 const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString("base64url");
 
+// What an assertion is signed with and says besides the member: the token
+// (CHEST_TOKEN by default) and the tool (CHEST_TOOL by default) it is for,
+// when it is issued (now by default), the language the Chest speaks to the
+// member ("en" by default) and the organization the Chest is of ("Test
+// organization" by default). They are signed as given: a language that is
+// not a primary tag, or an organization outside 2 to 80 characters, makes
+// member() refuse the assertion, as it refuses the Chest's.
+export type AssertionOptions = { token?: string; tool?: string; now?: Date; language?: string; organization?: string };
+
 // signAssertion is the Chest-Member value the Chest's front would send for
-// that member: HS256 under the key of the token (CHEST_TOKEN by default), for
-// the tool (CHEST_TOOL by default), valid 60 seconds from now.
-export function signAssertion(member: Member, options: { token?: string; tool?: string; now?: Date } = {}): string {
+// that member: HS256 under the key of the token, for the tool, valid 60
+// seconds from when it is issued.
+export function signAssertion(member: Member, options: AssertionOptions = {}): string {
   const token = options.token ?? process.env["CHEST_TOKEN"];
   const tool = options.tool ?? process.env["CHEST_TOOL"];
   if (!token || !tool) throw new Error("signAssertion needs a token and a tool: start a fakeChest, or name them");
@@ -111,6 +120,7 @@ export function signAssertion(member: Member, options: { token?: string; tool?: 
     iss: `https://${tool}-chest.chest.test`, aud: tool, iat, exp: iat + 60, sub: member.id,
     given_name: member.firstName, family_name: member.lastName, name: member.name, picture: member.photo ?? "", role: member.role ?? "",
     admin: member.isAdmin, builder: member.isBuilder, groups: member.groups, ...(member.email === undefined ? {} : { email: member.email }),
+    language: options.language ?? "en", organization: options.organization ?? "Test organization",
   });
   // The key as the Chest derives it, and member() reads it: HMAC-SHA256 of
   // the label of the assertion's shape under the text of the token.
@@ -128,9 +138,10 @@ function signEvent(id: string, body: string, options: { token: string; tool: str
   return signed + "." + createHmac("sha256", key).update(signed).digest("base64url");
 }
 
-// withMember is the request carrying that member's assertion: a new Web
-// Request, or the same Node request with its header set.
-export function withMember<R extends Request | IncomingMessage>(request: R, member: Member, options: { token?: string; tool?: string; now?: Date } = {}): R {
+// withMember is the request carrying that member's assertion, signed with
+// the options of signAssertion: a new Web Request, or the same Node request
+// with its header set.
+export function withMember<R extends Request | IncomingMessage>(request: R, member: Member, options: AssertionOptions = {}): R {
   const assertion = signAssertion(member, options);
   if (request instanceof Request) {
     const headers = new Headers(request.headers);

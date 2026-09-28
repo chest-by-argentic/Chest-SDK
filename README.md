@@ -23,7 +23,7 @@ testing module is not in the root).
 
 | Import | Gives |
 |---|---|
-| `@argentic/chest-sdk/member` | `member(request)`, type `Member`: the member of a request on the team host of a server tool, read from the `Chest-Member` assertion and verified; `null` without a valid assertion. `memberIdPattern`, `groupIdPattern`: the grammars of the identifiers (`mbr_…`, `grp_…`) |
+| `@argentic/chest-sdk/member` | `member(request)`, types `SignedInMember`, `Member`: the member of a request on the team host of a server tool, with the language the Chest speaks to them and the Chest's organization, read from the `Chest-Member` assertion and verified; `null` without a valid assertion. `memberIdPattern`, `groupIdPattern`: the grammars of the identifiers (`mbr_…`, `grp_…`) |
 | `@argentic/chest-sdk/members` | `list`, `get`, `lookup`, `groups.list`, `forget`, types `MemberPage`, `Lookup`, `FormerMember`, `Group`: the members who have the tool (capability `members`, their addresses with `members.email`) |
 | `@argentic/chest-sdk/notifications` | `notify`, `withdraw`, `badge.set`, `badge.setMany`, types `Notice`, `Delivery`, `BadgeCount`, `BadgeWrite`: counters on the tool's tile and items in members' inboxes, inside the Chest (capability `notifications`) |
 | `@argentic/chest-sdk/events` | `handle`, `verify`, `acknowledgeErasure`, `memorySeen`, `erasureIdPattern`, types `ChestEvent`, `MemberUpdated`, `AccessRevoked`, `MemberRemoved`, `MemberErased`, `MemberChange`, `Handlers`, `Seen`: the events of the members' lifecycle the Chest posts to the tool's `/chest-events` (`"receives": ["member.*"]`), verified, deduplicated by id, and the acknowledgment of an erasure |
@@ -31,7 +31,7 @@ testing module is not in the root).
 | `@argentic/chest-sdk/database` | `databaseUrl()`: the address of the tool's own PostgreSQL database (capability `database`) |
 | `@argentic/chest-sdk/files` | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl`, types `FileObject`, `FileData`, `FilePage`: the tool's private files (capability `files`), kept by the Chest, a 15-minute signed link to one (or to its thumbnail), and uploads straight from a member's browser |
 | `@argentic/chest-sdk/errors` | `ChestError` (`code`, `status`), `CapabilityNotGranted` (403), `TooLarge` (413), `QuotaExceeded` (429), `RateLimited` (429), `Unavailable` (503), and for AI `AiCapReached` (402), `AiModelNotAllowed` (403), `AiRefused` (422), `AiUnavailable` (502, 503), type `AiUnavailableReason`: what the SDK throws when the Chest does not give what a tool asks |
-| `@argentic/chest-sdk/testing` | `signAssertion`, `withMember`, `fakeChest`, types `FakeChest`, `FakeChestOptions`, `FakeGroup`, `FakeFile`, `FakeNotification`, `FakeEvent`, `FakeAi`, `FakeAiModel`, `FakeAiReply`, `FakeAiCall`: for the tool's own tests only |
+| `@argentic/chest-sdk/testing` | `signAssertion`, `withMember`, `fakeChest`, types `AssertionOptions`, `FakeChest`, `FakeChestOptions`, `FakeGroup`, `FakeFile`, `FakeNotification`, `FakeEvent`, `FakeAi`, `FakeAiModel`, `FakeAiReply`, `FakeAiCall`: for the tool's own tests only |
 | `@argentic/chest-sdk` | all of the above but `testing`; `files`, `members`, `notifications`, `events` and `ai` as namespaces |
 
 ```ts
@@ -86,7 +86,8 @@ is described in the Chest repository, `docs/architecture.md`.
 A v2 tool is an ordinary web server; on its team host, the Chest relays
 `/chest` and everything below it with the `Chest-Member` header of the
 signed-in member. `member(request)` accepts a Node request (`IncomingMessage`)
-or a Web `Request` and returns:
+or a Web `Request` and returns a `SignedInMember` (a `Member`, the type the
+`members` API answers too, and two fields of the request):
 
 ```ts
 type Member = {
@@ -101,6 +102,11 @@ type Member = {
   groups: string[];      // "grp_…": the groups that give the member this tool
   email?: string;        // only with the capability "members.email"
 };
+
+type SignedInMember = Member & {
+  language: string;      // "en", "fr"…: the language the Chest speaks to this member
+  organization: string;  // "Acme SAS": the organization the Chest is of
+};
 ```
 
 or `null`: without the header, on the public host (the Chest never sends an
@@ -108,10 +114,13 @@ assertion there and strips a client's), or for any assertion that is not
 exactly its own. Checks: compact JWS, header exactly
 `{"alg":"HS256","typ":"JWT"}`, HMAC-SHA256 signature compared in constant time
 under the key HMAC-SHA256("Chest-Member v2") of the text of `CHEST_TOKEN` —
-the Chest's derivation; the label changes with the shape of the claims, so an
-assertion of another shape is refused rather than misread —, `aud` equal to
+the Chest's derivation; the label changes when a claim changes meaning or
+goes, so an assertion of another shape is refused rather than misread, and
+stays when a claim is added —, `aud` equal to
 `CHEST_TOOL`, `iat` and `exp` within 5 s, the shape of each claim (`sub` an
-`mbr_` identifier, `groups` `grp_` identifiers; an unknown claim is ignored). Without
+`mbr_` identifier, `groups` `grp_` identifiers, `language` a primary tag of
+2 or 3 lowercase letters, `organization` 2 to 80 characters without control
+characters; an unknown claim is ignored). Without
 `CHEST_TOKEN` or `CHEST_TOOL`, nobody is a member. The function never throws
 for what a request carries.
 
@@ -129,6 +138,16 @@ host to members who have the tool; `role` is the one the Chest gives the
 member among those the manifest declares. Only the Chest's front reaches the
 container: the signature is a second defence; business rules (who writes
 what) remain the tool's.
+
+`language` is the member's own language in the Chest, else the Chest's
+default: a BCP 47 primary tag among those the product speaks (`en`, `fr`
+today; the SDK accepts any, so a language added to the Chest needs no new
+SDK). The tool's private part (`/chest`) speaks it — to this member, on every
+request — and offers no language switch of its own; only its public parts,
+where nobody is signed in, keep their own switch. A tool that does not
+speak that language uses its own default. `organization` is the organization the Chest
+is of ("Acme SAS"), plain text of 2 to 80 characters: show it in a header, a
+document or an export, never as HTML.
 
 ## `members` — who has the tool
 
@@ -611,8 +630,8 @@ await chest.close();
 
 | Function | Gives |
 |---|---|
-| `signAssertion(member, {token?, tool?, now?})` | A `Chest-Member` header value signed like the Chest's (the token and tool of the environment by default) |
-| `withMember(request, member, options?)` | The request carrying that assertion: a new Web `Request`, or the same Node request |
+| `signAssertion(member, {token?, tool?, now?, language?, organization?})` | A `Chest-Member` header value signed like the Chest's (the token and tool of the environment by default; `language` `"en"` and `organization` `"Test organization"` by default, signed as given, so an invalid one makes `member()` refuse it) |
+| `withMember(request, member, options?)` | The request carrying that assertion (the options of `signAssertion`): a new Web `Request`, or the same Node request |
 | `fakeChest({members?, former?, groups?, capabilities?, receives?, files?, ai?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set) and answers members, groups, files, badges, notifications, AI and erasure acknowledgments with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments). A former member `{id, name?, erased?}` looks up as `former`, or `erased` |
 | `chest.emit(event, to)` | Delivers an event (`{type, data, id?, occurredAt?}`: a new id and now by default; name an id to deliver the same event twice) signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-events`) or a function of a Web `Request` — and says the status it answered. A `member.erased` makes its erasure one the tool may acknowledge |
 | `ai: {models?, reply?, cap?, unavailable?}` | The fake Chest's AI, deterministic and without any provider. `models`: the aliases the tool declared, `{alias, model, provider?, input?, output?}` (all four by default, `fake-default`…`fake-embedding`, provider `openrouter`, 1 and 2 USD per million tokens); another alias answers `model_not_allowed`. `reply(request)`: what a chat answers, given the wire request — a string, or `{text?, toolCalls?: {name, arguments, id?}[]}` (by default the last user message, echoed); streamed, it comes word by word, each tool call's arguments in two pieces, then the finish reason and the usage. Embeddings are unit vectors from a hash of each text (8 dimensions unless `dimensions`). Tokens count one per 4 characters; once the spending reaches `cap` (euros, 5 by default; 0 refuses at once) a call answers `cap_reached`. `unavailable` (`no_connector`, `provider_key_invalid`, `provider_unavailable`) makes chat and embeddings answer it. 60 requests a minute |
