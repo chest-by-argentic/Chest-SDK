@@ -18,7 +18,8 @@ server-side:
 | Who else has the tool | `list`, `get`, `lookup`, `groups.list` from `@argentic/chest-sdk/members` | `"capabilities": ["members"]` (`"members.email"` too for addresses) |
 | Be told when members change, lose access, leave or ask to be erased | `handle`, `verify`, `acknowledgeErasure` from `@argentic/chest-sdk/events` | `"capabilities": ["members"]` and `"receives": ["member.*"]` |
 | Tell members what needs their attention | `notify`, `withdraw`, `badge.set`, `badge.setMany` from `@argentic/chest-sdk/notifications` | `"capabilities": ["notifications"]` |
-| Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `Unavailable` from `@argentic/chest-sdk/errors` | — |
+| Call AI models (chat, streamed or not, tools, embeddings) | `chat`, `embed`, `models`, `usage` from `@argentic/chest-sdk/ai` | `"capabilities": ["ai"]` and `"ai": {"monthly", "models", "purpose"}` |
+| Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `Unavailable`, `AiCapReached`, `AiUnavailable`, `AiModelNotAllowed`, `AiRefused` from `@argentic/chest-sdk/errors` | — |
 | Tests without a Chest | `fakeChest` (and its `emit`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
 
 ## Install
@@ -138,6 +139,55 @@ export async function POST(request: Request) {
 - Never put the route behind your own session or under `/chest`, and never
   read the body before `handle` (it verifies the signature over it).
 
+## Use AI models
+
+The Chest's owner connects the providers and maps the aliases `default`,
+`fast`, `smart`, `embedding` to models; the tool names an alias, never a
+model, and holds no key. Every call counts against the tool's monthly cap.
+
+```jsonc
+// chest.json
+{ "capabilities": ["ai"], "ai": { "monthly": 20, "models": ["default", "embedding"], "purpose": "Summarises support tickets" } }
+```
+
+```ts
+import * as ai from "@argentic/chest-sdk/ai";
+import { AiCapReached, AiUnavailable } from "@argentic/chest-sdk/errors";
+
+let summary: string | null = null;
+try {
+  summary = (await ai.chat({ model: "default", messages: [{ role: "user", content: `Summarise: ${ticket.text}` }], maxTokens: 300, member: who.id })).text;
+} catch (error) {
+  if (!(error instanceof AiCapReached || error instanceof AiUnavailable)) throw error;
+  // summary stays null: the page says "AI features are paused" and still works
+}
+
+for await (const chunk of ai.chat({ model: "fast", messages, stream: true, signal: request.signal })) write(chunk.text);
+const { embeddings } = await ai.embed({ model: "embedding", input: texts }); // 1 to 256 texts
+```
+
+- **Always degrade gracefully.** Catch `AiCapReached` and `AiUnavailable`
+  around every AI call and keep the tool usable without AI; tell the member
+  “AI features are paused”, never show a crash.
+- Only aliases listed in `"ai": {"models"}` work (`AiModelNotAllowed`
+  otherwise); add `embedding` there before calling `embed`.
+- Set `maxTokens` to what the answer needs: the Chest reserves the worst case
+  against the cap before each call, so a large `maxTokens` is refused sooner.
+- Tool calls: add `result.message` to the conversation, run each of
+  `result.toolCalls` yourself (`arguments` is JSON text, validate it), answer
+  with `{role: "tool", tool_call_id, content}`, call again. The Chest never
+  runs a tool.
+- Streaming: pass the request's `signal` so a member who leaves stops the
+  call; in a stream, join `toolCalls` pieces by `index`; the last chunk
+  carries `usage`.
+- Never put model output in a page as HTML, and never let it decide who may
+  do what: it is text from outside the tool.
+- Test both paths with `fakeChest({ ai: { reply, cap, unavailable } })`:
+  `reply(request)` returns the text or `{text, toolCalls}` (the last user
+  message echoed by default), `cap: 0` makes every call `AiCapReached`,
+  `unavailable: "no_connector"` every call `AiUnavailable`; `chest.ai` lists
+  the calls.
+
 ## Let a member upload a file
 
 The browser sends the bytes to the Chest itself; the tool only authorises one
@@ -233,6 +283,9 @@ at install and at every update.
 | No event ever comes | `chest.json` does not declare `"receives": ["member.*"]` (with `members`), the version was not approved, or the route is not `POST /chest-events` at the root. |
 | `ChestError` `erasure_not_found` from `acknowledgeErasure` | The erasure was not sent to this tool: acknowledge the `erasure` of the `member.erased` event you received. |
 | `RateLimited` from `members` | More than 600 calls a minute: use `lookup` (200 ids a call, kept a minute) instead of one `get` per row. |
+| `AiModelNotAllowed` from `ai` | The alias is not in `"ai": {"models"}` of `chest.json` (or is not one of `default`, `fast`, `smart`, `embedding`). |
+| `AiUnavailable` with `no_connector` | The owner has not connected a provider, or not mapped that alias: a Chest setting, not a bug of the tool. |
+| `AiCapReached` right after a deploy | The month's cap is spent, or `maxTokens` makes the worst case exceed what is left. |
 | Build fails in the browser bundle | The SDK was imported from client code. |
 
 ## Contributing to this package

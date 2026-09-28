@@ -53,3 +53,47 @@ export class Unavailable extends ChestError {
     super("unavailable", 503, "the Chest is unavailable");
   }
 }
+
+// The month's AI budget is spent: the tool's cap (scope "tool") or the
+// Chest's (scope "chest"), until resetsAt. Nothing was spent on the refused
+// call. Keep the tool usable without AI and tell the member AI features are
+// paused.
+export class AiCapReached extends ChestError {
+  readonly scope: "tool" | "chest";
+  readonly resetsAt: Date;
+  constructor(scope: "tool" | "chest", resetsAt: Date) {
+    super("cap_reached", 402, `the Chest refused: the ${scope === "tool" ? "tool's" : "Chest's"} AI budget for the month is spent until ${resetsAt.toISOString()}`);
+    this.scope = scope;
+    this.resetsAt = resetsAt;
+  }
+}
+
+// Why AI is unavailable: no connector behind the model in this Chest, the
+// provider refused the connector's key, or the provider failed or timed out.
+export type AiUnavailableReason = "no_connector" | "provider_key_invalid" | "provider_unavailable";
+
+// AI cannot answer now, for a reason the Chest's owner or the provider must
+// fix (the code is the reason). Keep the tool usable without AI and tell the
+// member AI features are paused.
+export class AiUnavailable extends ChestError {
+  readonly reason: AiUnavailableReason;
+  constructor(reason: AiUnavailableReason) {
+    super(reason, reason === "provider_key_invalid" ? 502 : 503, reason === "no_connector" ? "AI is not set up in this Chest: no connector behind the model" : reason === "provider_key_invalid" ? "the AI provider refused the Chest's key" : "the AI provider failed or did not answer");
+    this.reason = reason;
+  }
+}
+
+// The model is not one of the aliases the tool declared in its chest.json
+// ("ai": {"models"}): default, fast, smart, embedding.
+export class AiModelNotAllowed extends ChestError {
+  constructor() {
+    super("model_not_allowed", 403, "the Chest refused: the model is not one the tool declared (default, fast, smart or embedding in chest.json)");
+  }
+}
+
+// The provider's moderation refused the content of the request.
+export class AiRefused extends ChestError {
+  constructor() {
+    super("content_refused", 422, "the AI provider refused the content of the request");
+  }
+}

@@ -4,7 +4,8 @@
 with its Chest: the member the Chest asserts on a request, the other members
 who have the tool, the address of the tool's own database, its private
 files, the badges and notifications it shows members inside the Chest, the
-events of its members' lifecycle — and, for the tool's tests, a fake Chest. The SDK has no dependency: it
+events of its members' lifecycle, AI models through the Chest — and, for the
+tool's tests, a fake Chest. The SDK has no dependency: it
 only imports `node:*`.
 
 ```sh
@@ -16,9 +17,9 @@ Node 22 or later. ESM only, compiled JavaScript with its type declarations.
 ## Imports
 
 Each module is its own subpath and pulls in nothing else; the root gives them
-all, with the files, members, notifications and events APIs as the
-namespaces `files`, `members`, `notifications` and `events` (the testing
-module is not in the root).
+all, with the files, members, notifications, events and ai APIs as the
+namespaces `files`, `members`, `notifications`, `events` and `ai` (the
+testing module is not in the root).
 
 | Import | Gives |
 |---|---|
@@ -26,11 +27,12 @@ module is not in the root).
 | `@argentic/chest-sdk/members` | `list`, `get`, `lookup`, `groups.list`, `forget`, types `MemberPage`, `Lookup`, `FormerMember`, `Group`: the members who have the tool (capability `members`, their addresses with `members.email`) |
 | `@argentic/chest-sdk/notifications` | `notify`, `withdraw`, `badge.set`, `badge.setMany`, types `Notice`, `Delivery`, `BadgeCount`, `BadgeWrite`: counters on the tool's tile and items in members' inboxes, inside the Chest (capability `notifications`) |
 | `@argentic/chest-sdk/events` | `handle`, `verify`, `acknowledgeErasure`, `memorySeen`, `erasureIdPattern`, types `ChestEvent`, `MemberUpdated`, `AccessRevoked`, `MemberRemoved`, `MemberErased`, `MemberChange`, `Handlers`, `Seen`: the events of the members' lifecycle the Chest posts to the tool's `/chest-events` (`"receives": ["member.*"]`), verified, deduplicated by id, and the acknowledgment of an erasure |
+| `@argentic/chest-sdk/ai` | `chat`, `embed`, `models`, `usage`, types `Alias`, `Provider`, `ChatMessage`, `ChatTool`, `ToolChoice`, `ResponseFormat`, `ChatOptions`, `ChatResult`, `ChatChunk`, `ToolCall`, `ToolCallDelta`, `Usage`, `EmbedOptions`, `Embeddings`, `AiModel`, `AiUsage`: AI models through the Chest, on the owner's connectors, metered against the tool's monthly cap (capability `ai`) |
 | `@argentic/chest-sdk/database` | `databaseUrl()`: the address of the tool's own PostgreSQL database (capability `database`) |
 | `@argentic/chest-sdk/files` | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl`, types `FileObject`, `FileData`, `FilePage`: the tool's private files (capability `files`), kept by the Chest, a 15-minute signed link to one (or to its thumbnail), and uploads straight from a member's browser |
-| `@argentic/chest-sdk/errors` | `ChestError` (`code`, `status`), `CapabilityNotGranted` (403), `TooLarge` (413), `QuotaExceeded` (429), `RateLimited` (429), `Unavailable` (503): what the SDK throws when the Chest does not give what a tool asks |
-| `@argentic/chest-sdk/testing` | `signAssertion`, `withMember`, `fakeChest`, types `FakeChest`, `FakeChestOptions`, `FakeGroup`, `FakeFile`, `FakeNotification`, `FakeEvent`: for the tool's own tests only |
-| `@argentic/chest-sdk` | all of the above but `testing`; `files`, `members`, `notifications` and `events` as namespaces |
+| `@argentic/chest-sdk/errors` | `ChestError` (`code`, `status`), `CapabilityNotGranted` (403), `TooLarge` (413), `QuotaExceeded` (429), `RateLimited` (429), `Unavailable` (503), and for AI `AiCapReached` (402), `AiModelNotAllowed` (403), `AiRefused` (422), `AiUnavailable` (502, 503), type `AiUnavailableReason`: what the SDK throws when the Chest does not give what a tool asks |
+| `@argentic/chest-sdk/testing` | `signAssertion`, `withMember`, `fakeChest`, types `FakeChest`, `FakeChestOptions`, `FakeGroup`, `FakeFile`, `FakeNotification`, `FakeEvent`, `FakeAi`, `FakeAiModel`, `FakeAiReply`, `FakeAiCall`: for the tool's own tests only |
+| `@argentic/chest-sdk` | all of the above but `testing`; `files`, `members`, `notifications`, `events` and `ai` as namespaces |
 
 ```ts
 import { member } from "@argentic/chest-sdk/member";
@@ -39,8 +41,9 @@ import * as files from "@argentic/chest-sdk/files";
 import * as members from "@argentic/chest-sdk/members";
 import * as notifications from "@argentic/chest-sdk/notifications";
 import * as events from "@argentic/chest-sdk/events";
+import * as ai from "@argentic/chest-sdk/ai";
 import { CapabilityNotGranted } from "@argentic/chest-sdk/errors";
-// or: import { member, databaseUrl, files, members, notifications, events } from "@argentic/chest-sdk";
+// or: import { member, databaseUrl, files, members, notifications, events, ai } from "@argentic/chest-sdk";
 ```
 
 Types refer to `node:http` (`IncomingMessage`): a TypeScript project needs
@@ -70,7 +73,7 @@ export function GET(request: Request) {
 A v2 tool is an ordinary web server in a container without network, run by
 its Chest. The Chest's front is the only one to reach it; the tool reaches only
 what its launcher gives it on `127.0.0.1` (its database, the Chest's API for
-its files, its members and its notifications), and the Chest posts it the
+its files, its members, its notifications and AI), and the Chest posts it the
 events it receives on `/chest-events`, through the same launcher. Rights come
 from the Chest — the signed member, the capabilities approved for the
 version — and the Chest enforces them even outside the SDK:
@@ -340,6 +343,115 @@ export async function POST(request: Request) {
   `ChestError` `erasure_not_found` (404: an erasure this tool was not told of)
   or `invalid_id` (400), `CapabilityNotGranted` (403), `Unavailable`.
 
+## `ai` — AI models through the Chest
+
+A v2 tool that declares the `ai` capability calls AI models through its
+Chest. The Chest's owner connects the providers with their own keys
+(OpenRouter, Anthropic, OpenAI, Mistral, Google, or an OpenAI-compatible
+endpoint) and maps four **aliases** to models: `default`, `fast`, `smart`,
+`embedding`. The tool names an alias, never a provider's model: the owner
+changes the model for the whole Chest without touching code. The tool never
+holds a key; the Chest meters every call against the tool's monthly cap.
+
+```jsonc
+// chest.json
+{
+  "capabilities": ["ai"],
+  "ai": { "monthly": 20, "models": ["default", "embedding"], "purpose": "Summarises support tickets" }
+}
+```
+
+| Key | Default | |
+|---|---|---|
+| `monthly` | 5 | Whole euros a month, 1 to 1,000: what the tool asks; the owner's cap replaces it and may be changed at any time |
+| `models` | `["default"]` | 1 to 4 of `default`, `fast`, `smart`, `embedding`: the only aliases the tool may call |
+| `purpose` | required | 1 to 120 characters, shown at approval: “Uses AI models through the Chest, up to €20 a month” |
+
+```ts
+import * as ai from "@argentic/chest-sdk/ai";
+
+const r = await ai.chat({
+  model: "default",
+  messages: [{ role: "system", content: "Summarise in two sentences." }, { role: "user", content: ticket.text }],
+  maxTokens: 300,                 // 1 to 128,000; 4,096 when not said
+  member: who.id,                 // optional: attribution in the Chest's usage log
+});
+r.text;                           // "" when the model only called tools
+r.usage;                          // { input, output, cached, cost } — cost in estimated euros
+
+// Streamed: pieces as they come; breaking out of the loop ends the call.
+for await (const chunk of ai.chat({ model: "fast", messages, stream: true, signal })) {
+  write(chunk.text);              // chunk.toolCalls, chunk.finishReason, then chunk.usage last
+}
+
+// Tools: the model asks, the tool runs them and answers.
+const step = await ai.chat({ model: "smart", messages, tools: [{ type: "function", function: { name: "lookup", parameters: schema } }] });
+messages.push(step.message);
+for (const call of step.toolCalls) messages.push({ role: "tool", tool_call_id: call.id, content: JSON.stringify(await run(call.name, JSON.parse(call.arguments))) });
+
+const { embeddings } = await ai.embed({ model: "embedding", input: ["first text", "second text"] }); // 1 to 256 texts
+const mapped = await ai.models();  // [{ alias, model, provider, input, output }] — USD per million tokens
+const month = await ai.usage();    // { month: "2026-09", spent, cap, resetsAt }
+```
+
+- **`chat(options)`** takes the OpenAI Chat Completions request in camelCase:
+  `model`, `messages`, `maxTokens`, `temperature`, `topP`, `stop`, `tools`,
+  `toolChoice`, `responseFormat`, `parallelToolCalls`, `seed`,
+  `reasoningEffort`, plus `member`, `stream` and `signal`. Messages, tools and
+  response formats keep the OpenAI shape (images in `content` parts too); the
+  Chest translates them for each provider and never runs a tool. Without
+  `stream` it returns `Promise<ChatResult>` `{text, message, toolCalls,
+  finishReason, model, usage}` — `message` is the assistant's message to add
+  to the conversation, `toolCalls` are `{id, name, arguments}` with the
+  arguments as JSON text, `model` is the provider's model. With
+  `stream: true` it returns an `AsyncIterable<ChatChunk>` `{text, toolCalls?,
+  finishReason?, usage?}`: tool calls come in pieces (`{index, id?, name?,
+  arguments?}`: join the `arguments` of the same `index`), the usage in the
+  last chunk.
+- **Bounds**: a request body of 10 MiB (images included), 16 MiB of answer, a
+  call ends after 10 minutes (streamed or not); 60 requests a minute and 8
+  streams at once per tool (`RateLimited`). An aborted `signal` throws its
+  reason.
+- **The cap never overshoots**: before a call the Chest reserves its worst
+  case (input and `maxTokens`) against the tool's cap and the Chest's; a call
+  that does not fit is refused before anything is spent. Keep `maxTokens` to
+  what the answer needs.
+- **`embed({model, input, dimensions?, member?})`** gives one vector per text,
+  in the order given, and the input tokens and cost.
+- **`models()`** gives the aliases the tool declared that the owner mapped,
+  with their model, provider and prices; **`usage()`** the tool's month:
+  estimated euros spent, the cap in force, and when the month resets.
+
+**AI can stop at any time** — the month's budget spent, no connector, the
+provider down. Keep the tool usable without it:
+
+```ts
+import { AiCapReached, AiUnavailable } from "@argentic/chest-sdk/errors";
+
+let summary: string | null = null;
+try {
+  summary = (await ai.chat({ model: "default", messages, maxTokens: 300 })).text;
+} catch (error) {
+  if (!(error instanceof AiCapReached || error instanceof AiUnavailable)) throw error;
+  // summary stays null: show "AI features are paused" and keep the page working
+}
+```
+
+| Error | Code, status | When |
+|---|---|---|
+| `AiCapReached` | `cap_reached` 402 | The tool's (`scope: "tool"`) or the Chest's (`scope: "chest"`) monthly cap is spent, until `resetsAt` |
+| `AiUnavailable` | `no_connector` 503, `provider_key_invalid` 502, `provider_unavailable` 503 | No connector behind the alias, the provider refused the connector's key, or failed (`reason`) |
+| `AiModelNotAllowed` | `model_not_allowed` 403 | An alias the tool did not declare in `models` (the SDK refuses any other name before sending) |
+| `CapabilityNotGranted` | `capability_not_granted` 403 | The version does not hold `ai`, or it was not approved |
+| `AiRefused` | `content_refused` 422 | The provider's moderation refused the content |
+| `RateLimited` | `rate_limited` 429 | 60 requests a minute or 8 streams at once |
+| `TooLarge` | `too_large` 413 | A body beyond 10 MiB, or a context beyond the model's |
+| `ChestError` | `invalid_body`, `invalid_request` 400 | A malformed request (the SDK refuses most before sending), or parameters the provider rejected (its message in the error's) |
+| `Unavailable` | `unavailable` 503 | The Chest not reached, or an answer that is not its own; in a stream, the stream cut |
+
+An error in the middle of a stream is thrown where it comes, after the chunks
+before it.
+
 ## `databaseUrl()` — database of a server tool
 
 A v2 tool that declares `"capabilities": ["database"]` in its `chest.json`
@@ -485,7 +597,7 @@ version keeps them.
 import { fakeChest, signAssertion, withMember } from "@argentic/chest-sdk/testing";
 
 const camille = { id: "mbr_k2qhx4mzc7v3b6nfp5r2t7w4ya", firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [] };
-const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications"] });
+const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications", "ai"], ai: { reply: () => "Summary." } });
 const response = await handler(withMember(new Request("http://tool.test/chest/tasks"), camille));
 assert.equal(await chest.emit({ type: "member.erased", data: { id: camille.id, erasure: "era_k2qhx4mzc7v3b6nfp5r2t7w4ya", deadline: "2026-10-28T10:00:00Z" } }, request => handler(request)), 204);
 assert.deepEqual(chest.acknowledged, ["era_k2qhx4mzc7v3b6nfp5r2t7w4ya"]);
@@ -493,6 +605,7 @@ assert.deepEqual((await members.list()).members.map(m => m.id), [camille.id]);
 assert.ok(chest.files.has("reports/2026.pdf"));
 assert.deepEqual(chest.notifications, [{ member: camille.id, title: "New task", path: "/chest/tasks/42", key: "task:42" }]);
 assert.equal(chest.badges.get(camille.id), 1);
+assert.equal(chest.ai[0]?.path, "/ai/chat");
 await chest.close();
 ```
 
@@ -500,8 +613,10 @@ await chest.close();
 |---|---|
 | `signAssertion(member, {token?, tool?, now?})` | A `Chest-Member` header value signed like the Chest's (the token and tool of the environment by default) |
 | `withMember(request, member, options?)` | The request carrying that assertion: a new Web `Request`, or the same Node request |
-| `fakeChest({members?, former?, groups?, capabilities?, receives?, files?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set) and answers members, groups, files, badges, notifications and erasure acknowledgments with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files` and `notifications` by default; `members.email` adds the addresses; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments). A former member `{id, name?, erased?}` looks up as `former`, or `erased` |
+| `fakeChest({members?, former?, groups?, capabilities?, receives?, files?, ai?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set) and answers members, groups, files, badges, notifications, AI and erasure acknowledgments with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments). A former member `{id, name?, erased?}` looks up as `former`, or `erased` |
 | `chest.emit(event, to)` | Delivers an event (`{type, data, id?, occurredAt?}`: a new id and now by default; name an id to deliver the same event twice) signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-events`) or a function of a Web `Request` — and says the status it answered. A `member.erased` makes its erasure one the tool may acknowledge |
+| `ai: {models?, reply?, cap?, unavailable?}` | The fake Chest's AI, deterministic and without any provider. `models`: the aliases the tool declared, `{alias, model, provider?, input?, output?}` (all four by default, `fake-default`…`fake-embedding`, provider `compatible`, 1 and 2 USD per million tokens); another alias answers `model_not_allowed`. `reply(request)`: what a chat answers, given the wire request — a string, or `{text?, toolCalls?: {name, arguments, id?}[]}` (by default the last user message, echoed); streamed, it comes word by word, each tool call's arguments in two pieces, then the finish reason and the usage. Embeddings are unit vectors from a hash of each text (8 dimensions unless `dimensions`). Tokens count one per 4 characters; once the spending reaches `cap` (euros, 5 by default; 0 refuses at once) a call answers `cap_reached`. `unavailable` (`no_connector`, `provider_key_invalid`, `provider_unavailable`) makes chat and embeddings answer it. 60 requests a minute |
+| `chest.ai` | The tool's calls to AI, `{path, body}` in order (`body` null for a `GET`) |
 | `chest.acknowledged` | The erasures the tool acknowledged, each once |
 | `chest.members`, `chest.groups`, `chest.files` | What the fake Chest holds, to change or assert on; its `members` are those who have the tool |
 | `chest.notifications`, `chest.badges` | What the tool sent: the items kept, `{member, title, body?, path, key?}` cleaned as the Chest cleans them, in the order sent (a replaced item removed, the new one last; `withdraw` removes), and each member's badge (`Map` member → count; 0 removes it) |
@@ -535,8 +650,8 @@ npm run check:package  # npm pack, install into a temp project, import every sub
 
 `client/src` holds the modules, `client/index.ts` the package root,
 `client/test` the tests. `npm run build` compiles `client/index.ts`, the
-seven published modules (`errors`, `member`, `members`, `database`, `files`,
-`notifications`, `testing`) and the one they share (`api`, the Chest's API) —
+nine published modules (`errors`, `member`, `members`, `database`, `files`,
+`notifications`, `events`, `ai`, `testing`) and the one they share (`api`, the Chest's API) —
 TypeScript strict, ES2022, NodeNext — into `dist/`: ESM `.js`, `.d.ts` and
 their maps. `member.ts` imports nothing but `node:*`, so that a tool may copy
 it alone.

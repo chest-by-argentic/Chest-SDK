@@ -16,18 +16,20 @@ const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const name = manifest.name;
 
 // What each subpath gives at run time (tool contract v2); the root gives them
-// all, files, members, notifications and events as namespaces, never testing.
+// all, files, members, notifications, events and ai as namespaces, never
+// testing.
 const expected = {
-  errors: ["CapabilityNotGranted", "ChestError", "QuotaExceeded", "RateLimited", "TooLarge", "Unavailable"],
+  errors: ["AiCapReached", "AiModelNotAllowed", "AiRefused", "AiUnavailable", "CapabilityNotGranted", "ChestError", "QuotaExceeded", "RateLimited", "TooLarge", "Unavailable"],
   member: ["groupIdPattern", "member", "memberIdPattern"],
   database: ["databaseUrl"],
   files: ["delete", "get", "list", "move", "put", "stat", "uploadUrl", "url"],
   members: ["forget", "get", "groups", "list", "lookup"],
   notifications: ["badge", "notify", "withdraw"],
   events: ["acknowledgeErasure", "erasureIdPattern", "handle", "memorySeen", "verify"],
+  ai: ["chat", "embed", "models", "usage"],
   testing: ["fakeChest", "signAssertion", "withMember"],
 };
-const namespaces = ["files", "members", "notifications", "events"];
+const namespaces = ["files", "members", "notifications", "events", "ai"];
 const rootExports = [...Object.entries(expected).filter(([sub]) => !namespaces.includes(sub) && sub !== "testing").flatMap(([, names]) => names), ...namespaces].sort();
 
 const subpaths = Object.keys(manifest.exports).filter(key => key !== "./package.json");
@@ -89,9 +91,13 @@ try {
     `const kept = chest.notifications.map(n => n.title);`,
     `const signed = modules[${JSON.stringify(name + "/member")}].member(testing.withMember(new Request("http://tool.test/chest"), chest.members[0]))?.id;`,
     `const told = [];`,
+    `const said = (await root.ai.chat({ model: "default", messages: [{ role: "user", content: "Hi" }] })).text;`,
+    `let streamed = "";`,
+    `for await (const piece of modules[${JSON.stringify(name + "/ai")}].chat({ model: "fast", messages: [{ role: "user", content: "Hi there" }], stream: true })) streamed += piece.text;`,
+    `const calls = chest.ai.map(c => c.path);`,
     `const answered = await chest.emit({ type: "access.revoked", data: { id: chest.members[0].id } }, request => root.events.handle(request, { "access.revoked": e => { told.push(e.data.id); } }).then(status => new Response(null, { status })));`,
     `await chest.close();`,
-    `console.log(JSON.stringify({ names, sameClass: root.ChestError === errors.ChestError, sameFiles: root.files.put === modules[${JSON.stringify(name + "/files")}].put, sameMembers: root.members.list === modules[${JSON.stringify(name + "/members")}].list, refused, nobody, listed, delivered, kept, signed, answered, told }));`,
+    `console.log(JSON.stringify({ names, sameClass: root.ChestError === errors.ChestError, sameFiles: root.files.put === modules[${JSON.stringify(name + "/files")}].put, sameMembers: root.members.list === modules[${JSON.stringify(name + "/members")}].list, sameAi: root.ai.chat === modules[${JSON.stringify(name + "/ai")}].chat, refused, nobody, listed, delivered, kept, signed, said, streamed, calls, answered, told }));`,
   ].join("\n") + "\n";
   function verify(output, how) {
     const result = JSON.parse(output);
@@ -104,6 +110,8 @@ try {
     assert.equal(result.sameMembers, true, `${how}: one members module for the root and /members`);
     assert.deepEqual(result.listed, ["Ada L"], `${how}: members listed from a fake Chest`);
     assert.deepEqual([result.delivered, result.kept], [["mbr_" + "a".repeat(26)], ["Hello"]], `${how}: a notification delivered by a fake Chest`);
+    assert.equal(result.sameAi, true, `${how}: one ai module for the root and /ai`);
+    assert.deepEqual([result.said, result.streamed, result.calls], ["Hi", "Hi there", ["/ai/chat", "/ai/chat"]], `${how}: a chat answered by a fake Chest, whole and streamed`);
     assert.equal(result.signed, "mbr_" + "a".repeat(26), `${how}: an assertion of the testing module reads as its member`);
     assert.deepEqual([result.answered, result.told], [204, ["mbr_" + "a".repeat(26)]], `${how}: an event emitted by a fake Chest handled once`);
     for (const specifier of specifiers) console.log(`  ${specifier}: ${result.names[specifier].join(", ")}`);
@@ -133,7 +141,7 @@ try {
   step("type-check a TypeScript consumer");
   writeFileSync(join(consumer, "consumer.ts"), `import type { IncomingMessage } from "node:http";
 import * as sdk from "${name}";
-import { CapabilityNotGranted, ChestError, QuotaExceeded, RateLimited, TooLarge, Unavailable } from "${name}/errors";
+import { AiCapReached, AiModelNotAllowed, AiRefused, AiUnavailable, CapabilityNotGranted, ChestError, QuotaExceeded, RateLimited, TooLarge, Unavailable, type AiUnavailableReason } from "${name}/errors";
 import { member, type Member } from "${name}/member";
 import { databaseUrl } from "${name}/database";
 import * as files from "${name}/files";
@@ -144,7 +152,9 @@ import * as notifications from "${name}/notifications";
 import type { BadgeCount, BadgeWrite, Delivery, Notice } from "${name}/notifications";
 import * as events from "${name}/events";
 import type { ChestEvent, Handlers, MemberErased, Seen } from "${name}/events";
-import { fakeChest, signAssertion, withMember, type FakeChest, type FakeEvent, type FakeNotification } from "${name}/testing";
+import * as ai from "${name}/ai";
+import type { AiModel, AiUsage, ChatChunk, ChatMessage, ChatResult, ChatTool, Embeddings } from "${name}/ai";
+import { fakeChest, signAssertion, withMember, type FakeAi, type FakeAiCall, type FakeChest, type FakeEvent, type FakeNotification } from "${name}/testing";
 
 export function who(request: Request | IncomingMessage): Member | null { return member(request); }
 export const url: string = databaseUrl();
@@ -160,6 +170,23 @@ export async function tell(ids: string[], notice: Notice, counts: BadgeCount[]):
 export async function receive(request: Request, seen: Seen): Promise<[number, ChestEvent | null]> {
   const handlers: Handlers = { "member.erased": async (e: MemberErased) => { await events.acknowledgeErasure(e.data.erasure); }, "member.updated": e => { void e.data.changed; } };
   return [await events.handle(request, handlers, { seen }), await sdk.events.verify(request)];
+}
+export async function think(messages: ChatMessage[], tools: ChatTool[], signal: AbortSignal): Promise<[ChatResult, string, Embeddings, AiModel[], AiUsage]> {
+  const result: ChatResult = await ai.chat({ model: "default", messages, tools, toolChoice: "auto", responseFormat: { type: "json_object" }, maxTokens: 800, signal });
+  let text = "";
+  for await (const piece of sdk.ai.chat({ model: "fast", messages, stream: true })) text += (piece satisfies ChatChunk).text + (piece.usage?.cost ?? 0);
+  return [result, text, await ai.embed({ model: "embedding", input: ["a", "b"] }), await ai.models(), await ai.usage()];
+}
+export function paused(error: unknown): string | null {
+  if (error instanceof AiCapReached) return error.scope + " until " + error.resetsAt.toISOString();
+  if (error instanceof AiUnavailable) return error.reason satisfies AiUnavailableReason;
+  return error instanceof AiModelNotAllowed || error instanceof AiRefused ? error.code : null;
+}
+export async function testAi(): Promise<FakeAiCall[]> {
+  const options: FakeAi = { models: [{ alias: "default", model: "m" }], reply: request => ({ text: String(request["model"]), toolCalls: [{ name: "a", arguments: "{}" }] }), cap: 1, unavailable: "no_connector" };
+  const chest = await fakeChest({ ai: options });
+  await chest.close();
+  return chest.ai;
 }
 export async function test(someone: Member): Promise<string> {
   const chest: FakeChest = await fakeChest({ members: [someone], capabilities: ["members", "notifications"] });
