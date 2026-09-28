@@ -16,16 +16,17 @@ const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const name = manifest.name;
 
 // What each subpath gives at run time (tool contract v2); the root gives them
-// all, files and members as namespaces, never testing.
+// all, files, members and notifications as namespaces, never testing.
 const expected = {
   errors: ["CapabilityNotGranted", "ChestError", "QuotaExceeded", "RateLimited", "TooLarge", "Unavailable"],
   member: ["groupIdPattern", "member", "memberIdPattern"],
   database: ["databaseUrl"],
   files: ["delete", "get", "list", "move", "put", "stat", "uploadUrl", "url"],
   members: ["forget", "get", "groups", "list", "lookup"],
+  notifications: ["badge", "notify", "withdraw"],
   testing: ["fakeChest", "signAssertion", "withMember"],
 };
-const namespaces = ["files", "members"];
+const namespaces = ["files", "members", "notifications"];
 const rootExports = [...Object.entries(expected).filter(([sub]) => !namespaces.includes(sub) && sub !== "testing").flatMap(([, names]) => names), ...namespaces].sort();
 
 const subpaths = Object.keys(manifest.exports).filter(key => key !== "./package.json");
@@ -83,9 +84,11 @@ try {
     `const testing = modules[${JSON.stringify(name + "/testing")}];`,
     `const chest = await testing.fakeChest({ members: [{ id: "mbr_" + "a".repeat(26), firstName: "Ada", lastName: "L", name: "Ada L", photo: null, role: null, isAdmin: false, isBuilder: false, groups: [] }] });`,
     `const listed = (await root.members.list()).members.map(m => m.name);`,
+    `const delivered = (await root.notifications.notify([chest.members[0].id], { title: "Hello" })).delivered;`,
+    `const kept = chest.notifications.map(n => n.title);`,
     `const signed = modules[${JSON.stringify(name + "/member")}].member(testing.withMember(new Request("http://tool.test/chest"), chest.members[0]))?.id;`,
     `await chest.close();`,
-    `console.log(JSON.stringify({ names, sameClass: root.ChestError === errors.ChestError, sameFiles: root.files.put === modules[${JSON.stringify(name + "/files")}].put, sameMembers: root.members.list === modules[${JSON.stringify(name + "/members")}].list, refused, nobody, listed, signed }));`,
+    `console.log(JSON.stringify({ names, sameClass: root.ChestError === errors.ChestError, sameFiles: root.files.put === modules[${JSON.stringify(name + "/files")}].put, sameMembers: root.members.list === modules[${JSON.stringify(name + "/members")}].list, refused, nobody, listed, delivered, kept, signed }));`,
   ].join("\n") + "\n";
   function verify(output, how) {
     const result = JSON.parse(output);
@@ -97,6 +100,7 @@ try {
     assert.equal(result.nobody, null, `${how}: member() without CHEST_TOKEN is null`);
     assert.equal(result.sameMembers, true, `${how}: one members module for the root and /members`);
     assert.deepEqual(result.listed, ["Ada L"], `${how}: members listed from a fake Chest`);
+    assert.deepEqual([result.delivered, result.kept], [["mbr_" + "a".repeat(26)], ["Hello"]], `${how}: a notification delivered by a fake Chest`);
     assert.equal(result.signed, "mbr_" + "a".repeat(26), `${how}: an assertion of the testing module reads as its member`);
     for (const specifier of specifiers) console.log(`  ${specifier}: ${result.names[specifier].join(", ")}`);
   }
@@ -132,7 +136,9 @@ import * as files from "${name}/files";
 import type { FileData, FileObject, FilePage } from "${name}/files";
 import * as members from "${name}/members";
 import { groups, type Group, type Lookup, type MemberPage } from "${name}/members";
-import { fakeChest, signAssertion, withMember, type FakeChest } from "${name}/testing";
+import * as notifications from "${name}/notifications";
+import type { BadgeCount, BadgeWrite, Delivery, Notice } from "${name}/notifications";
+import { fakeChest, signAssertion, withMember, type FakeChest, type FakeNotification } from "${name}/testing";
 
 export function who(request: Request | IncomingMessage): Member | null { return member(request); }
 export const url: string = databaseUrl();
@@ -142,11 +148,16 @@ export async function keep(): Promise<[FileObject, FileData | null, FilePage, bo
 export async function team(): Promise<[MemberPage, Member | null, Lookup, Group[]]> {
   return [await members.list({ q: "a", limit: 10 }), await members.get("mbr_x"), await sdk.members.lookup(["mbr_x"]), await groups.list()];
 }
+export async function tell(ids: string[], notice: Notice, counts: BadgeCount[]): Promise<[Delivery, void, boolean, BadgeWrite]> {
+  return [await notifications.notify(ids, notice), await sdk.notifications.withdraw("task:1", ids), await notifications.badge.set("mbr_x", 1), await notifications.badge.setMany(counts)];
+}
 export async function test(someone: Member): Promise<string> {
-  const chest: FakeChest = await fakeChest({ members: [someone], capabilities: ["members"] });
+  const chest: FakeChest = await fakeChest({ members: [someone], capabilities: ["members", "notifications"] });
+  const sent: FakeNotification[] = chest.notifications;
+  const badges: Map<string, number> = chest.badges;
   const request: Request = withMember(new Request("http://tool.test/chest"), someone);
   await chest.close();
-  return signAssertion(someone, { token: chest.token, tool: chest.tool }) + request.url;
+  return signAssertion(someone, { token: chest.token, tool: chest.tool }) + request.url + sent.length + badges.size;
 }
 export function code(error: unknown): string | null {
   if (error instanceof CapabilityNotGranted || error instanceof QuotaExceeded || error instanceof RateLimited || error instanceof TooLarge || error instanceof Unavailable) return error.code;

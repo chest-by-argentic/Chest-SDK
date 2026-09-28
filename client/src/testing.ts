@@ -6,13 +6,14 @@ import { forget } from "./members.js";
 
 // For a tool's own tests, never imported by its production code: a member's
 // assertion signed as the Chest signs it, and a Chest's API in the test's
-// process that answers members, groups and files (stat, move, links; an
-// upload it authorises but does not receive) with the Chest's bounds and
-// errors.
+// process that answers members, groups, files (stat, move, links; an upload
+// it authorises but does not receive), badges and notifications with the
+// Chest's bounds, quotas and errors.
 //
 //   import { fakeChest, withMember } from "@argentic/chest-sdk/testing";
-//   const chest = await fakeChest({ members: [camille], capabilities: ["members", "files"] });
+//   const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications"] });
 //   const response = await app(withMember(new Request("http://tool/chest"), camille));
+//   assert.equal(chest.notifications[0]?.member, camille.id);
 //   await chest.close();
 
 // A group as a fake Chest keeps it: its identifier, its name, and the
@@ -20,11 +21,15 @@ import { forget } from "./members.js";
 export type FakeGroup = { id: string; name: string; members: string[] };
 // A file as a fake Chest keeps it.
 export type FakeFile = { data: Uint8Array; type: string; updated: string };
+// A notification as a fake Chest keeps it: the member it went to, its text
+// cleaned as the Chest cleans it, its path (/chest when not said) and its
+// key.
+export type FakeNotification = { member: string; title: string; body?: string; path: string; key?: string };
 
 // What a fake Chest is given: the members who have the tool, those who left
 // it, its groups, the capabilities its version holds (a capability left out
-// answers 403; members and files by default, members.email to read the
-// addresses) and the files it keeps.
+// answers 403; members, files and notifications by default, members.email to
+// read the addresses) and the files it keeps.
 export type FakeChestOptions = {
   members?: Member[];
   former?: { id: string; name?: string }[];
@@ -35,7 +40,10 @@ export type FakeChestOptions = {
 
 // A fake Chest in the test's process: its address, the token and the tool it
 // set in the environment, what it keeps (members, groups and files a test
-// changes or reads), and close, which stops it and restores the environment.
+// changes or reads; the notifications the tool sent, in the order sent, a
+// replaced one last; each member's badge), and close, which stops it and
+// restores the environment. Its members are those who have the tool: the
+// others are skipped.
 export type FakeChest = {
   api: string;
   token: string;
@@ -43,6 +51,8 @@ export type FakeChest = {
   members: Member[];
   groups: FakeGroup[];
   files: Map<string, FakeFile>;
+  notifications: FakeNotification[];
+  badges: Map<string, number>;
   close(): Promise<void>;
 };
 
@@ -85,6 +95,14 @@ export function withMember<R extends Request | IncomingMessage>(request: R, memb
 const maxLimit = 500, defaultLimit = 100, maxLookup = 200, callsPerMinute = 600;
 const maxObject = 32 << 20, maxObjects = 10000, maxTotal = 1 << 30;
 const namePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,7}$/u;
+// Its notifications: recipients and badges a call, text, quotas.
+const maxRecipients = 500, maxTitle = 80, maxText = 280, maxPath = 512, maxCount = 9999;
+const recipientsPerHour = 1000, itemsPerDay = 100, badgesPerMinute = 600;
+const keyPattern = /^[a-z0-9._:-]{1,64}$/u;
+const reordering = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+const cleanTitle = (s: string): string => s.replace(/[\t\r\n]/gu, " ").replace(/\p{Cc}/gu, "").replace(reordering, "").trim();
+const cleanText = (s: string): string => s.replace(/\r\n?/gu, "\n").replace(/\t/gu, " ").replace(/[^\P{Cc}\n]/gu, "").replace(reordering, "").trim();
+const isPath = (p: unknown): boolean => typeof p === "string" && p.length <= maxPath && /^\/chest([/?#][\x21-\x5b\x5d-\x7e]*)?$/u.test(p) && !p.includes("//") && !p.split(/[?#]/u)[0]!.split("/").some(x => /^(\.|%2e){1,2}$/iu.test(x));
 
 const fold = (s: string): string => s.normalize("NFD").replace(/\p{Mn}/gu, "").toLowerCase();
 
@@ -109,7 +127,7 @@ async function body(request: IncomingMessage, limit: number): Promise<Buffer | n
 // environment names one). What member() and the modules of the SDK read is
 // then this Chest's.
 export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChest> {
-  const capabilities = new Set(options.capabilities ?? ["members", "files"]);
+  const capabilities = new Set(options.capabilities ?? ["members", "files", "notifications"]);
   const email = capabilities.has("members.email");
   const tool = process.env["CHEST_TOOL"] || "tool";
   const token = randomBytes(32).toString("base64url");
@@ -117,7 +135,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   for (const [name, file] of Object.entries(options.files ?? {})) {
     files.set(name, { data: typeof file.data === "string" ? new TextEncoder().encode(file.data) : file.data, type: file.type ?? "application/octet-stream", updated: new Date().toISOString() });
   }
-  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, close: async () => {} };
+  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), close: async () => {} };
   const former = [...(options.former ?? [])];
   let window = 0, calls = 0;
   const shown = (m: Member) => ({ id: m.id, first_name: m.firstName, last_name: m.lastName, name: m.name, photo: m.photo, role: m.role, admin: m.isAdmin, builder: m.isBuilder, groups: m.groups, ...(email && m.email !== undefined ? { email: m.email } : {}) });
@@ -223,9 +241,109 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     send(response, 404, { error: "not_found" });
   }
 
+  // The windows of the notification quotas, each from the first call it
+  // counts: the tool's recipients this hour, each member's items this day,
+  // the tool's badge writes this minute.
+  type Window = { start: number; count: number };
+  const hour: Window = { start: 0, count: 0 }, minute: Window = { start: 0, count: 0 }, days = new Map<string, Window>();
+  const live = (w: Window | undefined, span: number, now: number): boolean => w !== undefined && w.count > 0 && now - w.start < span;
+  const wait = (w: Window, span: number, now: number): Record<string, string> => ({ "Retry-After": String(Math.max(1, Math.ceil((w.start + span - now) / 1000))) });
+  const count = (w: Window, span: number, now: number, n: number): void => {
+    if (!live(w, span, now)) [w.start, w.count] = [now, 0];
+    w.count += n;
+  };
+  const access = (id: string) => chest.members.some(m => m.id === id);
+  // drop removes kept notifications in place: a test may hold the list.
+  const drop = (gone: (n: FakeNotification) => boolean): void => {
+    for (let i = chest.notifications.length - 1; i >= 0; i--) if (gone(chest.notifications[i]!)) chest.notifications.splice(i, 1);
+  };
+  // recipients reads 1 to 500 member identifiers, each once.
+  function recipients(value: unknown): string[] | { error: string } {
+    if (!Array.isArray(value) || value.length < 1 || value.length > maxRecipients) return { error: "invalid_body" };
+    if (!value.every(v => typeof v === "string" && memberIdPattern.test(v))) return { error: "invalid_id" };
+    return [...new Set(value as string[])];
+  }
+
+  async function notificationsRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    if (!capabilities.has("notifications")) return send(response, 403, { error: "capability_not_granted" });
+    const badge = request.method === "PUT" && url.pathname.startsWith("/badges/");
+    if (!badge && !(request.method === "PUT" && url.pathname === "/badges") && !(request.method === "POST" && (url.pathname === "/notifications" || url.pathname === "/notifications/withdraw"))) return send(response, 404, { error: "not_found" });
+    const raw = await body(request, 64 << 10);
+    let command: Record<string, unknown> | null = null;
+    try {
+      const value = JSON.parse(raw?.toString() ?? "") as unknown;
+      if (value !== null && typeof value === "object" && !Array.isArray(value)) command = value as Record<string, unknown>;
+    } catch {
+      command = null;
+    }
+    const keys = (...allowed: string[]) => command !== null && Object.keys(command).every(k => allowed.includes(k));
+    const now = Date.now();
+    if (badge || url.pathname === "/badges") {
+      let writes: { member: string; count: number }[];
+      if (badge) {
+        const id = url.pathname.slice("/badges/".length);
+        if (!memberIdPattern.test(id)) return send(response, 400, { error: "invalid_id" });
+        if (!keys("count") || !("count" in command!)) return send(response, 400, { error: "invalid_body" });
+        writes = [{ member: id, count: command!["count"] as number }];
+      } else {
+        const list = command?.["badges"];
+        if (!keys("badges") || !Array.isArray(list) || list.length < 1 || list.length > maxRecipients || !list.every(b => b !== null && typeof b === "object" && !Array.isArray(b) && Object.keys(b).every(k => k === "member" || k === "count"))) return send(response, 400, { error: "invalid_body" });
+        writes = list as { member: string; count: number }[];
+        if (!writes.every(b => typeof b.member === "string" && memberIdPattern.test(b.member))) return send(response, 400, { error: "invalid_id" });
+      }
+      if (!writes.every(b => typeof b.count === "number" && Number.isInteger(b.count) && b.count >= 0 && b.count <= maxCount)) return send(response, 400, { error: "invalid_count" });
+      if (new Set(writes.map(b => b.member)).size !== writes.length) return send(response, 400, { error: "invalid_body" });
+      if (live(minute, 60_000, now) && minute.count + writes.length > badgesPerMinute) return send(response, 429, { error: "quota_exceeded" }, wait(minute, 60_000, now));
+      count(minute, 60_000, now, writes.length);
+      const answer = { set: [] as string[], skipped: [] as string[] };
+      for (const b of writes) {
+        if (!access(b.member)) {
+          answer.skipped.push(b.member);
+          continue;
+        }
+        if (b.count === 0) chest.badges.delete(b.member);
+        else chest.badges.set(b.member, b.count);
+        answer.set.push(b.member);
+      }
+      return send(response, 200, answer);
+    }
+    if (url.pathname === "/notifications/withdraw") {
+      if (!keys("key", "members")) return send(response, 400, { error: "invalid_body" });
+      const key = command!["key"];
+      if (typeof key !== "string" || !keyPattern.test(key)) return send(response, 400, { error: "invalid_key" });
+      const named = command!["members"] === undefined ? null : recipients(command!["members"]);
+      if (named !== null && !Array.isArray(named)) return send(response, 400, named);
+      drop(n => n.key === key && (named === null || named.includes(n.member)));
+      return send(response, 204);
+    }
+    if (!keys("members", "title", "body", "path", "key")) return send(response, 400, { error: "invalid_body" });
+    const { title, body: text, path, key } = command!;
+    const ids = recipients(command!["members"]);
+    if (!Array.isArray(ids)) return send(response, 400, ids);
+    if (typeof title !== "string" || [...title].length < 1 || [...title].length > maxTitle || cleanTitle(title) === "") return send(response, 400, { error: "invalid_title" });
+    if (text !== undefined && (typeof text !== "string" || [...text].length > maxText)) return send(response, 400, { error: "invalid_text" });
+    if (path !== undefined && !isPath(path)) return send(response, 400, { error: "invalid_path" });
+    if (key !== undefined && (typeof key !== "string" || !keyPattern.test(key))) return send(response, 400, { error: "invalid_key" });
+    const kept = ids.filter(access);
+    if (live(hour, 3_600_000, now) && hour.count + kept.length > recipientsPerHour) return send(response, 429, { error: "quota_exceeded" }, wait(hour, 3_600_000, now));
+    const full = kept.map(id => days.get(id)).filter((w): w is Window => live(w, 86_400_000, now) && w!.count >= itemsPerDay);
+    if (full.length > 0) return send(response, 429, { error: "quota_exceeded" }, wait(full.reduce((a, b) => a.start > b.start ? a : b), 86_400_000, now));
+    count(hour, 3_600_000, now, kept.length);
+    const cleaned = typeof text === "string" ? cleanText(text) : "";
+    for (const id of kept) {
+      if (!days.has(id)) days.set(id, { start: 0, count: 0 });
+      count(days.get(id)!, 86_400_000, now, 1);
+      if (key !== undefined) drop(n => n.member === id && n.key === key);
+      chest.notifications.push({ member: id, title: cleanTitle(title), ...(cleaned ? { body: cleaned } : {}), path: (path as string | undefined) ?? "/chest", ...(key !== undefined ? { key: key as string } : {}) });
+    }
+    send(response, 200, { delivered: kept, skipped: ids.filter(id => !access(id)) });
+  }
+
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const route = url.pathname === "/members" || url.pathname.startsWith("/members/") || url.pathname === "/groups" ? members : url.pathname === "/files" || url.pathname.startsWith("/files/") ? filesRoute : null;
+    const route = url.pathname === "/members" || url.pathname.startsWith("/members/") || url.pathname === "/groups" ? members
+      : url.pathname === "/files" || url.pathname.startsWith("/files/") ? filesRoute
+      : url.pathname === "/badges" || url.pathname.startsWith("/badges/") || url.pathname.startsWith("/notifications") ? notificationsRoute : null;
     if (!route) return send(response, 404, { error: "not_found" });
     route(request, response, url).catch(() => { if (!response.headersSent) send(response, 503, { error: "unavailable" }); else response.destroy(); });
   });
