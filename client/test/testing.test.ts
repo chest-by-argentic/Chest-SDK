@@ -35,12 +35,15 @@ test("a fake Chest points the environment at itself, and restores it when closed
   delete process.env["CHEST_TOOL"];
 });
 
-test("an assertion signed for a member reads as that member, on a Web Request and a Node request", async () => {
+test("an assertion signed for a member reads as that member, in its language and organization, on a Web Request and a Node request", async () => {
   const chest = await fakeChest();
   try {
-    assert.deepEqual(member(withMember(new Request("http://tool.test/chest"), camille)), camille);
-    const request = withMember(new IncomingMessage(new Socket()), emile);
-    assert.deepEqual(member(request), emile);
+    assert.deepEqual(member(withMember(new Request("http://tool.test/chest"), camille)), { ...camille, language: "en", organization: "Test organization" });
+    const request = withMember(new IncomingMessage(new Socket()), emile, { language: "fr", organization: "Atelier SAS" });
+    assert.deepEqual(member(request), { ...emile, language: "fr", organization: "Atelier SAS" });
+    // Signed as given: a language or an organization the Chest would never send is nobody.
+    assert.equal(member(withMember(new Request("http://tool.test/chest"), camille, { language: "French" })), null);
+    assert.equal(member(withMember(new Request("http://tool.test/chest"), camille, { organization: "" })), null);
     // Signed for another tool, or long ago, it is nobody.
     assert.equal(member(withMember(new Request("http://tool.test/chest"), camille, { tool: "other" })), null);
     assert.equal(member(withMember(new Request("http://tool.test/chest"), camille, { now: new Date(Date.now() - 120_000) })), null);

@@ -12,7 +12,7 @@ server-side:
 
 | Need | Import | Requires |
 |---|---|---|
-| Who is signed in on this request | `member(request)` from `@argentic/chest-sdk/member` | nothing (the Chest sets `CHEST_TOKEN`, `CHEST_TOOL`) |
+| Who is signed in on this request, the language to speak to them, the Chest's organization | `member(request)` from `@argentic/chest-sdk/member` | nothing (the Chest sets `CHEST_TOKEN`, `CHEST_TOOL`) |
 | The tool's own PostgreSQL database | `databaseUrl()` from `@argentic/chest-sdk/database` | `"capabilities": ["database"]` in `chest.json` |
 | The tool's private files | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` (and `"files": {"quota", "maxObject"}` beyond 1 GiB, 32 MiB per object) |
 | Who else has the tool | `list`, `get`, `lookup`, `groups.list` from `@argentic/chest-sdk/members` | `"capabilities": ["members"]` (`"members.email"` too for addresses) |
@@ -71,7 +71,7 @@ const people = await members.lookup(rows.map(r => r.assignee).filter(Boolean));
 // A test of the tool, with no Chest running.
 import { fakeChest, withMember } from "@argentic/chest-sdk/testing";
 const chest = await fakeChest({ members: [camille] });
-const response = await GET(withMember(new Request("http://tool.test/chest/api/me"), camille));
+const response = await GET(withMember(new Request("http://tool.test/chest/api/me"), camille, { language: "fr" }));
 await chest.close();
 ```
 
@@ -222,6 +222,10 @@ at install and at every update.
 
 - **Server only.** Never import the SDK in a `"use client"` module or ship it
   to a browser: it reads secrets from the environment.
+- **Speak the member's language.** In `/chest`, render in `member.language`
+  (`"en"`, `"fr"`…; its own default for one it does not speak) and offer no
+  language switch there; only public pages keep their own switch.
+  `member.organization` is the Chest's company name, plain text.
 - **`member()` is the only source of identity.** Check it on every request
   under `/chest`; `null` means "not a member" — answer 401/403. Never trust a
   user id, email or role sent in a body, query or cookie of your own.
