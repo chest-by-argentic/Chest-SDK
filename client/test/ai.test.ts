@@ -269,11 +269,11 @@ test("embed sends the texts and reads one vector per text, in the order given", 
 });
 
 test("models and usage read the tool's aliases and its month", async () => {
-  const list = [{ alias: "default", model: "anthropic/claude-x", provider: "openrouter", input: 3, output: 15 }, { alias: "embedding", model: "text-embedding-x", provider: "openai", input: 0.02, output: 0 }];
+  const list = [{ alias: "default", model: "anthropic/claude-x", provider: "openrouter", input: 3, output: 15 }, { alias: "embedding", model: "openai/text-embedding-x", provider: "openrouter", input: 0.02, output: 0 }];
   reply = response => json(response, 200, { models: list });
   assert.deepEqual(await ai.models(), list);
   assert.deepEqual(seen.map(s => [s.method, s.url]), [["GET", "/ai/models"]]);
-  for (const value of [{ models: [...list].reverse() }, { models: [{ ...list[0], provider: "other" }] }, { models: [{ ...list[0], input: -1 }] }, { models: [list[0], list[0]] }, {}]) {
+  for (const value of [{ models: [...list].reverse() }, { models: [{ ...list[0], provider: "openai" }] }, { models: [{ ...list[0], input: -1 }] }, { models: [list[0], list[0]] }, {}]) {
     reply = response => json(response, 200, value);
     await assert.rejects(ai.models(), Unavailable, JSON.stringify(value));
   }

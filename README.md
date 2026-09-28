@@ -346,11 +346,11 @@ export async function POST(request: Request) {
 ## `ai` — AI models through the Chest
 
 A v2 tool that declares the `ai` capability calls AI models through its
-Chest. The Chest's owner connects the providers with their own keys
-(OpenRouter, Anthropic, OpenAI, Mistral, Google, or an OpenAI-compatible
-endpoint) and maps four **aliases** to models: `default`, `fast`, `smart`,
-`embedding`. The tool names an alias, never a provider's model: the owner
-changes the model for the whole Chest without touching code. The tool never
+Chest. The Chest's owner connects OpenRouter with the company's own key;
+the tool calls models by four **aliases**: `default`, `fast`, `smart`,
+`embedding`, each led by the Chest to a model it chose (the owner may choose
+another for `default`). The tool names an alias, never a provider's model:
+the model changes for the whole Chest without touching code. The tool never
 holds a key; the Chest meters every call against the tool's monthly cap.
 
 ```jsonc
@@ -615,7 +615,7 @@ await chest.close();
 | `withMember(request, member, options?)` | The request carrying that assertion: a new Web `Request`, or the same Node request |
 | `fakeChest({members?, former?, groups?, capabilities?, receives?, files?, ai?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set) and answers members, groups, files, badges, notifications, AI and erasure acknowledgments with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments). A former member `{id, name?, erased?}` looks up as `former`, or `erased` |
 | `chest.emit(event, to)` | Delivers an event (`{type, data, id?, occurredAt?}`: a new id and now by default; name an id to deliver the same event twice) signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-events`) or a function of a Web `Request` — and says the status it answered. A `member.erased` makes its erasure one the tool may acknowledge |
-| `ai: {models?, reply?, cap?, unavailable?}` | The fake Chest's AI, deterministic and without any provider. `models`: the aliases the tool declared, `{alias, model, provider?, input?, output?}` (all four by default, `fake-default`…`fake-embedding`, provider `compatible`, 1 and 2 USD per million tokens); another alias answers `model_not_allowed`. `reply(request)`: what a chat answers, given the wire request — a string, or `{text?, toolCalls?: {name, arguments, id?}[]}` (by default the last user message, echoed); streamed, it comes word by word, each tool call's arguments in two pieces, then the finish reason and the usage. Embeddings are unit vectors from a hash of each text (8 dimensions unless `dimensions`). Tokens count one per 4 characters; once the spending reaches `cap` (euros, 5 by default; 0 refuses at once) a call answers `cap_reached`. `unavailable` (`no_connector`, `provider_key_invalid`, `provider_unavailable`) makes chat and embeddings answer it. 60 requests a minute |
+| `ai: {models?, reply?, cap?, unavailable?}` | The fake Chest's AI, deterministic and without any provider. `models`: the aliases the tool declared, `{alias, model, provider?, input?, output?}` (all four by default, `fake-default`…`fake-embedding`, provider `openrouter`, 1 and 2 USD per million tokens); another alias answers `model_not_allowed`. `reply(request)`: what a chat answers, given the wire request — a string, or `{text?, toolCalls?: {name, arguments, id?}[]}` (by default the last user message, echoed); streamed, it comes word by word, each tool call's arguments in two pieces, then the finish reason and the usage. Embeddings are unit vectors from a hash of each text (8 dimensions unless `dimensions`). Tokens count one per 4 characters; once the spending reaches `cap` (euros, 5 by default; 0 refuses at once) a call answers `cap_reached`. `unavailable` (`no_connector`, `provider_key_invalid`, `provider_unavailable`) makes chat and embeddings answer it. 60 requests a minute |
 | `chest.ai` | The tool's calls to AI, `{path, body}` in order (`body` null for a `GET`) |
 | `chest.acknowledged` | The erasures the tool acknowledged, each once |
 | `chest.members`, `chest.groups`, `chest.files` | What the fake Chest holds, to change or assert on; its `members` are those who have the tool |

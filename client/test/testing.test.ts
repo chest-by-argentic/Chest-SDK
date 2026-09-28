@@ -221,7 +221,7 @@ test("its AI answers deterministically, streamed or not, and keeps the calls", a
     assert.ok(Math.abs(Math.hypot(...one.embeddings[1]!) - 1) < 1e-9);
     assert.equal((await ai.embed({ model: "embedding", input: "a", dimensions: 100 })).embeddings[0]?.length, 100);
 
-    assert.deepEqual((await ai.models()).map(m => [m.alias, m.model, m.provider]), [["default", "fake-default", "compatible"], ["fast", "fake-fast", "compatible"], ["smart", "fake-smart", "compatible"], ["embedding", "fake-embedding", "compatible"]]);
+    assert.deepEqual((await ai.models()).map(m => [m.alias, m.model, m.provider]), [["default", "fake-default", "openrouter"], ["fast", "fake-fast", "openrouter"], ["smart", "fake-smart", "openrouter"], ["embedding", "fake-embedding", "openrouter"]]);
     const month = await ai.usage();
     assert.equal(month.cap, 5);
     assert.equal(month.month, new Date().toISOString().slice(0, 7));

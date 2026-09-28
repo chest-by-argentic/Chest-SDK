@@ -32,7 +32,7 @@ export type FakeFile = { data: Uint8Array; type: string; updated: string };
 // cleaned as the Chest cleans it, its path (/chest when not said) and its
 // key.
 export type FakeNotification = { member: string; title: string; body?: string; path: string; key?: string };
-// An alias a fake Chest maps: the model behind it, its provider (compatible
+// An alias a fake Chest maps: the model behind it, its provider (openrouter
 // by default) and its prices in US dollars per million tokens (1 and 2 by
 // default).
 export type FakeAiModel = { alias: Alias; model: string; provider?: Provider; input?: number; output?: number };
@@ -411,7 +411,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
 
   // Its AI: the declared aliases, the spending this month, the requests this
   // minute.
-  const mapped = (options.ai?.models ?? aliasOrder.map((alias): FakeAiModel => ({ alias, model: "fake-" + alias }))).map(m => ({ alias: m.alias, model: m.model, provider: m.provider ?? "compatible", input: m.input ?? 1, output: m.output ?? 2 }));
+  const mapped = (options.ai?.models ?? aliasOrder.map((alias): FakeAiModel => ({ alias, model: "fake-" + alias }))).map(m => ({ alias: m.alias, model: m.model, provider: m.provider ?? "openrouter", input: m.input ?? 1, output: m.output ?? 2 }));
   const cap = options.ai?.cap ?? 5;
   const aiMinute: Window = { start: 0, count: 0 };
   let spent = 0;
