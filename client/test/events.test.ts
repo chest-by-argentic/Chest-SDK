@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { test } from "node:test";
+import { mock, test } from "node:test";
 import { CapabilityNotGranted, ChestError } from "../src/errors.js";
 import * as events from "../src/events.js";
 import type { ChestEvent } from "../src/events.js";
@@ -12,6 +12,38 @@ import { fakeChest } from "../src/testing.js";
 const id = (name: string): string => "mbr_" + name + "a".repeat(26 - name.length);
 const camille: Member = { id: id("camille"), firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [] };
 const erasure = "era_" + "b".repeat(26);
+
+// An event the Chest signed (chest/toolfront.EventSignature, Go) for the
+// tool "web", at 1790000000, with the instance key 00 01 … 1f: the
+// derivation of the key, the claims and the digest are the Chest's, not this
+// test's (the Go test pins the same vector).
+const chestToken = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
+const signedAt = 1790000000;
+const signedBody = `{"id":"evt_k2qhx4mzc7v3b6nfp5r2t7w4ya","type":"member.erased","occurredAt":"2026-09-21T14:13:20Z","data":{"deadline":"2026-10-21T14:13:20Z","erasure":"era_n4rdq7w2xkz5m3bvc6hy2tpl4e","id":"mbr_k2qhx4mzc7v3b6nfp5r2t7w4ya"}}`;
+const signedByChest = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJ3ZWIiLCJkaWdlc3QiOiJGak1fNmMyeEM1LUJmemxTS3RvdnBvc2RScnlNVXZqN1RCWW1Yc3dWVnlFIiwiZXhwIjoxNzkwMDAwMDYwLCJpYXQiOjE3OTAwMDAwMDAsImp0aSI6ImV2dF9rMnFoeDRtemM3djNiNm5mcDVyMnQ3dzR5YSJ9.4g3iZvqtIFG2VfBV1OVcYaCsvs6xJi1H40GhAUKDaJE";
+
+test("an event signed by the Chest reads as its envelope, within its minute and the skew", async () => {
+  const saved = [process.env["CHEST_TOKEN"], process.env["CHEST_TOOL"]];
+  process.env["CHEST_TOKEN"] = chestToken;
+  process.env["CHEST_TOOL"] = "web";
+  const delivery = () => new Request("http://tool.test/chest-events", { method: "POST", headers: { "Content-Type": "application/json", "Chest-Event": signedByChest }, body: signedBody });
+  try {
+    mock.timers.enable({ apis: ["Date"], now: signedAt * 1000 });
+    assert.deepEqual(await events.verify(delivery()), { id: "evt_k2qhx4mzc7v3b6nfp5r2t7w4ya", type: "member.erased", occurredAt: "2026-09-21T14:13:20Z", data: { id: "mbr_k2qhx4mzc7v3b6nfp5r2t7w4ya", erasure: "era_n4rdq7w2xkz5m3bvc6hy2tpl4e", deadline: "2026-10-21T14:13:20Z" } });
+    mock.timers.setTime((signedAt + 64) * 1000);
+    assert.notEqual(await events.verify(delivery()), null);
+    mock.timers.setTime((signedAt + 65) * 1000);
+    assert.equal(await events.verify(delivery()), null);
+    mock.timers.setTime((signedAt - 6) * 1000);
+    assert.equal(await events.verify(delivery()), null);
+  } finally {
+    mock.timers.reset();
+    for (const [name, value] of [["CHEST_TOKEN", saved[0]], ["CHEST_TOOL", saved[1]]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+});
 
 // capture keeps what a fake Chest delivered, and answers what the tool would.
 function capture(): { requests: Request[]; tool: (request: Request) => Response } {
