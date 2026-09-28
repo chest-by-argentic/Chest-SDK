@@ -21,7 +21,7 @@ const expected = {
   errors: ["CapabilityNotGranted", "ChestError", "QuotaExceeded", "TooLarge", "Unavailable"],
   member: ["member"],
   database: ["databaseUrl"],
-  files: ["delete", "get", "list", "put", "url"],
+  files: ["delete", "get", "list", "move", "put", "stat", "uploadUrl", "url"],
 };
 const rootExports = [...Object.entries(expected).filter(([sub]) => sub !== "files").flatMap(([, names]) => names), "files"].sort();
 
