@@ -1,19 +1,22 @@
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { ChestEvent } from "./events.js";
 import { groupIdPattern, memberIdPattern, type Member } from "./member.js";
 import { forget } from "./members.js";
 
 // For a tool's own tests, never imported by its production code: a member's
 // assertion signed as the Chest signs it, and a Chest's API in the test's
 // process that answers members, groups, files (stat, move, links; an upload
-// it authorises but does not receive), badges and notifications with the
-// Chest's bounds, quotas and errors.
+// it authorises but does not receive), badges, notifications and the
+// acknowledgment of an erasure with the Chest's bounds, quotas and errors;
+// and that delivers an event to the tool, signed as the Chest signs it.
 //
 //   import { fakeChest, withMember } from "@argentic/chest-sdk/testing";
 //   const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications"] });
 //   const response = await app(withMember(new Request("http://tool/chest"), camille));
 //   assert.equal(chest.notifications[0]?.member, camille.id);
+//   assert.equal(await chest.emit({ type: "access.revoked", data: { id: camille.id } }, request => app(request)), 204);
 //   await chest.close();
 
 // A group as a fake Chest keeps it: its identifier, its name, and the
@@ -27,23 +30,34 @@ export type FakeFile = { data: Uint8Array; type: string; updated: string };
 export type FakeNotification = { member: string; title: string; body?: string; path: string; key?: string };
 
 // What a fake Chest is given: the members who have the tool, those who left
-// it, its groups, the capabilities its version holds (a capability left out
-// answers 403; members, files and notifications by default, members.email to
-// read the addresses) and the files it keeps.
+// it (erased: their data was erased, the name gone), its groups, the
+// capabilities its version holds (a capability left out answers 403;
+// members, files and notifications by default, members.email to read the
+// addresses), the events it receives (["member.*"] by default, [] to answer
+// an acknowledgment 403) and the files it keeps.
 export type FakeChestOptions = {
   members?: Member[];
-  former?: { id: string; name?: string }[];
+  former?: { id: string; name?: string; erased?: boolean }[];
   groups?: FakeGroup[];
   capabilities?: string[];
+  receives?: string[];
   files?: Record<string, { data: Uint8Array | string; type?: string }>;
 };
+
+// An event for emit: its type and data; its id (a new evt_… by default) and
+// when it happened (now by default) may be named, to deliver the same event
+// twice.
+export type FakeEvent = { [K in ChestEvent["type"]]: { type: K; data: Extract<ChestEvent, { type: K }>["data"]; id?: string; occurredAt?: string } }[ChestEvent["type"]];
 
 // A fake Chest in the test's process: its address, the token and the tool it
 // set in the environment, what it keeps (members, groups and files a test
 // changes or reads; the notifications the tool sent, in the order sent, a
-// replaced one last; each member's badge), and close, which stops it and
-// restores the environment. Its members are those who have the tool: the
-// others are skipped.
+// replaced one last; each member's badge; the erasures the tool
+// acknowledged), emit, which delivers an event to the tool — POST
+// /chest-events of its address, or a handler of Web Requests — and says the
+// status it answered, and close, which stops it and restores the
+// environment. Its members are those who have the tool: the others are
+// skipped.
 export type FakeChest = {
   api: string;
   token: string;
@@ -53,6 +67,8 @@ export type FakeChest = {
   files: Map<string, FakeFile>;
   notifications: FakeNotification[];
   badges: Map<string, number>;
+  acknowledged: string[];
+  emit(event: FakeEvent, to: string | ((request: Request) => Response | Promise<Response>)): Promise<number>;
   close(): Promise<void>;
 };
 
@@ -76,6 +92,16 @@ export function signAssertion(member: Member, options: { token?: string; tool?: 
   // the label of the assertion's shape under the text of the token.
   const key = createHmac("sha256", Buffer.from(token, "utf8")).update("Chest-Member v2").digest();
   return body + "." + createHmac("sha256", key).update(body).digest("base64url");
+}
+
+// signEvent is the Chest-Event value the Chest would send with that body:
+// HS256 under the key the token derives for events, for the tool, naming the
+// event and the digest of the body, valid 60 seconds.
+function signEvent(id: string, body: string, options: { token: string; tool: string }): string {
+  const iat = Math.floor(Date.now() / 1000);
+  const signed = encode({ alg: "HS256", typ: "JWT" }) + "." + encode({ aud: options.tool, iat, exp: iat + 60, jti: id, digest: createHash("sha256").update(body).digest("base64url") });
+  const key = createHmac("sha256", Buffer.from(options.token, "utf8")).update("Chest-Event v1").digest();
+  return signed + "." + createHmac("sha256", key).update(signed).digest("base64url");
 }
 
 // withMember is the request carrying that member's assertion: a new Web
@@ -135,7 +161,10 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   for (const [name, file] of Object.entries(options.files ?? {})) {
     files.set(name, { data: typeof file.data === "string" ? new TextEncoder().encode(file.data) : file.data, type: file.type ?? "application/octet-stream", updated: new Date().toISOString() });
   }
-  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), close: async () => {} };
+  const receives = options.receives ?? ["member.*"];
+  // The erasures the tool was told of, by emit: those it may acknowledge.
+  const erasures = new Set<string>();
+  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], emit: async () => 0, close: async () => {} };
   const former = [...(options.former ?? [])];
   let window = 0, calls = 0;
   const shown = (m: Member) => ({ id: m.id, first_name: m.firstName, last_name: m.lastName, name: m.name, photo: m.photo, role: m.role, admin: m.isAdmin, builder: m.isBuilder, groups: m.groups, ...(email && m.email !== undefined ? { email: m.email } : {}) });
@@ -171,6 +200,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       for (const id of new Set(ids as string[])) {
         const m = chest.members.find(x => x.id === id), f = former.find(x => x.id === id);
         if (m) answer.members.push(shown(m));
+        else if (f?.erased) answer.former.push({ id, status: "erased" });
         else if (f) answer.former.push({ id, ...(f.name ? { name: f.name } : {}), status: "former" });
         else answer.unknown.push(id);
       }
@@ -339,9 +369,22 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     send(response, 200, { delivered: kept, skipped: ids.filter(id => !access(id)) });
   }
 
+  // The acknowledgment of an erasure the tool was told of (emit).
+  async function erasuresRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    if (!receives.includes("member.*")) return send(response, 403, { error: "capability_not_granted" });
+    const done = /^\/erasures\/([^/]+)\/done$/u.exec(url.pathname);
+    if (request.method !== "POST" || !done || url.search) return send(response, 404, { error: "not_found" });
+    const id = done[1]!;
+    if (!/^era_[a-z2-7]{26}$/u.test(id)) return send(response, 400, { error: "invalid_id" });
+    if (!erasures.has(id)) return send(response, 404, { error: "erasure_not_found" });
+    if (!chest.acknowledged.includes(id)) chest.acknowledged.push(id);
+    send(response, 204);
+  }
+
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const route = url.pathname === "/members" || url.pathname.startsWith("/members/") || url.pathname === "/groups" ? members
+    const route = url.pathname.startsWith("/erasures/") ? erasuresRoute
+      : url.pathname === "/members" || url.pathname.startsWith("/members/") || url.pathname === "/groups" ? members
       : url.pathname === "/files" || url.pathname.startsWith("/files/") ? filesRoute
       : url.pathname === "/badges" || url.pathname.startsWith("/badges/") || url.pathname.startsWith("/notifications") ? notificationsRoute : null;
     if (!route) return send(response, 404, { error: "not_found" });
@@ -352,6 +395,15 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   chest.api = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
   Object.assign(process.env, { CHEST_API: chest.api, CHEST_TOKEN: token, CHEST_TOOL: tool });
   forget();
+  chest.emit = async (event, to) => {
+    const id = event.id ?? "evt_" + Array.from(randomBytes(26), b => "abcdefghijklmnopqrstuvwxyz234567"[b & 31]).join("");
+    const body = JSON.stringify({ id, type: event.type, occurredAt: event.occurredAt ?? new Date().toISOString(), data: event.data });
+    if (event.type === "member.erased") erasures.add(event.data.erasure);
+    const request = new Request(typeof to === "string" ? to.replace(/\/$/u, "") + "/chest-events" : "http://tool.test/chest-events", { method: "POST", headers: { "Content-Type": "application/json", "Chest-Event": signEvent(id, body, { token, tool }) }, body });
+    const answer = typeof to === "string" ? await fetch(request, { redirect: "manual" }) : await to(request);
+    await answer.body?.cancel();
+    return answer.status;
+  };
   chest.close = async () => {
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));

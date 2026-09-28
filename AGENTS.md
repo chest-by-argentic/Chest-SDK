@@ -16,9 +16,10 @@ server-side:
 | The tool's own PostgreSQL database | `databaseUrl()` from `@argentic/chest-sdk/database` | `"capabilities": ["database"]` in `chest.json` |
 | The tool's private files | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` (and `"files": {"quota", "maxObject"}` beyond 1 GiB, 32 MiB per object) |
 | Who else has the tool | `list`, `get`, `lookup`, `groups.list` from `@argentic/chest-sdk/members` | `"capabilities": ["members"]` (`"members.email"` too for addresses) |
+| Be told when members change, lose access, leave or ask to be erased | `handle`, `verify`, `acknowledgeErasure` from `@argentic/chest-sdk/events` | `"capabilities": ["members"]` and `"receives": ["member.*"]` |
 | Tell members what needs their attention | `notify`, `withdraw`, `badge.set`, `badge.setMany` from `@argentic/chest-sdk/notifications` | `"capabilities": ["notifications"]` |
 | Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `Unavailable` from `@argentic/chest-sdk/errors` | — |
-| Tests without a Chest | `fakeChest`, `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
+| Tests without a Chest | `fakeChest` (and its `emit`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
 
 ## Install
 
@@ -104,6 +105,38 @@ await notifications.badge.set(task.assignee, openTasks - 1);
   tool: not an error.
 - Muting is invisible: a member who muted the tool is `delivered`. Never try
   to detect it.
+
+## Keep in step with the members' lifecycle
+
+The Chest posts events to the tool's `POST /chest-events` (outside `/chest`),
+signed for it, at least once: `member.updated`, `access.revoked`,
+`member.removed`, `member.erased`.
+
+```ts
+// app/chest-events/route.ts — "receives": ["member.*"] in chest.json
+import * as events from "@argentic/chest-sdk/events";
+
+export async function POST(request: Request) {
+  return new Response(null, { status: await events.handle(request, {
+    "access.revoked": e => sql`update tasks set assignee = null where assignee = ${e.data.id}`,
+    "member.erased": async e => {
+      await sql`update tasks set created_by = 'erased' where created_by = ${e.data.id}`;
+      await events.acknowledgeErasure(e.data.erasure);
+    },
+  }, { seen }) }); // seen: {has, add} over a table chest_events(id primary key)
+}
+```
+
+- The same event can come twice, with the same `id`: give `handle` a durable
+  `seen` store and keep handlers idempotent. Order is not guaranteed.
+- Answer the status `handle` returns; a handler that throws makes it throw —
+  answer 500 and the Chest delivers again, for 72 hours.
+- `members.list()` stays the truth: reconcile at start; events keep you
+  current in between.
+- On `member.erased`, delete or anonymise that person's data within 30 days,
+  then `acknowledgeErasure(erasure)`: the owner sees it done per tool.
+- Never put the route behind your own session or under `/chest`, and never
+  read the body before `handle` (it verifies the signature over it).
 
 ## Let a member upload a file
 
@@ -196,6 +229,9 @@ at install and at every update.
 | `ChestError` with `invalid_title` | The title is empty (once control characters are removed) or longer than 80 characters. |
 | `ChestError` with `invalid_path` | `path` is not `/chest` or under it (a full URL, `//`, `..`, a space or non-ASCII character). |
 | `QuotaExceeded` from `notifications` | Beyond 1,000 recipients an hour, 100 items per member a day or 600 badge writes a minute; the call changed nothing. |
+| `events.handle` always answers 401 | The body was read before `handle` (a body parser), or the environment is not the Chest's (`CHEST_TOKEN`, `CHEST_TOOL`; in a test, deliver with `fakeChest().emit`). |
+| No event ever comes | `chest.json` does not declare `"receives": ["member.*"]` (with `members`), the version was not approved, or the route is not `POST /chest-events` at the root. |
+| `ChestError` `erasure_not_found` from `acknowledgeErasure` | The erasure was not sent to this tool: acknowledge the `erasure` of the `member.erased` event you received. |
 | `RateLimited` from `members` | More than 600 calls a minute: use `lookup` (200 ids a call, kept a minute) instead of one `get` per row. |
 | Build fails in the browser bundle | The SDK was imported from client code. |
 

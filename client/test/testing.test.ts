@@ -51,7 +51,7 @@ test("an assertion signed for a member reads as that member, on a Web Request an
 });
 
 test("its members answer as a Chest's: order, pages, search, lookup, groups, addresses only with members.email", async () => {
-  const chest = await fakeChest({ members: [zoe, camille, emile], former: [{ id: id("dan"), name: "Dan" }], groups: [{ id: nord, name: "Nord", members: [camille.id] }], capabilities: ["members"] });
+  const chest = await fakeChest({ members: [zoe, camille, emile], former: [{ id: id("dan"), name: "Dan" }, { id: id("eve"), name: "Eve", erased: true }], groups: [{ id: nord, name: "Nord", members: [camille.id] }], capabilities: ["members"] });
   try {
     const first = await members.list({ limit: 2 });
     assert.deepEqual(first.members.map(m => m.name), ["Camille Martin", "Émile Durand"]);
@@ -62,6 +62,8 @@ test("its members answer as a Chest's: order, pages, search, lookup, groups, add
     assert.equal(await members.get(id("mallory")), null);
     const found = await members.lookup([id("dan"), zoe.id, id("mallory")]);
     assert.deepEqual([found.members.map(m => m.id), found.former, found.unknown], [[zoe.id], [{ id: id("dan"), name: "Dan", status: "former" }], [id("mallory")]]);
+    // Erased, a former member has no name any more.
+    assert.deepEqual((await members.lookup([id("eve")])).former, [{ id: id("eve"), name: null, status: "erased" }]);
     assert.deepEqual(await members.groups.list(), [{ id: nord, name: "Nord", members: [camille.id] }]);
     await assert.rejects(files.get("a.txt"), CapabilityNotGranted);
   } finally {
