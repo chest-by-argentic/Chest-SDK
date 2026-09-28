@@ -21,9 +21,10 @@ import { groupIdPattern, memberIdPattern, type Member } from "./member.js";
 
 // A page of the list, and the cursor of the next one (null after the last).
 export type MemberPage = { members: Member[]; next: string | null };
-// A member who left the Chest after having the tool: the name they had, or
-// none once erased.
-export type FormerMember = { id: string; name: string | null; status: "former" };
+// A member who left the Chest after having the tool: "former" with the name
+// they had, or "erased" without any once the owner had their data erased —
+// render “Former member”.
+export type FormerMember = { id: string; name: string | null; status: "former" | "erased" };
 // What a lookup found: members who have the tool, former members, and
 // identifiers the tool does not know.
 export type Lookup = { members: Member[]; former: FormerMember[]; unknown: string[] };
@@ -88,7 +89,8 @@ export async function get(id: string): Promise<Member | null> {
 }
 
 // What lookup keeps in this process: each identifier's answer for a minute,
-// 5000 of them at most, the oldest forgotten first.
+// 5000 of them at most, the oldest forgotten first — and nothing once an
+// event of the members' lifecycle comes (events.handle).
 type Known = { at: number } & ({ member: Member } | { former: FormerMember } | { unknown: true });
 const known = new Map<string, Known>();
 
@@ -127,8 +129,8 @@ export async function lookup(ids: Iterable<string>): Promise<Lookup> {
     }
     for (const value of answer.former) {
       const f = value as { id?: unknown; name?: unknown; status?: unknown } | null;
-      if (!f || typeof f.id !== "string" || !memberIdPattern.test(f.id) || !(f.name === undefined || text(f.name, 520)) || f.status !== "former") throw new Unavailable();
-      keep(f.id, { former: { id: f.id, name: f.name ?? null, status: "former" } });
+      if (!f || typeof f.id !== "string" || !memberIdPattern.test(f.id) || !(f.status === "former" ? f.name === undefined || text(f.name, 520) : f.status === "erased" && f.name === undefined)) throw new Unavailable();
+      keep(f.id, { former: { id: f.id, name: (f.name as string | undefined) ?? null, status: f.status as FormerMember["status"] } });
       told.add(f.id);
     }
     for (const id of answer.unknown) {

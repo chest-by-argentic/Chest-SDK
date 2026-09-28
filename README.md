@@ -3,8 +3,8 @@
 `@argentic/chest-sdk` is what a server tool (tool contract v2) embeds to talk
 with its Chest: the member the Chest asserts on a request, the other members
 who have the tool, the address of the tool's own database, its private
-files, the badges and notifications it shows members inside the Chest — and,
-for the tool's tests, a fake Chest. The SDK has no dependency: it
+files, the badges and notifications it shows members inside the Chest, the
+events of its members' lifecycle — and, for the tool's tests, a fake Chest. The SDK has no dependency: it
 only imports `node:*`.
 
 ```sh
@@ -16,20 +16,21 @@ Node 22 or later. ESM only, compiled JavaScript with its type declarations.
 ## Imports
 
 Each module is its own subpath and pulls in nothing else; the root gives them
-all, with the files, members and notifications APIs as the namespaces
-`files`, `members` and `notifications` (the testing module is not in the
-root).
+all, with the files, members, notifications and events APIs as the
+namespaces `files`, `members`, `notifications` and `events` (the testing
+module is not in the root).
 
 | Import | Gives |
 |---|---|
 | `@argentic/chest-sdk/member` | `member(request)`, type `Member`: the member of a request on the team host of a server tool, read from the `Chest-Member` assertion and verified; `null` without a valid assertion. `memberIdPattern`, `groupIdPattern`: the grammars of the identifiers (`mbr_…`, `grp_…`) |
 | `@argentic/chest-sdk/members` | `list`, `get`, `lookup`, `groups.list`, `forget`, types `MemberPage`, `Lookup`, `FormerMember`, `Group`: the members who have the tool (capability `members`, their addresses with `members.email`) |
 | `@argentic/chest-sdk/notifications` | `notify`, `withdraw`, `badge.set`, `badge.setMany`, types `Notice`, `Delivery`, `BadgeCount`, `BadgeWrite`: counters on the tool's tile and items in members' inboxes, inside the Chest (capability `notifications`) |
+| `@argentic/chest-sdk/events` | `handle`, `verify`, `acknowledgeErasure`, `memorySeen`, `erasureIdPattern`, types `ChestEvent`, `MemberUpdated`, `AccessRevoked`, `MemberRemoved`, `MemberErased`, `MemberChange`, `Handlers`, `Seen`: the events of the members' lifecycle the Chest posts to the tool's `/chest-events` (`"receives": ["member.*"]`), verified, deduplicated by id, and the acknowledgment of an erasure |
 | `@argentic/chest-sdk/database` | `databaseUrl()`: the address of the tool's own PostgreSQL database (capability `database`) |
 | `@argentic/chest-sdk/files` | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl`, types `FileObject`, `FileData`, `FilePage`: the tool's private files (capability `files`), kept by the Chest, a 15-minute signed link to one (or to its thumbnail), and uploads straight from a member's browser |
 | `@argentic/chest-sdk/errors` | `ChestError` (`code`, `status`), `CapabilityNotGranted` (403), `TooLarge` (413), `QuotaExceeded` (429), `RateLimited` (429), `Unavailable` (503): what the SDK throws when the Chest does not give what a tool asks |
-| `@argentic/chest-sdk/testing` | `signAssertion`, `withMember`, `fakeChest`, types `FakeChest`, `FakeChestOptions`, `FakeGroup`, `FakeFile`, `FakeNotification`: for the tool's own tests only |
-| `@argentic/chest-sdk` | all of the above but `testing`; `files`, `members` and `notifications` as namespaces |
+| `@argentic/chest-sdk/testing` | `signAssertion`, `withMember`, `fakeChest`, types `FakeChest`, `FakeChestOptions`, `FakeGroup`, `FakeFile`, `FakeNotification`, `FakeEvent`: for the tool's own tests only |
+| `@argentic/chest-sdk` | all of the above but `testing`; `files`, `members`, `notifications` and `events` as namespaces |
 
 ```ts
 import { member } from "@argentic/chest-sdk/member";
@@ -37,8 +38,9 @@ import { databaseUrl } from "@argentic/chest-sdk/database";
 import * as files from "@argentic/chest-sdk/files";
 import * as members from "@argentic/chest-sdk/members";
 import * as notifications from "@argentic/chest-sdk/notifications";
+import * as events from "@argentic/chest-sdk/events";
 import { CapabilityNotGranted } from "@argentic/chest-sdk/errors";
-// or: import { member, databaseUrl, files, members, notifications } from "@argentic/chest-sdk";
+// or: import { member, databaseUrl, files, members, notifications, events } from "@argentic/chest-sdk";
 ```
 
 Types refer to `node:http` (`IncomingMessage`): a TypeScript project needs
@@ -68,8 +70,10 @@ export function GET(request: Request) {
 A v2 tool is an ordinary web server in a container without network, run by
 its Chest. The Chest's front is the only one to reach it; the tool reaches only
 what its launcher gives it on `127.0.0.1` (its database, the Chest's API for
-its files, its members and its notifications). Rights come from the Chest — the signed member, the capabilities
-approved for the version — and the Chest enforces them even outside the SDK:
+its files, its members and its notifications), and the Chest posts it the
+events it receives on `/chest-events`, through the same launcher. Rights come
+from the Chest — the signed member, the capabilities approved for the
+version — and the Chest enforces them even outside the SDK:
 the SDK makes the calls easier, it is not a security boundary. The full
 contract (manifest `chest.json`, capabilities, build from source, catalogue)
 is described in the Chest repository, `docs/architecture.md`.
@@ -152,9 +156,12 @@ const teams = await members.groups.list();                                  // [
   role or group.
 - **`lookup(ids)`**: each identifier once, in the order given: `members`,
   `former` (`{id, name, status: "former"}`: someone who left the Chest after
-  having the tool, so a record still reads “Camille Martin (former member)”)
-  and `unknown`. The SDK asks 200 at a time and keeps each answer a minute in
-  the process (5,000 at most); `forget()` empties it.
+  having the tool, so a record still reads “Camille Martin (former member)”;
+  `{id, name: null, status: "erased"}` once the owner had their data erased,
+  rendered “Former member”) and `unknown`. The SDK asks 200 at a time and
+  keeps each answer a minute in the process (5,000 at most); `forget()`
+  empties it, and so does every event of the members' lifecycle
+  (`events.handle`).
 - **`groups.list()`**: the groups that give the tool, with their members'
   identifiers; never the others.
 - Errors: `CapabilityNotGranted` (403), `RateLimited` (429: 600 calls a minute
@@ -261,6 +268,77 @@ const { set, skipped: noAccess } = await notifications.badge.setMany([
 A badge suits a count that goes up and down (tasks assigned, messages
 unread); a notification, an event worth a look — with a key, so that it goes
 away by itself once handled.
+
+## `events` — the members' lifecycle
+
+A v2 tool that holds `members` and declares `"receives": ["member.*"]` in its
+`chest.json` (approved like a permission: “Is told when the members who have
+access to it change or leave.”) is told, on its own `POST /chest-events`:
+
+| Event | `data` | When |
+|---|---|---|
+| `member.updated` | `{id, changed: ("name" \| "photo" \| "role" \| "groups" \| "email")[]}` | Something the tool sees of a member who has it changed (`email` only with `members.email`) |
+| `access.revoked` | `{id}` | The member lost access to the tool but stays in the Chest |
+| `member.removed` | `{id}` | The member left the Chest: `lookup` now reads them `former` |
+| `member.erased` | `{id, erasure, deadline}` | The owner asked for this person's data to be erased: delete or anonymise what the tool keeps of them before `deadline` (30 days), then `acknowledgeErasure(erasure)` |
+
+A member who gets the tool is no event: the next `list` has them.
+
+```jsonc
+// chest.json
+{ "capabilities": ["members"], "receives": ["member.*"] }
+```
+
+```ts
+// app/chest-events/route.ts — at the root, outside /chest: the Chest calls it
+// through the tool's launcher, never from a browser (its front answers 404 there).
+import * as events from "@argentic/chest-sdk/events";
+
+const seen = {
+  has: async (id: string) => (await sql`select 1 from chest_events where id = ${id}`).length > 0,
+  add: async (id: string) => { await sql`insert into chest_events (id) values (${id}) on conflict do nothing`; },
+};
+
+export async function POST(request: Request) {
+  return new Response(null, { status: await events.handle(request, {
+    "member.updated": e => refreshCache(e.data.id, e.data.changed),
+    "access.revoked": e => sql`update tasks set assignee = null where assignee = ${e.data.id}`,
+    "member.erased": async e => {
+      await sql`update tasks set created_by = 'erased' where created_by = ${e.data.id}`;
+      await events.acknowledgeErasure(e.data.erasure);
+    },
+  }, { seen }) });
+}
+```
+
+- **Delivery**: at least once, in no guaranteed order. An event is an
+  envelope `{id: "evt_…", type, occurredAt, data}`, signed for this tool
+  (`Chest-Event` header, HS256 under a key derived from `CHEST_TOKEN` with
+  the label `Chest-Event v1`, naming the event and the SHA-256 of the body,
+  60 seconds). Any answer but a 2xx is delivered again, the same event with
+  the same id, after 5 s, 15 s, 30 s, 1 min, 2 min, 5 min, 10 min, 30 min, then
+  every hour, for 72 hours — a restart of the node included. Given up, the
+  tool is marked “out of sync” on its page until its next start.
+- **`members.list` is the truth.** Reconcile by listing at start (and so after
+  being out of sync): events keep a tool current between starts, they do not
+  replace reading who has it.
+- **`handle(request, handlers, {seen?})`** answers the status to give the
+  Chest: 401 for what is not a delivery of the Chest for this tool, 204 for an
+  event handled, one already in `seen`, a type without a handler, or one of a
+  later Chest (signed, ignored). It reads the body (64 KiB at most): mount it
+  before any body parser. A handler that throws leaves the event unseen and
+  `handle` throws: answer 500, it comes again. `seen` is the store of the
+  handled ids — `memorySeen()` (the default: 10,000 ids in the process, lost
+  at a restart) or a table of the tool's own, as above. Make handlers
+  idempotent anyway: an event handled but not yet added to `seen` when the
+  tool stops comes again.
+- **`verify(request)`** is the event of a delivery, typed, or `null`; for a
+  tool that routes events itself.
+- **`acknowledgeErasure(erasure)`**: `POST /erasures/{erasure}/done` on the
+  Chest's API; the owner then sees the tool's part done (“Erased on 3 Oct.”),
+  “Overdue” past the deadline otherwise. Again is harmless. Errors:
+  `ChestError` `erasure_not_found` (404: an erasure this tool was not told of)
+  or `invalid_id` (400), `CapabilityNotGranted` (403), `Unavailable`.
 
 ## `databaseUrl()` — database of a server tool
 
@@ -409,6 +487,8 @@ import { fakeChest, signAssertion, withMember } from "@argentic/chest-sdk/testin
 const camille = { id: "mbr_k2qhx4mzc7v3b6nfp5r2t7w4ya", firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [] };
 const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications"] });
 const response = await handler(withMember(new Request("http://tool.test/chest/tasks"), camille));
+assert.equal(await chest.emit({ type: "member.erased", data: { id: camille.id, erasure: "era_k2qhx4mzc7v3b6nfp5r2t7w4ya", deadline: "2026-10-28T10:00:00Z" } }, request => handler(request)), 204);
+assert.deepEqual(chest.acknowledged, ["era_k2qhx4mzc7v3b6nfp5r2t7w4ya"]);
 assert.deepEqual((await members.list()).members.map(m => m.id), [camille.id]);
 assert.ok(chest.files.has("reports/2026.pdf"));
 assert.deepEqual(chest.notifications, [{ member: camille.id, title: "New task", path: "/chest/tasks/42", key: "task:42" }]);
@@ -420,7 +500,9 @@ await chest.close();
 |---|---|
 | `signAssertion(member, {token?, tool?, now?})` | A `Chest-Member` header value signed like the Chest's (the token and tool of the environment by default) |
 | `withMember(request, member, options?)` | The request carrying that assertion: a new Web `Request`, or the same Node request |
-| `fakeChest({members?, former?, groups?, capabilities?, files?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set) and answers members, groups, files, badges and notifications with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files` and `notifications` by default; `members.email` adds the addresses) |
+| `fakeChest({members?, former?, groups?, capabilities?, receives?, files?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set) and answers members, groups, files, badges, notifications and erasure acknowledgments with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files` and `notifications` by default; `members.email` adds the addresses; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments). A former member `{id, name?, erased?}` looks up as `former`, or `erased` |
+| `chest.emit(event, to)` | Delivers an event (`{type, data, id?, occurredAt?}`: a new id and now by default; name an id to deliver the same event twice) signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-events`) or a function of a Web `Request` — and says the status it answered. A `member.erased` makes its erasure one the tool may acknowledge |
+| `chest.acknowledged` | The erasures the tool acknowledged, each once |
 | `chest.members`, `chest.groups`, `chest.files` | What the fake Chest holds, to change or assert on; its `members` are those who have the tool |
 | `chest.notifications`, `chest.badges` | What the tool sent: the items kept, `{member, title, body?, path, key?}` cleaned as the Chest cleans them, in the order sent (a replaced item removed, the new one last; `withdraw` removes), and each member's badge (`Map` member → count; 0 removes it) |
 | `chest.close()` | Stops it and restores the environment |
