@@ -18,14 +18,18 @@ function base(capability: string): string {
 }
 
 // ask sends one request of a capability to the Chest; a failure to reach it
-// is Unavailable.
-export async function ask(capability: string, method: string, path: string, init: { body?: Uint8Array<ArrayBuffer> | string; type?: string } = {}): Promise<Response> {
+// is Unavailable. The request and the reading of its answer end after
+// deadline milliseconds (120 seconds unless said), or when the caller's
+// signal aborts: its reason is then thrown.
+export async function ask(capability: string, method: string, path: string, init: { body?: Uint8Array<ArrayBuffer> | string; type?: string; deadline?: number; signal?: AbortSignal } = {}): Promise<Response> {
   const headers: Record<string, string> = {};
   if (init.type !== undefined) headers["Content-Type"] = init.type;
   const url = base(capability) + path;
+  const timeout = AbortSignal.timeout(init.deadline ?? deadline);
   try {
-    return await fetch(url, { method, headers, ...(init.body !== undefined ? { body: init.body } : {}), redirect: "error", signal: AbortSignal.timeout(deadline) });
+    return await fetch(url, { method, headers, ...(init.body !== undefined ? { body: init.body } : {}), redirect: "error", signal: init.signal ? AbortSignal.any([timeout, init.signal]) : timeout });
   } catch {
+    if (init.signal?.aborted) throw init.signal.reason;
     throw new Unavailable();
   }
 }

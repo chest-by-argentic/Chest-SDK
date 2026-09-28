@@ -1,6 +1,8 @@
 import { createHash, createHmac, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { Alias, Provider } from "./ai.js";
+import type { AiUnavailableReason } from "./errors.js";
 import type { ChestEvent } from "./events.js";
 import { groupIdPattern, memberIdPattern, type Member } from "./member.js";
 import { forget } from "./members.js";
@@ -8,9 +10,11 @@ import { forget } from "./members.js";
 // For a tool's own tests, never imported by its production code: a member's
 // assertion signed as the Chest signs it, and a Chest's API in the test's
 // process that answers members, groups, files (stat, move, links; an upload
-// it authorises but does not receive), badges, notifications and the
-// acknowledgment of an erasure with the Chest's bounds, quotas and errors;
-// and that delivers an event to the tool, signed as the Chest signs it.
+// it authorises but does not receive), badges, notifications, AI (chat,
+// streamed or not, embeddings, models, usage: deterministic answers, no
+// provider) and the acknowledgment of an erasure with the Chest's bounds,
+// quotas and errors; and that delivers an event to the tool, signed as the
+// Chest signs it.
 //
 //   import { fakeChest, withMember } from "@argentic/chest-sdk/testing";
 //   const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications"] });
@@ -28,13 +32,31 @@ export type FakeFile = { data: Uint8Array; type: string; updated: string };
 // cleaned as the Chest cleans it, its path (/chest when not said) and its
 // key.
 export type FakeNotification = { member: string; title: string; body?: string; path: string; key?: string };
+// An alias a fake Chest maps: the model behind it, its provider (compatible
+// by default) and its prices in US dollars per million tokens (1 and 2 by
+// default).
+export type FakeAiModel = { alias: Alias; model: string; provider?: Provider; input?: number; output?: number };
+// What a fake model answers: text, or text and tool calls (an id of call_…
+// by default; arguments are JSON text).
+export type FakeAiReply = string | { text?: string; toolCalls?: { name: string; arguments: string; id?: string }[] };
+// The AI of a fake Chest: the aliases the tool declared, each mapped (all
+// four by default: fake-default, fake-fast, fake-smart, fake-embedding); what
+// its models answer to a chat, given the request as the tool sent it (the
+// last user message's text, echoed, by default); the tool's monthly cap in
+// euros (5 by default; a call is refused cap_reached once the spending
+// reaches it, 0 refuses at once); and a reason that makes chat and
+// embeddings unavailable.
+export type FakeAi = { models?: FakeAiModel[]; reply?: (request: Record<string, unknown>) => FakeAiReply; cap?: number; unavailable?: AiUnavailableReason };
+// A call of the tool to the AI of a fake Chest: its path and its body as
+// sent (null for a GET).
+export type FakeAiCall = { path: string; body: unknown };
 
 // What a fake Chest is given: the members who have the tool, those who left
 // it (erased: their data was erased, the name gone), its groups, the
 // capabilities its version holds (a capability left out answers 403;
-// members, files and notifications by default, members.email to read the
+// members, files, notifications and ai by default, members.email to read the
 // addresses), the events it receives (["member.*"] by default, [] to answer
-// an acknowledgment 403) and the files it keeps.
+// an acknowledgment 403), the files it keeps and its AI.
 export type FakeChestOptions = {
   members?: Member[];
   former?: { id: string; name?: string; erased?: boolean }[];
@@ -42,6 +64,7 @@ export type FakeChestOptions = {
   capabilities?: string[];
   receives?: string[];
   files?: Record<string, { data: Uint8Array | string; type?: string }>;
+  ai?: FakeAi;
 };
 
 // An event for emit: its type and data; its id (a new evt_… by default) and
@@ -53,7 +76,7 @@ export type FakeEvent = { [K in ChestEvent["type"]]: { type: K; data: Extract<Ch
 // set in the environment, what it keeps (members, groups and files a test
 // changes or reads; the notifications the tool sent, in the order sent, a
 // replaced one last; each member's badge; the erasures the tool
-// acknowledged), emit, which delivers an event to the tool — POST
+// acknowledged; its calls to AI, in order), emit, which delivers an event to the tool — POST
 // /chest-events of its address, or a handler of Web Requests — and says the
 // status it answered, and close, which stops it and restores the
 // environment. Its members are those who have the tool: the others are
@@ -68,6 +91,7 @@ export type FakeChest = {
   notifications: FakeNotification[];
   badges: Map<string, number>;
   acknowledged: string[];
+  ai: FakeAiCall[];
   emit(event: FakeEvent, to: string | ((request: Request) => Response | Promise<Response>)): Promise<number>;
   close(): Promise<void>;
 };
@@ -130,6 +154,22 @@ const cleanTitle = (s: string): string => s.replace(/[\t\r\n]/gu, " ").replace(/
 const cleanText = (s: string): string => s.replace(/\r\n?/gu, "\n").replace(/\t/gu, " ").replace(/[^\P{Cc}\n]/gu, "").replace(reordering, "").trim();
 const isPath = (p: unknown): boolean => typeof p === "string" && p.length <= maxPath && /^\/chest([/?#][\x21-\x5b\x5d-\x7e]*)?$/u.test(p) && !p.includes("//") && !p.split(/[?#]/u)[0]!.split("/").some(x => /^(\.|%2e){1,2}$/iu.test(x));
 
+// Its AI: aliases in order, bounds of a request, requests a minute.
+const aliasOrder: readonly Alias[] = ["default", "fast", "smart", "embedding"];
+const chatKeys = ["model", "messages", "max_tokens", "stream", "temperature", "top_p", "stop", "tools", "tool_choice", "response_format", "parallel_tool_calls", "seed", "reasoning_effort", "member"];
+const maxAiBody = 10 << 20, maxAiOutput = 128000, maxInputs = 256, aiPerMinute = 60, fakeDimensions = 8;
+// A fake count of tokens: one per 4 characters.
+const tokensOf = (text: string): number => Math.ceil(text.length / 4);
+// A vector of a text, the same for the same text: unit length.
+function vectorOf(text: string, dimensions: number): number[] {
+  const values: number[] = [];
+  for (let block = 0; values.length < dimensions; block++) {
+    for (const b of createHash("sha256").update(block + ":" + text).digest()) values.push(b / 127.5 - 1);
+  }
+  const kept = values.slice(0, dimensions), norm = Math.hypot(...kept) || 1;
+  return kept.map(x => x / norm);
+}
+
 const fold = (s: string): string => s.normalize("NFD").replace(/\p{Mn}/gu, "").toLowerCase();
 
 function send(response: ServerResponse, status: number, value?: unknown, headers: Record<string, string> = {}): void {
@@ -153,7 +193,7 @@ async function body(request: IncomingMessage, limit: number): Promise<Buffer | n
 // environment names one). What member() and the modules of the SDK read is
 // then this Chest's.
 export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChest> {
-  const capabilities = new Set(options.capabilities ?? ["members", "files", "notifications"]);
+  const capabilities = new Set(options.capabilities ?? ["members", "files", "notifications", "ai"]);
   const email = capabilities.has("members.email");
   const tool = process.env["CHEST_TOOL"] || "tool";
   const token = randomBytes(32).toString("base64url");
@@ -164,7 +204,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   const receives = options.receives ?? ["member.*"];
   // The erasures the tool was told of, by emit: those it may acknowledge.
   const erasures = new Set<string>();
-  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], emit: async () => 0, close: async () => {} };
+  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], ai: [], emit: async () => 0, close: async () => {} };
   const former = [...(options.former ?? [])];
   let window = 0, calls = 0;
   const shown = (m: Member) => ({ id: m.id, first_name: m.firstName, last_name: m.lastName, name: m.name, photo: m.photo, role: m.role, admin: m.isAdmin, builder: m.isBuilder, groups: m.groups, ...(email && m.email !== undefined ? { email: m.email } : {}) });
@@ -369,6 +409,100 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     send(response, 200, { delivered: kept, skipped: ids.filter(id => !access(id)) });
   }
 
+  // Its AI: the declared aliases, the spending this month, the requests this
+  // minute.
+  const mapped = (options.ai?.models ?? aliasOrder.map((alias): FakeAiModel => ({ alias, model: "fake-" + alias }))).map(m => ({ alias: m.alias, model: m.model, provider: m.provider ?? "compatible", input: m.input ?? 1, output: m.output ?? 2 }));
+  const cap = options.ai?.cap ?? 5;
+  const aiMinute: Window = { start: 0, count: 0 };
+  let spent = 0;
+  const month = () => new Date().toISOString().slice(0, 7);
+  const resets = () => {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString().replace(".000Z", "Z");
+  };
+  const spend = (m: { input: number; output: number }, input: number, output: number): number => {
+    const cost = Math.round((input * m.input + output * m.output) / 1e6 * 1e6) / 1e6;
+    spent = Math.round((spent + cost) * 1e6) / 1e6;
+    return cost;
+  };
+  // echo is the text of the last user message: its text, or its text parts.
+  const echo = (request: Record<string, unknown>): string => {
+    const last = [...request["messages"] as { role?: unknown; content?: unknown }[]].reverse().find(m => m?.role === "user")?.content;
+    return typeof last === "string" ? last : Array.isArray(last) ? last.map(p => (p as { text?: unknown })?.text).filter(t => typeof t === "string").join("") : "";
+  };
+
+  async function aiRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    const raw = request.method === "POST" ? await body(request, maxAiBody) : null;
+    let command: Record<string, unknown> | null = null;
+    try {
+      const value = JSON.parse(raw?.toString() ?? "") as unknown;
+      if (value !== null && typeof value === "object" && !Array.isArray(value)) command = value as Record<string, unknown>;
+    } catch {
+      command = null;
+    }
+    chest.ai.push({ path: url.pathname, body: command });
+    if (!capabilities.has("ai")) return send(response, 403, { error: "capability_not_granted" });
+    if (request.method === "GET" && url.pathname === "/ai/models") return send(response, 200, { models: [...mapped].sort((a, b) => aliasOrder.indexOf(a.alias) - aliasOrder.indexOf(b.alias)) });
+    if (request.method === "GET" && url.pathname === "/ai/usage") return send(response, 200, { month: month(), spent, cap, resets: resets() });
+    if (request.method !== "POST" || (url.pathname !== "/ai/chat" && url.pathname !== "/ai/embeddings")) return send(response, 404, { error: "not_found" });
+    if (raw === null) return send(response, 413, { error: "too_large" });
+    const chat = url.pathname === "/ai/chat";
+    if (!command || !Object.keys(command).every(k => chat ? chatKeys.includes(k) : ["model", "input", "dimensions", "member"].includes(k))) return send(response, 400, { error: "invalid_body" });
+    const model = mapped.find(m => m.alias === command!["model"]);
+    if (!model) return send(response, 403, { error: "model_not_allowed" });
+    const member = command["member"];
+    if (member !== undefined && (typeof member !== "string" || !memberIdPattern.test(member))) return send(response, 400, { error: "invalid_body" });
+    const now = Date.now();
+    // refused says the refusal of a valid request, if any: the rate, the
+    // provider, the cap.
+    const refused = (): boolean => {
+      const busy = live(aiMinute, 60_000, now) && aiMinute.count >= aiPerMinute;
+      if (busy) send(response, 429, { error: "rate_limited" }, wait(aiMinute, 60_000, now));
+      else {
+        count(aiMinute, 60_000, now, 1);
+        if (options.ai?.unavailable) send(response, options.ai.unavailable === "provider_key_invalid" ? 502 : 503, { error: options.ai.unavailable });
+        else if (spent >= cap) send(response, 402, { error: "cap_reached", scope: "tool", resets: resets() });
+      }
+      return response.headersSent;
+    };
+    if (!chat) {
+      const input = command["input"], texts = typeof input === "string" ? [input] : input, dimensions = command["dimensions"] ?? fakeDimensions;
+      if (!Array.isArray(texts) || texts.length < 1 || texts.length > maxInputs || !texts.every(t => typeof t === "string") || typeof dimensions !== "number" || !Number.isInteger(dimensions) || dimensions < 1 || dimensions > 4096) return send(response, 400, { error: "invalid_body" });
+      if (refused()) return;
+      const used = texts.reduce((sum: number, t: string) => sum + tokensOf(t), 0);
+      const cost = spend(model, used, 0);
+      return send(response, 200, { object: "list", data: texts.map((t: string, index) => ({ object: "embedding", index, embedding: vectorOf(t, dimensions) })), model: model.model, usage: { prompt_tokens: used, total_tokens: used, cost } });
+    }
+    const messages = command["messages"], limit = command["max_tokens"] ?? 4096;
+    if (!Array.isArray(messages) || messages.length < 1 || !messages.every(m => m !== null && typeof m === "object" && typeof (m as { role?: unknown }).role === "string") || typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > maxAiOutput || !(command["stream"] === undefined || typeof command["stream"] === "boolean")) return send(response, 400, { error: "invalid_body" });
+    if (refused()) return;
+    const given = options.ai?.reply ? options.ai.reply(command) : echo(command);
+    const text = typeof given === "string" ? given : given.text ?? "";
+    const calls = (typeof given === "string" ? [] : given.toolCalls ?? []).map((c, i) => ({ id: c.id ?? `call_${i + 1}`, type: "function" as const, function: { name: c.name, arguments: c.arguments } }));
+    const input = tokensOf(JSON.stringify(messages)), output = tokensOf(text + calls.map(c => c.function.name + c.function.arguments).join(""));
+    const usage = { prompt_tokens: input, completion_tokens: output, total_tokens: input + output, prompt_tokens_details: { cached_tokens: 0 }, cost: spend(model, input, output) };
+    const finish = calls.length ? "tool_calls" : "stop";
+    const head = { id: "chatcmpl-fake", created: Math.floor(now / 1000), model: model.model };
+    if (command["stream"] !== true) {
+      return send(response, 200, { ...head, object: "chat.completion", choices: [{ index: 0, message: { role: "assistant", content: calls.length && !text ? null : text, ...(calls.length ? { tool_calls: calls } : {}) }, finish_reason: finish }], usage });
+    }
+    // Streamed: the role, the text word by word, each call's name then its
+    // arguments in two halves, the finish reason, the usage, [DONE].
+    const chunk = (choices: unknown[], extra: Record<string, unknown> = {}) => `data: ${JSON.stringify({ ...head, object: "chat.completion.chunk", choices, ...extra })}\n\n`;
+    const delta = (d: Record<string, unknown>, finishReason: string | null = null) => chunk([{ index: 0, delta: d, finish_reason: finishReason }]);
+    const parts = [delta({ role: "assistant", content: "" })];
+    for (const word of text.match(/\S+\s*|\s+/gu) ?? []) parts.push(delta({ content: word }));
+    calls.forEach((c, index) => {
+      const half = Math.ceil(c.function.arguments.length / 2);
+      parts.push(delta({ tool_calls: [{ index, id: c.id, type: "function", function: { name: c.function.name, arguments: "" } }] }));
+      for (const piece of [c.function.arguments.slice(0, half), c.function.arguments.slice(half)]) if (piece) parts.push(delta({ tool_calls: [{ index, function: { arguments: piece } }] }));
+    });
+    parts.push(delta({}, finish), chunk([], { usage }), "data: [DONE]\n\n");
+    response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });
+    for (const part of parts) response.write(part);
+    response.end();
+  }
+
   // The acknowledgment of an erasure the tool was told of (emit).
   async function erasuresRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     if (!receives.includes("member.*")) return send(response, 403, { error: "capability_not_granted" });
@@ -384,6 +518,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     const route = url.pathname.startsWith("/erasures/") ? erasuresRoute
+      : url.pathname.startsWith("/ai/") ? aiRoute
       : url.pathname === "/members" || url.pathname.startsWith("/members/") || url.pathname === "/groups" ? members
       : url.pathname === "/files" || url.pathname.startsWith("/files/") ? filesRoute
       : url.pathname === "/badges" || url.pathname.startsWith("/badges/") || url.pathname.startsWith("/notifications") ? notificationsRoute : null;

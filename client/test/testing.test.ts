@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { mock, test } from "node:test";
-import { CapabilityNotGranted, ChestError, QuotaExceeded, RateLimited, TooLarge } from "../src/errors.js";
+import * as ai from "../src/ai.js";
+import { AiCapReached, AiModelNotAllowed, AiUnavailable, CapabilityNotGranted, ChestError, QuotaExceeded, RateLimited, TooLarge } from "../src/errors.js";
 import * as files from "../src/files.js";
 import { member, type Member } from "../src/member.js";
 import * as members from "../src/members.js";
@@ -194,5 +195,108 @@ test("its notification quotas are a Chest's, and a refused call changes nothing"
   } finally {
     await chest.close();
     mock.timers.reset();
+  }
+});
+
+test("its AI answers deterministically, streamed or not, and keeps the calls", async () => {
+  const chest = await fakeChest();
+  try {
+    const messages: ai.ChatMessage[] = [{ role: "system", content: "Be brief." }, { role: "user", content: "Hello there, Chest" }];
+    const r = await ai.chat({ model: "default", messages, member: camille.id });
+    assert.deepEqual([r.text, r.model, r.finishReason, r.toolCalls], ["Hello there, Chest", "fake-default", "stop", []]);
+    assert.ok(r.usage.input > 0 && r.usage.output > 0 && r.usage.cost > 0);
+    const pieces: ai.ChatChunk[] = [];
+    for await (const piece of ai.chat({ model: "fast", messages, stream: true })) pieces.push(piece);
+    assert.equal(pieces.map(p => p.text).join(""), "Hello there, Chest");
+    assert.equal(pieces.at(-2)?.finishReason, "stop");
+    assert.deepEqual(pieces.at(-1)?.usage, r.usage);
+    assert.deepEqual(chest.ai.map(c => c.path), ["/ai/chat", "/ai/chat"]);
+    assert.deepEqual(chest.ai[0]?.body, { model: "default", messages, member: camille.id });
+
+    const one = await ai.embed({ model: "embedding", input: ["a", "b", "a"] });
+    assert.equal(one.model, "fake-embedding");
+    assert.equal(one.embeddings[0]?.length, 8);
+    assert.deepEqual(one.embeddings[0], one.embeddings[2]);
+    assert.notDeepEqual(one.embeddings[0], one.embeddings[1]);
+    assert.ok(Math.abs(Math.hypot(...one.embeddings[1]!) - 1) < 1e-9);
+    assert.equal((await ai.embed({ model: "embedding", input: "a", dimensions: 100 })).embeddings[0]?.length, 100);
+
+    assert.deepEqual((await ai.models()).map(m => [m.alias, m.model, m.provider]), [["default", "fake-default", "compatible"], ["fast", "fake-fast", "compatible"], ["smart", "fake-smart", "compatible"], ["embedding", "fake-embedding", "compatible"]]);
+    const month = await ai.usage();
+    assert.equal(month.cap, 5);
+    assert.equal(month.month, new Date().toISOString().slice(0, 7));
+    assert.ok(month.spent > 0 && month.resetsAt > new Date());
+    const raw = await fetch(chest.api + "/ai/chat", { method: "POST", body: JSON.stringify({ model: "default", messages, n: 2 }) });
+    assert.deepEqual([raw.status, await raw.json()], [400, { error: "invalid_body" }]);
+  } finally {
+    await chest.close();
+  }
+});
+
+test("its AI answers what reply says, tool calls too, streamed in pieces", async () => {
+  const asked: unknown[] = [];
+  const chest = await fakeChest({ ai: { reply: request => { asked.push(request["tools"]); return { toolCalls: [{ name: "lookup", arguments: "{\"id\":\"42\"}" }] }; } } });
+  try {
+    const tools: ai.ChatTool[] = [{ type: "function", function: { name: "lookup", parameters: { type: "object" } } }];
+    const r = await ai.chat({ model: "smart", messages: [{ role: "user", content: "Task 42?" }], tools });
+    assert.deepEqual([r.text, r.finishReason, r.toolCalls], ["", "tool_calls", [{ id: "call_1", name: "lookup", arguments: "{\"id\":\"42\"}" }]]);
+    assert.deepEqual(r.message, { role: "assistant", content: null, tool_calls: [{ id: "call_1", type: "function", function: { name: "lookup", arguments: "{\"id\":\"42\"}" } }] });
+    assert.deepEqual(asked, [tools]);
+    const calls: { id?: string; name?: string; arguments: string }[] = [];
+    for await (const piece of ai.chat({ model: "smart", messages: [{ role: "user", content: "Task 42?" }], stream: true })) {
+      for (const d of piece.toolCalls ?? []) {
+        const call = calls[d.index] ??= { arguments: "" };
+        if (d.id) call.id = d.id;
+        if (d.name) call.name = d.name;
+        call.arguments += d.arguments ?? "";
+      }
+    }
+    assert.deepEqual(calls, [{ id: "call_1", name: "lookup", arguments: "{\"id\":\"42\"}" }]);
+  } finally {
+    await chest.close();
+  }
+});
+
+test("its AI refuses as the Chest's: undeclared model, cap, connector, capability, rate", async () => {
+  const chest = await fakeChest({ ai: { models: [{ alias: "default", model: "m", input: 1_000_000, output: 1_000_000 }], cap: 1 } });
+  try {
+    await assert.rejects(ai.chat({ model: "fast", messages: [{ role: "user", content: "a" }] }), AiModelNotAllowed);
+    assert.deepEqual((await ai.models()).map(m => m.alias), ["default"]);
+    // Each call costs a euro a token: the first spends the cap, the next is refused.
+    await ai.chat({ model: "default", messages: [{ role: "user", content: "a" }] });
+    await assert.rejects(ai.chat({ model: "default", messages: [{ role: "user", content: "a" }] }), (e: unknown) => e instanceof AiCapReached && e.scope === "tool" && e.resetsAt > new Date());
+    const month = await ai.usage();
+    assert.ok(month.spent >= month.cap);
+  } finally {
+    await chest.close();
+  }
+  for (const reason of ["no_connector", "provider_key_invalid", "provider_unavailable"] as const) {
+    const down = await fakeChest({ ai: { unavailable: reason } });
+    try {
+      await assert.rejects(ai.chat({ model: "default", messages: [{ role: "user", content: "a" }] }), (e: unknown) => e instanceof AiUnavailable && e.reason === reason);
+      await assert.rejects(ai.embed({ model: "embedding", input: "a" }), AiUnavailable);
+    } finally {
+      await down.close();
+    }
+  }
+  const spent = await fakeChest({ ai: { cap: 0 } });
+  try {
+    await assert.rejects(ai.embed({ model: "embedding", input: "a" }), AiCapReached);
+  } finally {
+    await spent.close();
+  }
+  const without = await fakeChest({ capabilities: ["members"] });
+  try {
+    await assert.rejects(ai.chat({ model: "default", messages: [{ role: "user", content: "a" }] }), CapabilityNotGranted);
+    assert.equal(without.ai.length, 1);
+  } finally {
+    await without.close();
+  }
+  const busy = await fakeChest();
+  try {
+    for (let i = 0; i < 60; i++) await ai.embed({ model: "embedding", input: "a" });
+    await assert.rejects(ai.embed({ model: "embedding", input: "a" }), RateLimited);
+  } finally {
+    await busy.close();
   }
 });

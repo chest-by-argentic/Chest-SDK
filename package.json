@@ -1,7 +1,7 @@
 {
   "name": "@argentic/chest-sdk",
   "version": "0.2.0",
-  "description": "The client a Chest server tool embeds: the member the Chest asserts on a request, who else has the tool, the tool's own database, its private files, badges and notifications inside the Chest, the events of its members' lifecycle, and a fake Chest for its tests.",
+  "description": "The client a Chest server tool embeds: the member the Chest asserts on a request, who else has the tool, the tool's own database, its private files, badges and notifications inside the Chest, the events of its members' lifecycle, AI models through the Chest, and a fake Chest for its tests.",
   "keywords": [
     "chest",
     "argentic",
@@ -12,7 +12,9 @@
     "database",
     "members",
     "notifications",
-    "events"
+    "events",
+    "ai",
+    "llm"
   ],
   "homepage": "https://github.com/chest-by-argentic/Chest-SDK#readme",
   "bugs": {
@@ -62,6 +64,10 @@
       "types": "./dist/src/events.d.ts",
       "default": "./dist/src/events.js"
     },
+    "./ai": {
+      "types": "./dist/src/ai.d.ts",
+      "default": "./dist/src/ai.js"
+    },
     "./testing": {
       "types": "./dist/src/testing.d.ts",
       "default": "./dist/src/testing.js"
@@ -79,6 +85,7 @@
     "client/src/files.ts",
     "client/src/notifications.ts",
     "client/src/events.ts",
+    "client/src/ai.ts",
     "client/src/testing.ts"
   ],
   "publishConfig": {
