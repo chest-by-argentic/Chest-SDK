@@ -9,17 +9,18 @@ import { member } from "../src/member.js";
 // the tool "web", at 1790000000, with the instance key 00 01 … 1f: the
 // derivation of the key and the encoding are the Chest's, not this test's.
 const chestToken = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
-const signedByChest = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZG1pbiI6dHJ1ZSwiYXVkIjoid2ViIiwiYnVpbGRlciI6ZmFsc2UsImVtYWlsIjoiYWxpY2VAZXhhbXBsZS50ZXN0IiwiZXhwIjoxNzkwMDAwMDYwLCJmYW1pbHlfbmFtZSI6Ik1hcnRpbiIsImdpdmVuX25hbWUiOiJBbGljZSIsImlhdCI6MTc5MDAwMDAwMCwiaXNzIjoiaHR0cHM6Ly93ZWItY2hlc3QuYXRlbGllci5leGFtcGxlIiwibmFtZSI6IkFsaWNlIE1hcnRpbiIsInBpY3R1cmUiOiJodHRwczovL3dlYi1jaGVzdC5hdGVsaWVyLmV4YW1wbGUvX2NoZXN0L21lbWJlcnMvYWxpY2UvcGhvdG8iLCJyb2xlIjoiZWRpdGV1ciIsInN1YiI6ImFsaWNlIn0.O9r0oOReZLNjzd4SNrH2f8qRSUGIJwyDMNa9D6xZP9I";
+const signedByChest = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZG1pbiI6dHJ1ZSwiYXVkIjoid2ViIiwiYnVpbGRlciI6ZmFsc2UsImVtYWlsIjoiYWxpY2VAZXhhbXBsZS50ZXN0IiwiZXhwIjoxNzkwMDAwMDYwLCJmYW1pbHlfbmFtZSI6Ik1hcnRpbiIsImdpdmVuX25hbWUiOiJBbGljZSIsImdyb3VwcyI6WyJncnBfbjRyZHE3dzJ4a3o1bTNidmM2aHkydHBsNGUiXSwiaWF0IjoxNzkwMDAwMDAwLCJpc3MiOiJodHRwczovL3dlYi1jaGVzdC5hdGVsaWVyLmV4YW1wbGUiLCJuYW1lIjoiQWxpY2UgTWFydGluIiwicGljdHVyZSI6Ii9fY2hlc3QvbWVtYmVycy9tYnJfazJxaHg0bXpjN3YzYjZuZnA1cjJ0N3c0eWEvcGhvdG8_dj1hYmNkZWZnaCIsInJvbGUiOiJlZGl0b3IiLCJzdWIiOiJtYnJfazJxaHg0bXpjN3YzYjZuZnA1cjJ0N3c0eWEifQ.M7MUfaYRD9eiDlR45C7eTalqWncBQGsn0dQdPIAH5K4";
 const signedAt = 1790000000;
-const alice = { id: "alice", firstName: "Alice", lastName: "Martin", name: "Alice Martin", email: "alice@example.test", photo: "https://web-chest.atelier.example/_chest/members/alice/photo", role: "editeur", isAdmin: true, isBuilder: false };
+const alice = { id: "mbr_k2qhx4mzc7v3b6nfp5r2t7w4ya", firstName: "Alice", lastName: "Martin", name: "Alice Martin", photo: "/_chest/members/mbr_k2qhx4mzc7v3b6nfp5r2t7w4ya/photo?v=abcdefgh", role: "editor", isAdmin: true, isBuilder: false, groups: ["grp_n4rdq7w2xkz5m3bvc6hy2tpl4e"], email: "alice@example.test" };
+const bob = "mbr_bobaaaaaaaaaaaaaaaaaaaaaaa";
 
 const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString("base64url");
-const keyOf = (token: string): Buffer => createHmac("sha256", Buffer.from(token, "utf8")).update("Chest-Member v1").digest();
+const keyOf = (token: string, label = "Chest-Member v2"): Buffer => createHmac("sha256", Buffer.from(token, "utf8")).update(label).digest();
 // sign builds an assertion as the Chest does, with what a case changes.
-function sign(claims: Record<string, unknown> = {}, header: Record<string, unknown> = { alg: "HS256", typ: "JWT" }, token = chestToken): string {
+function sign(claims: Record<string, unknown> = {}, header: Record<string, unknown> = { alg: "HS256", typ: "JWT" }, token = chestToken, label?: string): string {
   const now = Math.floor(Date.now() / 1000);
-  const body = encode(header) + "." + encode({ iss: "https://web-chest.atelier.example", aud: "web", iat: now, exp: now + 60, sub: "bob", given_name: "Bob", family_name: "", name: "Bob", email: "bob@example.test", picture: "", role: "", admin: false, builder: false, ...claims });
-  return body + "." + createHmac("sha256", keyOf(token)).update(body).digest("base64url");
+  const body = encode(header) + "." + encode({ iss: "https://web-chest.atelier.example", aud: "web", iat: now, exp: now + 60, sub: bob, given_name: "Bob", family_name: "", name: "Bob", picture: "", role: "", admin: false, builder: false, groups: [], ...claims });
+  return body + "." + createHmac("sha256", keyOf(token, label)).update(body).digest("base64url");
 }
 const web = (value?: string | string[]): Request => {
   const headers = new Headers();
@@ -50,9 +51,9 @@ test("an assertion signed by the Chest reads as its member, on a Web Request and
   assert.equal(member(node(signedByChest)), null);
 });
 
-test("photo and role are absent when the Chest names none", () => {
-  assert.deepEqual(member(web(sign())), { id: "bob", firstName: "Bob", lastName: "", name: "Bob", email: "bob@example.test", isAdmin: false, isBuilder: false });
-  assert.deepEqual(member(node(sign({ role: "lecteur", builder: true }))), { id: "bob", firstName: "Bob", lastName: "", name: "Bob", email: "bob@example.test", role: "lecteur", isAdmin: false, isBuilder: true });
+test("photo and role are null when the Chest names none; the address is there only when the tool may read it", () => {
+  assert.deepEqual(member(web(sign())), { id: bob, firstName: "Bob", lastName: "", name: "Bob", photo: null, role: null, isAdmin: false, isBuilder: false, groups: [] });
+  assert.deepEqual(member(node(sign({ role: "reader", builder: true, email: "bob@example.test" }))), { id: bob, firstName: "Bob", lastName: "", name: "Bob", photo: null, role: "reader", isAdmin: false, isBuilder: true, groups: [], email: "bob@example.test" });
 });
 
 test("no assertion, or one that is not exactly a Chest-Member, is null — never an error", () => {
@@ -74,7 +75,12 @@ test("no assertion, or one that is not exactly a Chest-Member, is null — never
     "another tool": sign({ aud: "notes" }),
     "audience list": sign({ aud: ["web"] }),
     "no subject": sign({ sub: "" }),
-    "claim missing": sign({ email: undefined }),
+    "a provider subject": sign({ sub: "0b0e6e8c-5a59-4f6e-9a39-0d4a8d2f7b11" }),
+    "claim missing": sign({ groups: undefined }),
+    "groups of another shape": sign({ groups: ["nord"] }),
+    "groups not a list": sign({ groups: "grp_n4rdq7w2xkz5m3bvc6hy2tpl4e" }),
+    "address of another type": sign({ email: 1 }),
+    "signed for the former shape": sign({}, undefined, chestToken, "Chest-Member v1"),
     "claim of another type": sign({ admin: "true" }),
     "tampered payload": header + "." + encode({ ...JSON.parse(Buffer.from(payload, "base64url").toString()) as object, admin: true }) + "." + signature,
     "tampered signature": header + "." + payload + "." + signature.slice(0, -2) + (signature.endsWith("AA") ? "BB" : "AA"),

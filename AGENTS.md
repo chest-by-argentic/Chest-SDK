@@ -7,15 +7,17 @@ is the short path and the mistakes to avoid.
 ## What it is
 
 A Chest server tool (tool contract v2) is an ordinary web server that runs in
-a container without network, started by its Chest. The SDK gives it three
-things, all server-side:
+a container without network, started by its Chest. The SDK gives it, all
+server-side:
 
 | Need | Import | Requires |
 |---|---|---|
 | Who is signed in on this request | `member(request)` from `@argentic/chest-sdk/member` | nothing (the Chest sets `CHEST_TOKEN`, `CHEST_TOOL`) |
 | The tool's own PostgreSQL database | `databaseUrl()` from `@argentic/chest-sdk/database` | `"capabilities": ["database"]` in `chest.json` |
 | The tool's private files | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` (and `"files": {"quota", "maxObject"}` beyond 1 GiB, 32 MiB per object) |
-| Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `Unavailable` from `@argentic/chest-sdk/errors` | — |
+| Who else has the tool | `list`, `get`, `lookup`, `groups.list` from `@argentic/chest-sdk/members` | `"capabilities": ["members"]` (`"members.email"` too for addresses) |
+| Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `Unavailable` from `@argentic/chest-sdk/errors` | — |
+| Tests without a Chest | `fakeChest`, `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
 
 ## Install
 
@@ -55,6 +57,21 @@ await files.put("reports/2026.pdf", bytes, "application/pdf");
 const { url } = await files.url("reports/2026.pdf"); // 15-minute signed link
 ```
 
+```ts
+// "capabilities": ["members"]: store member ids, resolve names when rendering.
+import * as members from "@argentic/chest-sdk/members";
+const rows = await sql`select * from tasks order by id desc limit 50`;
+const people = await members.lookup(rows.map(r => r.assignee).filter(Boolean));
+```
+
+```ts
+// A test of the tool, with no Chest running.
+import { fakeChest, withMember } from "@argentic/chest-sdk/testing";
+const chest = await fakeChest({ members: [camille] });
+const response = await GET(withMember(new Request("http://tool.test/chest/api/me"), camille));
+await chest.close();
+```
+
 ## Let a member upload a file
 
 The browser sends the bytes to the Chest itself; the tool only authorises one
@@ -92,6 +109,13 @@ at install and at every update.
 - **`member()` is the only source of identity.** Check it on every request
   under `/chest`; `null` means "not a member" — answer 401/403. Never trust a
   user id, email or role sent in a body, query or cookie of your own.
+- **Store member ids, never names or addresses.** `member.id` (`mbr_…`) is
+  stable and the same in every tool of the Chest; names and addresses change.
+  Resolve them when rendering with `members.lookup`; a `former` answer is
+  someone who left (“Camille Martin (former member)”).
+- **A member without access does not exist for the tool.** `members.get`
+  answers `null` and `lookup` puts the id in `unknown`, exactly as for an id
+  that was never a member.
 - **The public host has no member.** The Chest never sends an assertion there;
   public pages must work for anonymous visitors.
 - **Business rules are yours.** The SDK is not a security boundary: the Chest
@@ -130,6 +154,8 @@ at install and at every update.
 | The browser's `PUT` answers 415 `type_refused` or 400 `type_mismatch` | The file's `Content-Type` is not one of `types`, or its first bytes are not of the type sent. |
 | `TooLarge` from `uploadUrl` or `put` | Beyond the tool's largest object (32 MiB unless `chest.json` asks `"files": {"maxObject": …}`). |
 | `ChestError` with `invalid_name` | A file name outside the allowed shape (up to 8 segments of `[A-Za-z0-9._-]`, none starting with `.` or `-`). |
+| `member.email` is always undefined | The tool does not hold `members.email`: addresses are a permission of their own. |
+| `RateLimited` from `members` | More than 600 calls a minute: use `lookup` (200 ids a call, kept a minute) instead of one `get` per row. |
 | Build fails in the browser bundle | The SDK was imported from client code. |
 
 ## Contributing to this package

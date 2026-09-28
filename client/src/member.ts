@@ -1,30 +1,51 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 
-// The member the Chest asserts on a request of the team host of a server
-// tool (/chest and below), read from the Chest-Member header. photo and role
-// are absent when the Chest names none.
+// A member of the Chest, as the tool sees them: on a request of its team host
+// (member), and in its members (members.ts).
+//
+// - id is the member's identifier in this Chest, "mbr_" and 26 characters:
+//   the same in every tool of the Chest, never reused, never derived from an
+//   address or an account. Store it; resolve names when rendering.
+// - name is "First Last", or the local part of the address when the member
+//   set no name.
+// - photo is the address of their picture on the tool's team host
+//   (/_chest/members/{id}/photo?v=<rev>), role one of the roles chest.json
+//   declares: null when there is none.
+// - isBuilder says they build this tool; groups are the groups that give them
+//   this tool ("grp_…").
+// - email is there only when the tool holds "members.email".
 export type Member = {
   id: string;
   firstName: string;
   lastName: string;
   name: string;
-  email: string;
-  photo?: string;
-  role?: string;
+  photo: string | null;
+  role: string | null;
   isAdmin: boolean;
   isBuilder: boolean;
+  groups: string[];
+  email?: string;
 };
 
+// The grammars of the identifiers the Chest mints: a tool may check with them
+// the identifiers it stores.
+export const memberIdPattern = /^mbr_[a-z2-7]{26}$/u;
+export const groupIdPattern = /^grp_[a-z2-7]{26}$/u;
+
 // The key of the assertions is HMAC-SHA256 of this label under the text of
-// CHEST_TOKEN, exactly as the Chest derives it (chest/toolfront).
-const label = "Chest-Member v1";
+// CHEST_TOKEN, exactly as the Chest derives it (chest/toolfront). Its version
+// is the shape of the claims: an assertion of another shape is refused. This
+// module stands alone (node:* only), so that it can be copied by itself.
+const label = "Chest-Member v2";
+// The claims every assertion carries; email only for a tool that holds
+// members.email.
+const claims = ["iss", "aud", "iat", "exp", "sub", "given_name", "family_name", "name", "picture", "role", "admin", "builder", "groups"] as const;
 // Clocks of the Chest and of the container may differ by this much, in seconds.
 const skew = 5;
 // An assertion is a few hundred bytes; anything longer is not one.
 const maxLength = 8192;
 const compact = /^([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/u;
-const claims = ["iss", "aud", "iat", "exp", "sub", "given_name", "family_name", "name", "email", "picture", "role", "admin", "builder"] as const;
 
 function assertionOf(request: IncomingMessage | Request): string | null {
   const headers = request.headers as Headers | IncomingMessage["headers"];
@@ -45,10 +66,11 @@ function json(part: string): Record<string, unknown> | null {
 
 // member returns who the Chest says is making this request, or null when the
 // request carries no valid assertion — absent, malformed, signed with another
-// key, for another tool, expired or not yet valid —, or when CHEST_TOKEN or
-// CHEST_TOOL is missing. It never throws for what a request carries. Only the
-// Chest's front reaches the tool; the signature is a second defence, and the
-// tool still decides what a member may do with its own rules.
+// key or for another shape, for another tool, expired or not yet valid —, or
+// when CHEST_TOKEN or CHEST_TOOL is missing. It never throws for what a
+// request carries. Only the Chest's front reaches the tool; the signature is a
+// second defence, and the tool still decides what a member may do with its
+// own rules.
 export function member(request: IncomingMessage | Request): Member | null {
   const token = process.env["CHEST_TOKEN"];
   const tool = process.env["CHEST_TOOL"];
@@ -65,11 +87,12 @@ export function member(request: IncomingMessage | Request): Member | null {
   if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) return null;
   const payload = json(encodedPayload);
   if (!payload || !claims.every(name => Object.hasOwn(payload, name))) return null;
-  const { iss, aud, iat, exp, sub, given_name, family_name, name, email, picture, role, admin, builder } = payload;
-  if (typeof iss !== "string" || iss === "" || aud !== tool || typeof sub !== "string" || sub === "") return null;
+  const { iss, aud, iat, exp, sub, given_name, family_name, name, email, picture, role, admin, builder, groups } = payload;
+  if (typeof iss !== "string" || iss === "" || aud !== tool || typeof sub !== "string" || !memberIdPattern.test(sub)) return null;
   if (typeof iat !== "number" || !Number.isSafeInteger(iat) || typeof exp !== "number" || !Number.isSafeInteger(exp) || exp <= iat) return null;
   const now = Math.floor(Date.now() / 1000);
   if (iat > now + skew || exp <= now - skew) return null;
-  if (typeof given_name !== "string" || typeof family_name !== "string" || typeof name !== "string" || typeof email !== "string" || typeof picture !== "string" || typeof role !== "string" || typeof admin !== "boolean" || typeof builder !== "boolean") return null;
-  return { id: sub, firstName: given_name, lastName: family_name, name, email, ...(picture === "" ? {} : { photo: picture }), ...(role === "" ? {} : { role }), isAdmin: admin, isBuilder: builder };
+  if (typeof given_name !== "string" || typeof family_name !== "string" || typeof name !== "string" || typeof picture !== "string" || typeof role !== "string" || typeof admin !== "boolean" || typeof builder !== "boolean") return null;
+  if (!Array.isArray(groups) || groups.length > 16 || !groups.every(g => typeof g === "string" && groupIdPattern.test(g)) || (email !== undefined && typeof email !== "string")) return null;
+  return { id: sub, firstName: given_name, lastName: family_name, name, photo: picture === "" ? null : picture, role: role === "" ? null : role, isAdmin: admin, isBuilder: builder, groups: [...groups] as string[], ...(email === undefined ? {} : { email }) };
 }

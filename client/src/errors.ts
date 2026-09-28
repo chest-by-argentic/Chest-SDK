@@ -29,6 +29,14 @@ export class QuotaExceeded extends ChestError {
   }
 }
 
+// The tool called the Chest's API more often than its bound (600 calls a
+// minute for its members): it waits before calling again.
+export class RateLimited extends ChestError {
+  constructor() {
+    super("rate_limited", 429, "the Chest refused: too many calls, wait a minute");
+  }
+}
+
 // One object is beyond the bound of one (for a file, the tool's largest
 // object: 32 MiB unless its manifest asks more, 512 MiB at most).
 export class TooLarge extends ChestError {

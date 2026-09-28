@@ -1,12 +1,11 @@
-import { CapabilityNotGranted, ChestError, QuotaExceeded, TooLarge, Unavailable } from "./errors.js";
+import { json, read, ask as chest, refusal as refused } from "./api.js";
+import { ChestError, TooLarge, Unavailable } from "./errors.js";
 
 // The private files of a server tool whose chest.json declares
 // "capabilities": ["files"]: kept by its Chest (1 GiB, 10,000 objects, 32 MiB
 // each, unless the manifest asks otherwise: "files": {"quota", "maxObject"}),
-// never on the tool's own disk. The container has no network: the Chest's API
-// is at CHEST_API (http://127.0.0.1:<port>, the tool's launcher, which relays
-// each request to the Chest). A call reaches the tool's files only: its
-// instance is its identity.
+// never on the tool's own disk, through the Chest's API (CHEST_API, api.ts).
+// A call reaches the tool's files only: its instance is its identity.
 //
 //   import * as files from "@argentic/chest-sdk/files";
 //   await files.put("photos/cat.png", bytes, "image/png");
@@ -26,8 +25,6 @@ export type FilePage = { files: FileObject[]; next: string | null };
 
 // The largest object a manifest may ask; the Chest holds each tool to its own.
 const maxObject = 512 << 20;
-const maxAnswer = 4 << 20;
-const deadline = 120000;
 // The grammar of a name, the same as the Chest's (chest/toolfiles, name).
 const namePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,7}$/u;
 // A media type an upload accepts: without parameters, "family/*" for a whole
@@ -39,81 +36,13 @@ const uploadPattern = /^https:\/\/[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?\/_chest\/fi
 // The longest an upload may wait, in seconds.
 const uploadLife = 900;
 
-// base is the Chest's API as the launcher gives it; without, the version
-// does not keep files.
-function base(): string {
-  const value = process.env["CHEST_API"];
-  if (typeof value !== "string" || !/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/u.test(value) || Number(value.slice(17)) > 65535) throw new CapabilityNotGranted("files");
-  return value;
-}
-
 function checkName(name: unknown): string {
   if (typeof name !== "string" || !namePattern.test(name)) throw new ChestError("invalid_name", 400, "invalid file name");
   return name;
 }
 
-// ask sends one request to the Chest; a failure to reach it is Unavailable.
-async function ask(method: string, path: string, init: { body?: Uint8Array<ArrayBuffer> | string; type?: string } = {}): Promise<Response> {
-  const headers: Record<string, string> = {};
-  if (init.type !== undefined) headers["Content-Type"] = init.type;
-  try {
-    return await fetch(base() + path, { method, headers, ...(init.body !== undefined ? { body: init.body } : {}), redirect: "error", signal: AbortSignal.timeout(deadline) });
-  } catch (error) {
-    if (error instanceof ChestError) throw error;
-    throw new Unavailable();
-  }
-}
-
-// read takes a body of limit bytes at most; beyond, or cut, the answer is not
-// the Chest's.
-async function read(response: Response, limit: number): Promise<Uint8Array> {
-  const declared = Number(response.headers.get("content-length") ?? "0");
-  if (declared > limit) throw new Unavailable();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for await (const chunk of response.body ?? []) {
-      size += chunk.byteLength;
-      if (size > limit) throw new Unavailable();
-      chunks.push(chunk);
-    }
-  } catch {
-    throw new Unavailable();
-  }
-  const all = new Uint8Array(size);
-  let at = 0;
-  for (const chunk of chunks) {
-    all.set(chunk, at);
-    at += chunk.byteLength;
-  }
-  return all;
-}
-
-async function json(response: Response): Promise<unknown> {
-  try {
-    return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(await read(response, maxAnswer)));
-  } catch (error) {
-    if (error instanceof ChestError) throw error;
-    throw new Unavailable();
-  }
-}
-
-// refusal turns an answer that is not a success into what the tool tests.
-async function refusal(response: Response): Promise<ChestError> {
-  if (response.status === 403) return new CapabilityNotGranted("files");
-  if (response.status === 413) return new TooLarge();
-  if (response.status === 429) return new QuotaExceeded();
-  if (response.status >= 500) return new Unavailable();
-  let code = "refused";
-  try {
-    const body = await json(response);
-    const given = (body as { error?: unknown } | null)?.error;
-    if (typeof given === "string" && /^[a-z_]{1,40}$/u.test(given)) code = given;
-  } catch {
-    // The code stays "refused".
-  }
-  return new ChestError(code, response.status, `the Chest refused: ${code}`);
-}
+const ask = (method: string, path: string, init?: { body?: Uint8Array<ArrayBuffer> | string; type?: string }) => chest("files", method, path, init);
+const refusal = (response: Response) => refused(response, "files");
 
 function isObject(value: unknown): value is FileObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
