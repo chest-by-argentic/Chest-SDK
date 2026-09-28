@@ -21,7 +21,8 @@ export class CapabilityNotGranted extends ChestError {
 }
 
 // What the tool keeps would go beyond what its Chest gives it: its total
-// (1 GiB of files) or its count (10,000 objects).
+// (1 GiB of files unless its manifest asks more) or its count (10,000
+// objects).
 export class QuotaExceeded extends ChestError {
   constructor() {
     super("quota_exceeded", 429, "the Chest refused: the tool's quota would be exceeded");
@@ -36,7 +37,8 @@ export class RateLimited extends ChestError {
   }
 }
 
-// One object is beyond the bound of one (32 MiB for a file).
+// One object is beyond the bound of one (for a file, the tool's largest
+// object: 32 MiB unless its manifest asks more, 512 MiB at most).
 export class TooLarge extends ChestError {
   constructor() {
     super("too_large", 413, "the Chest refused: the object is too large");

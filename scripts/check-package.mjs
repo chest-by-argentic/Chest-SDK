@@ -21,7 +21,7 @@ const expected = {
   errors: ["CapabilityNotGranted", "ChestError", "QuotaExceeded", "RateLimited", "TooLarge", "Unavailable"],
   member: ["groupIdPattern", "member", "memberIdPattern"],
   database: ["databaseUrl"],
-  files: ["delete", "get", "list", "put", "url"],
+  files: ["delete", "get", "list", "move", "put", "stat", "uploadUrl", "url"],
   members: ["forget", "get", "groups", "list", "lookup"],
   testing: ["fakeChest", "signAssertion", "withMember"],
 };

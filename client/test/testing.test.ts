@@ -80,6 +80,11 @@ test("its bounds and refusals are a Chest's", async () => {
     await assert.rejects(members.list(), CapabilityNotGranted);
     assert.equal(new TextDecoder().decode((await files.get("hello.txt"))?.data), "hello");
     await files.put("notes/a.txt", "a");
+    assert.equal((await files.stat("notes/a.txt"))?.size, 1);
+    assert.equal(await files.stat("none.txt"), null);
+    assert.equal((await files.move("notes/a.txt", "notes/b.txt")).name, "notes/b.txt");
+    assert.equal((await files.move("notes/b.txt", "notes/a.txt")).name, "notes/a.txt");
+    assert.match((await files.uploadUrl("photos/", { maxSize: 1024, types: ["image/*"] })).url, /^https:\/\/tool-chest\.chest\.test\/_chest\/files\/upload\//u);
     assert.deepEqual([...chest.files.keys()].sort(), ["hello.txt", "notes/a.txt"]);
     assert.match((await files.url("notes/a.txt")).url, /^https:\/\/tool-chest\.chest\.test\/_chest\/files\//u);
     await assert.rejects(files.url("none.txt"), (error: unknown) => error instanceof ChestError && error.code === "not_found");

@@ -1,7 +1,7 @@
 // The package root: every published module a tool's code uses (tool contract
 // v2). Each one is also its own subpath (@argentic/chest-sdk/member,
 // /database, /files, /members, /errors), which pulls in nothing else. The
-// files and members APIs are namespaces here, as their names (get, list…)
+// files and members APIs are namespaces here, as their names (get, list, stat, move…)
 // are too plain to stand alone. @argentic/chest-sdk/testing is for a tool's
 // tests only, and is not here.
 export * from "./src/errors.js";

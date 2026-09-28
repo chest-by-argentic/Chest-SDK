@@ -6,7 +6,8 @@ import { forget } from "./members.js";
 
 // For a tool's own tests, never imported by its production code: a member's
 // assertion signed as the Chest signs it, and a Chest's API in the test's
-// process that answers members, groups and files with the Chest's bounds and
+// process that answers members, groups and files (stat, move, links; an
+// upload it authorises but does not receive) with the Chest's bounds and
 // errors.
 //
 //   import { fakeChest, withMember } from "@argentic/chest-sdk/testing";
@@ -182,6 +183,24 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       if (!files.has(name)) return send(response, 404, { error: "not_found" });
       return send(response, 200, { url: `https://${tool}-chest.chest.test/_chest/files/${Buffer.from(name).toString("base64url")}.fake`, expires_in: 900 });
     }
+    if (request.method === "POST" && (url.pathname === "/files/move" || url.pathname === "/files/upload-url")) {
+      const raw = await body(request, 4096);
+      let command: Record<string, unknown> = {};
+      try { command = JSON.parse(raw?.toString() ?? "") as Record<string, unknown>; } catch { command = {}; }
+      if (url.pathname === "/files/upload-url") {
+        // The upload itself goes from a member's browser to the team host,
+        // which a fake Chest does not play: it only authorises it.
+        if (typeof command["name"] !== "string") return send(response, 400, { error: "invalid_body" });
+        return send(response, 200, { url: `https://${tool}-chest.chest.test/_chest/files/upload/${Buffer.from(command["name"]).toString("base64url")}.fake`, method: "PUT", expires_in: typeof command["expires_in"] === "number" ? command["expires_in"] : 900 });
+      }
+      const from = command["from"], to = command["to"];
+      if (typeof from !== "string" || typeof to !== "string" || !namePattern.test(from) || !namePattern.test(to)) return send(response, 400, { error: "invalid_name" });
+      const moving = files.get(from);
+      if (!moving) return send(response, 404, { error: "not_found" });
+      files.delete(from);
+      files.set(to, moving);
+      return send(response, 200, described(to, moving));
+    }
     const name = decodeURIComponent(url.pathname.slice("/files/".length));
     if (!namePattern.test(name)) return send(response, 400, { error: "invalid_name" });
     const object = files.get(name);
@@ -195,6 +214,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       return send(response, 201, described(name, kept));
     }
     if (!object) return send(response, 404, { error: "not_found" });
+    if (request.method === "GET" && url.searchParams.has("stat")) return send(response, 200, described(name, object));
     if (request.method === "GET") return void response.writeHead(200, { "Content-Type": object.type, "Content-Length": String(object.data.byteLength) }).end(object.data);
     if (request.method === "DELETE") {
       files.delete(name);
