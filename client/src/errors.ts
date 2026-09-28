@@ -20,9 +20,10 @@ export class CapabilityNotGranted extends ChestError {
   }
 }
 
-// What the tool keeps would go beyond what its Chest gives it: its total
-// (1 GiB of files unless its manifest asks more) or its count (10,000
-// objects).
+// The call would take the tool beyond what its Chest gives it: for files,
+// their total (1 GiB unless its manifest asks more) or their count (10,000
+// objects); for notifications, 1,000 recipients an hour, 100 items per member
+// a day or 600 badge writes a minute. A refused call changes nothing.
 export class QuotaExceeded extends ChestError {
   constructor() {
     super("quota_exceeded", 429, "the Chest refused: the tool's quota would be exceeded");

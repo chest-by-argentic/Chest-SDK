@@ -2,8 +2,9 @@
 
 `@argentic/chest-sdk` is what a server tool (tool contract v2) embeds to talk
 with its Chest: the member the Chest asserts on a request, the other members
-who have the tool, the address of the tool's own database and its private
-files — and, for the tool's tests, a fake Chest. The SDK has no dependency: it
+who have the tool, the address of the tool's own database, its private
+files, the badges and notifications it shows members inside the Chest — and,
+for the tool's tests, a fake Chest. The SDK has no dependency: it
 only imports `node:*`.
 
 ```sh
@@ -15,26 +16,29 @@ Node 22 or later. ESM only, compiled JavaScript with its type declarations.
 ## Imports
 
 Each module is its own subpath and pulls in nothing else; the root gives them
-all, with the files and members APIs as the namespaces `files` and `members`
-(the testing module is not in the root).
+all, with the files, members and notifications APIs as the namespaces
+`files`, `members` and `notifications` (the testing module is not in the
+root).
 
 | Import | Gives |
 |---|---|
 | `@argentic/chest-sdk/member` | `member(request)`, type `Member`: the member of a request on the team host of a server tool, read from the `Chest-Member` assertion and verified; `null` without a valid assertion. `memberIdPattern`, `groupIdPattern`: the grammars of the identifiers (`mbr_…`, `grp_…`) |
 | `@argentic/chest-sdk/members` | `list`, `get`, `lookup`, `groups.list`, `forget`, types `MemberPage`, `Lookup`, `FormerMember`, `Group`: the members who have the tool (capability `members`, their addresses with `members.email`) |
+| `@argentic/chest-sdk/notifications` | `notify`, `withdraw`, `badge.set`, `badge.setMany`, types `Notice`, `Delivery`, `BadgeCount`, `BadgeWrite`: counters on the tool's tile and items in members' inboxes, inside the Chest (capability `notifications`) |
 | `@argentic/chest-sdk/database` | `databaseUrl()`: the address of the tool's own PostgreSQL database (capability `database`) |
 | `@argentic/chest-sdk/files` | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl`, types `FileObject`, `FileData`, `FilePage`: the tool's private files (capability `files`), kept by the Chest, a 15-minute signed link to one (or to its thumbnail), and uploads straight from a member's browser |
 | `@argentic/chest-sdk/errors` | `ChestError` (`code`, `status`), `CapabilityNotGranted` (403), `TooLarge` (413), `QuotaExceeded` (429), `RateLimited` (429), `Unavailable` (503): what the SDK throws when the Chest does not give what a tool asks |
-| `@argentic/chest-sdk/testing` | `signAssertion`, `withMember`, `fakeChest`, types `FakeChest`, `FakeChestOptions`, `FakeGroup`, `FakeFile`: for the tool's own tests only |
-| `@argentic/chest-sdk` | all of the above but `testing`; `files` and `members` as namespaces |
+| `@argentic/chest-sdk/testing` | `signAssertion`, `withMember`, `fakeChest`, types `FakeChest`, `FakeChestOptions`, `FakeGroup`, `FakeFile`, `FakeNotification`: for the tool's own tests only |
+| `@argentic/chest-sdk` | all of the above but `testing`; `files`, `members` and `notifications` as namespaces |
 
 ```ts
 import { member } from "@argentic/chest-sdk/member";
 import { databaseUrl } from "@argentic/chest-sdk/database";
 import * as files from "@argentic/chest-sdk/files";
 import * as members from "@argentic/chest-sdk/members";
+import * as notifications from "@argentic/chest-sdk/notifications";
 import { CapabilityNotGranted } from "@argentic/chest-sdk/errors";
-// or: import { member, databaseUrl, files, members } from "@argentic/chest-sdk";
+// or: import { member, databaseUrl, files, members, notifications } from "@argentic/chest-sdk";
 ```
 
 Types refer to `node:http` (`IncomingMessage`): a TypeScript project needs
@@ -64,7 +68,7 @@ export function GET(request: Request) {
 A v2 tool is an ordinary web server in a container without network, run by
 its Chest. The Chest's front is the only one to reach it; the tool reaches only
 what its launcher gives it on `127.0.0.1` (its database, the Chest's API for
-its files and its members). Rights come from the Chest — the signed member, the capabilities
+its files, its members and its notifications). Rights come from the Chest — the signed member, the capabilities
 approved for the version — and the Chest enforces them even outside the SDK:
 the SDK makes the calls easier, it is not a security boundary. The full
 contract (manifest `chest.json`, capabilities, build from source, catalogue)
@@ -177,6 +181,86 @@ const people = await members.lookup(rows.flatMap(r => [r.assignee, r.created_by]
 
 To search tasks by assignee name: `members.list({ q })` first, then
 `where assignee = any($ids)`.
+
+## `notifications` — badges and inbox items
+
+A v2 tool that declares `"capabilities": ["notifications"]` (approved like a
+permission: “Shows counters and sends notifications, inside the Chest, to the
+members who have access to it.”) tells its members what needs their
+attention, inside the Chest only — no email, no push to a phone. Two
+primitives:
+
+- a **badge** is a count on the tool's tile in the Chest home and on its row
+  in the tools list, for one member (“99+” beyond 99): a state, set again as
+  often as it changes;
+- a **notification** is an item in a member's inbox (the bell of the Chest):
+  the tool's icon and name, a title, a body, and a link that opens a page of
+  the tool on its team host.
+
+```ts
+import * as notifications from "@argentic/chest-sdk/notifications";
+
+const { delivered, skipped } = await notifications.notify([assignee], {
+  title: "New task: fix the door",       // 1 to 80 characters
+  body: "Before Friday.\nKeys at the desk.", // 280 characters at most; optional
+  path: "/chest/tasks/42",               // under /chest; /chest when not said
+  key: "task:42",                        // optional: replace, then withdraw
+});
+await notifications.withdraw("task:42");             // done: its items go, for everyone
+await notifications.withdraw("task:42", [assignee]); // only for those
+const shown = await notifications.badge.set(assignee, 3);            // false: no access
+const { set, skipped: noAccess } = await notifications.badge.setMany([
+  { memberId: assignee, count: 3 },
+  { memberId: reviewer, count: 0 },    // 0 clears it
+]);
+```
+
+- **Who**: only members who have access to the tool now receive either.
+  `notify` answers `{delivered, skipped}`, each identifier once in the order
+  given; `skipped` holds identifiers the Chest does not know and members
+  without access (as for `members`, the two are indistinguishable). `badge.set`
+  answers `false` for such a member, `setMany` puts them in `skipped`.
+- **`notify(memberIds, {title, body?, path?, key?})`**: 1 to 500 identifiers
+  (a duplicate counts once), one inbox item per recipient. `title` is 1 to 80
+  characters (Unicode code points), `body` 280 at most (an empty body is
+  none). `path` is a page of the tool's private part: `/chest`, or `/chest`
+  followed by `/`, `?` or `#`; printable ASCII without spaces or `\`, 512
+  characters at most, never `//`, no `.` or `..` segment; the Chest builds the
+  link on the tool's team host, so it cannot point anywhere else. `key` is
+  1 to 64 of `a-z 0-9 . _ : -`.
+- **Replace and withdraw.** A notification with the key of an earlier one, for
+  the same member, replaces it: new text, new time, first in the inbox and
+  unread again — never a duplicate. `withdraw(key, memberIds?)` removes the
+  items of that key, from every member or from those named (1 to 500), once
+  the thing they were about is done. It never says what existed.
+- **Plain text.** The Chest removes control characters (a tab or a line break
+  in a title becomes a space; `body` keeps its line breaks) and the characters
+  that reorder text, trims both, and interprets neither Markdown nor HTML.
+  Every item shows the tool's icon and name beside it: a tool cannot pass for
+  the Chest or another tool. A title that is empty once cleaned is refused.
+- **Muting is invisible.** A member may mute the tool in their profile: their
+  new items are then dropped, but they still count as `delivered`, and their
+  badges stay. The tool never learns who muted it.
+- **Badges** go from 0 to 9,999, 0 clears one. `setMany` takes 1 to 500, a
+  member at most once.
+- **Quotas**, per tool: 1,000 recipients an hour (those with access, muted or
+  not), 100 items per member a day (a replacement counts; one recipient at 100
+  refuses the whole call), 600 badge writes a minute (each badge of `setMany`
+  counts). Beyond, `QuotaExceeded` (429, the Chest answers `Retry-After`); a
+  refused call changes nothing.
+- **Lifecycle**: a member who loses access loses the tool's items and badge;
+  removing the tool removes them all. A member's inbox keeps 500 items for 90
+  days.
+- Errors: `CapabilityNotGranted` (403), `QuotaExceeded` (429), `Unavailable`
+  (503, the Chest not reached, or an answer that is not its own: the call may
+  or may not have happened), `ChestError` for the rest (`invalid_id`,
+  `invalid_title`, `invalid_text`, `invalid_path`, `invalid_key`,
+  `invalid_count`, `invalid_body`) — the SDK refuses these before sending
+  anything.
+
+A badge suits a count that goes up and down (tasks assigned, messages
+unread); a notification, an event worth a look — with a key, so that it goes
+away by itself once handled.
 
 ## `databaseUrl()` — database of a server tool
 
@@ -323,10 +407,12 @@ version keeps them.
 import { fakeChest, signAssertion, withMember } from "@argentic/chest-sdk/testing";
 
 const camille = { id: "mbr_k2qhx4mzc7v3b6nfp5r2t7w4ya", firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [] };
-const chest = await fakeChest({ members: [camille], capabilities: ["members", "files"] });
+const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications"] });
 const response = await handler(withMember(new Request("http://tool.test/chest/tasks"), camille));
 assert.deepEqual((await members.list()).members.map(m => m.id), [camille.id]);
 assert.ok(chest.files.has("reports/2026.pdf"));
+assert.deepEqual(chest.notifications, [{ member: camille.id, title: "New task", path: "/chest/tasks/42", key: "task:42" }]);
+assert.equal(chest.badges.get(camille.id), 1);
 await chest.close();
 ```
 
@@ -334,8 +420,9 @@ await chest.close();
 |---|---|
 | `signAssertion(member, {token?, tool?, now?})` | A `Chest-Member` header value signed like the Chest's (the token and tool of the environment by default) |
 | `withMember(request, member, options?)` | The request carrying that assertion: a new Web `Request`, or the same Node request |
-| `fakeChest({members?, former?, groups?, capabilities?, files?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set) and answers members, groups and files with a Chest's bounds and errors; a capability left out answers 403 (`members` and `files` by default; `members.email` adds the addresses) |
-| `chest.members`, `chest.groups`, `chest.files` | What the fake Chest holds, to change or assert on |
+| `fakeChest({members?, former?, groups?, capabilities?, files?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set) and answers members, groups, files, badges and notifications with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files` and `notifications` by default; `members.email` adds the addresses) |
+| `chest.members`, `chest.groups`, `chest.files` | What the fake Chest holds, to change or assert on; its `members` are those who have the tool |
+| `chest.notifications`, `chest.badges` | What the tool sent: the items kept, `{member, title, body?, path, key?}` cleaned as the Chest cleans them, in the order sent (a replaced item removed, the new one last; `withdraw` removes), and each member's badge (`Map` member → count; 0 removes it) |
 | `chest.close()` | Stops it and restores the environment |
 
 ## Version
@@ -365,9 +452,9 @@ npm run check:package  # npm pack, install into a temp project, import every sub
 ```
 
 `client/src` holds the modules, `client/index.ts` the package root,
-`client/test` the tests. `npm run build` compiles `client/index.ts`, the six
-published modules (`errors`, `member`, `members`, `database`, `files`,
-`testing`) and the one files and members share (`api`, the Chest's API) —
+`client/test` the tests. `npm run build` compiles `client/index.ts`, the
+seven published modules (`errors`, `member`, `members`, `database`, `files`,
+`notifications`, `testing`) and the one they share (`api`, the Chest's API) —
 TypeScript strict, ES2022, NodeNext — into `dist/`: ESM `.js`, `.d.ts` and
 their maps. `member.ts` imports nothing but `node:*`, so that a tool may copy
 it alone.

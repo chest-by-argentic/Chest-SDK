@@ -16,6 +16,7 @@ server-side:
 | The tool's own PostgreSQL database | `databaseUrl()` from `@argentic/chest-sdk/database` | `"capabilities": ["database"]` in `chest.json` |
 | The tool's private files | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` (and `"files": {"quota", "maxObject"}` beyond 1 GiB, 32 MiB per object) |
 | Who else has the tool | `list`, `get`, `lookup`, `groups.list` from `@argentic/chest-sdk/members` | `"capabilities": ["members"]` (`"members.email"` too for addresses) |
+| Tell members what needs their attention | `notify`, `withdraw`, `badge.set`, `badge.setMany` from `@argentic/chest-sdk/notifications` | `"capabilities": ["notifications"]` |
 | Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `Unavailable` from `@argentic/chest-sdk/errors` | — |
 | Tests without a Chest | `fakeChest`, `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
 
@@ -71,6 +72,38 @@ const chest = await fakeChest({ members: [camille] });
 const response = await GET(withMember(new Request("http://tool.test/chest/api/me"), camille));
 await chest.close();
 ```
+
+## Tell members what needs their attention
+
+A badge is a count on the tool's tile, per member; a notification is an item
+in the member's inbox inside the Chest, linking to a page of the tool.
+
+```ts
+// "capabilities": ["notifications"]
+import * as notifications from "@argentic/chest-sdk/notifications";
+
+// A task is assigned: one inbox item, keyed by the task, and the count.
+await notifications.notify([task.assignee], { title: `New task: ${task.title.slice(0, 60)}`, path: `/chest/tasks/${task.id}`, key: `task:${task.id}` });
+await notifications.badge.set(task.assignee, openTasks);
+
+// The task is done: its item goes, the count follows.
+await notifications.withdraw(`task:${task.id}`);
+await notifications.badge.set(task.assignee, openTasks - 1);
+```
+
+- Key every notification about a thing that ends (a task, a request, a
+  review): the same key replaces the item instead of piling up, and
+  `withdraw(key)` removes it once handled.
+- Titles are 1 to 80 characters, bodies 280: cut user text yourself before
+  sending (the SDK refuses rather than truncates). Plain text only: no
+  Markdown, no HTML, no links in the text — the link is `path`.
+- `path` is under `/chest` (the tool's private part), never a full URL.
+- A badge is a state: set it to the true count whenever it changes; 0 clears.
+  Use `setMany` (500 at a time) after a batch change, not one `set` per row.
+- `skipped` (or `badge.set` → `false`) means the member does not have the
+  tool: not an error.
+- Muting is invisible: a member who muted the tool is `delivered`. Never try
+  to detect it.
 
 ## Let a member upload a file
 
@@ -141,6 +174,11 @@ at install and at every update.
   send it, or the Chest may refuse it: write the name in your database only
   once `files.stat(name)` returns it (its type and size as the Chest kept
   them).
+- **Notify members, never others.** Only members with access receive
+  anything; send member ids from your data, never addresses.
+- **Mind the quotas.** 1,000 recipients an hour, 100 items per member a day,
+  600 badge writes a minute: notify the people concerned, not everyone, and
+  on `QuotaExceeded` wait (a refused call changed nothing).
 - **Large files go through `uploadUrl`, not `put`.** `put` and `get` carry the
   bytes through the tool's memory (256 MiB by default).
 
@@ -155,6 +193,9 @@ at install and at every update.
 | `TooLarge` from `uploadUrl` or `put` | Beyond the tool's largest object (32 MiB unless `chest.json` asks `"files": {"maxObject": …}`). |
 | `ChestError` with `invalid_name` | A file name outside the allowed shape (up to 8 segments of `[A-Za-z0-9._-]`, none starting with `.` or `-`). |
 | `member.email` is always undefined | The tool does not hold `members.email`: addresses are a permission of their own. |
+| `ChestError` with `invalid_title` | The title is empty (once control characters are removed) or longer than 80 characters. |
+| `ChestError` with `invalid_path` | `path` is not `/chest` or under it (a full URL, `//`, `..`, a space or non-ASCII character). |
+| `QuotaExceeded` from `notifications` | Beyond 1,000 recipients an hour, 100 items per member a day or 600 badge writes a minute; the call changed nothing. |
 | `RateLimited` from `members` | More than 600 calls a minute: use `lookup` (200 ids a call, kept a minute) instead of one `get` per row. |
 | Build fails in the browser bundle | The SDK was imported from client code. |
 
