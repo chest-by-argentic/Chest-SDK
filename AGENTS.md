@@ -141,8 +141,8 @@ export async function POST(request: Request) {
 
 ## Use AI models
 
-The Chest's owner connects the providers and maps the aliases `default`,
-`fast`, `smart`, `embedding` to models; the tool names an alias, never a
+The Chest's owner connects OpenRouter; the Chest leads the aliases
+`default`, `fast`, `smart`, `embedding` to models; the tool names an alias, never a
 model, and holds no key. Every call counts against the tool's monthly cap.
 
 ```jsonc
@@ -284,7 +284,7 @@ at install and at every update.
 | `ChestError` `erasure_not_found` from `acknowledgeErasure` | The erasure was not sent to this tool: acknowledge the `erasure` of the `member.erased` event you received. |
 | `RateLimited` from `members` | More than 600 calls a minute: use `lookup` (200 ids a call, kept a minute) instead of one `get` per row. |
 | `AiModelNotAllowed` from `ai` | The alias is not in `"ai": {"models"}` of `chest.json` (or is not one of `default`, `fast`, `smart`, `embedding`). |
-| `AiUnavailable` with `no_connector` | The owner has not connected a provider, or not mapped that alias: a Chest setting, not a bug of the tool. |
+| `AiUnavailable` with `no_connector` | The owner has not connected OpenRouter: a Chest setting, not a bug of the tool. |
 | `AiCapReached` right after a deploy | The month's cap is spent, or `maxTokens` makes the worst case exceed what is left. |
 | Build fails in the browser bundle | The SDK was imported from client code. |
 

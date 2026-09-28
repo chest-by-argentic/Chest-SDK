@@ -41,7 +41,7 @@ import { memberIdPattern } from "./member.js";
 // The names a tool gives models: the owner maps each to a provider's model.
 export type Alias = "default" | "fast" | "smart" | "embedding";
 // The providers a Chest connects.
-export type Provider = "openrouter" | "anthropic" | "openai" | "mistral" | "google" | "compatible";
+export type Provider = "openrouter";
 
 // A message of a conversation, in the OpenAI Chat Completions shape: content
 // is text, or parts (text, images) passed as they are; an assistant's message
@@ -113,7 +113,7 @@ export type AiModel = { alias: Alias; model: string; provider: Provider; input: 
 export type AiUsage = { month: string; spent: number; cap: number; resetsAt: Date };
 
 const aliases: readonly string[] = ["default", "fast", "smart", "embedding"];
-const providers: readonly string[] = ["openrouter", "anthropic", "openai", "mistral", "google", "compatible"];
+const providers: readonly string[] = ["openrouter"];
 const reasons: readonly string[] = ["no_connector", "provider_key_invalid", "provider_unavailable"];
 // The bounds of the Chest's gateway, and of what the SDK reads of it.
 const maxBody = 10 << 20, maxAnswer = 16 << 20, maxLine = 1 << 20, maxOutput = 128000, maxInputs = 256;
