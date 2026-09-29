@@ -1,7 +1,8 @@
 # Chest SDK
 
 `@argentic/chest-sdk` is what a server tool (tool contract v2) embeds to talk
-with its Chest: the member the Chest asserts on a request, the other members
+with its Chest: the member the Chest asserts on a request, the Chest itself
+(its organization, time zone and language), the other members
 who have the tool, the address of the tool's own database, its private
 files, the badges and notifications it shows members inside the Chest, the
 events of its members' lifecycle, AI models through the Chest — and, for the
@@ -23,7 +24,8 @@ testing module is not in the root).
 
 | Import | Gives |
 |---|---|
-| `@argentic/chest-sdk/member` | `member(request)`, types `SignedInMember`, `Member`: the member of a request on the team host of a server tool, with the language the Chest speaks to them and the Chest's organization, read from the `Chest-Member` assertion and verified; `null` without a valid assertion. `memberIdPattern`, `groupIdPattern`: the grammars of the identifiers (`mbr_…`, `grp_…`) |
+| `@argentic/chest-sdk/member` | `member(request)`, type `Member`: the member of a request on the team host of a server tool, with the language the Chest speaks to them and the zone they work in, read from the `Chest-Member` assertion and verified; `null` without a valid assertion. `memberIdPattern`, `groupIdPattern`, `languagePattern`, `timeZonePattern`: the grammars of the identifiers (`mbr_…`, `grp_…`), of a language and of a zone |
+| `@argentic/chest-sdk/chest` | `chest`, type `Chest`: the Chest the tool runs in — `chest.organization.name`, `chest.timeZone`, `chest.language`, `chest.today()` —, the same for every member, on a request or outside one |
 | `@argentic/chest-sdk/members` | `list`, `get`, `lookup`, `groups.list`, `forget`, types `MemberPage`, `Lookup`, `FormerMember`, `Group`: the members who have the tool (capability `members`, their addresses with `members.email`) |
 | `@argentic/chest-sdk/notifications` | `notify`, `withdraw`, `badge.set`, `badge.setMany`, types `Notice`, `Delivery`, `BadgeCount`, `BadgeWrite`: counters on the tool's tile and items in members' inboxes, inside the Chest (capability `notifications`) |
 | `@argentic/chest-sdk/events` | `handle`, `verify`, `acknowledgeErasure`, `memorySeen`, `erasureIdPattern`, types `ChestEvent`, `MemberUpdated`, `AccessRevoked`, `MemberRemoved`, `MemberErased`, `MemberChange`, `Handlers`, `Seen`: the events of the members' lifecycle the Chest posts to the tool's `/chest-events` (`"receives": ["member.*"]`), verified, deduplicated by id, and the acknowledgment of an erasure |
@@ -36,6 +38,7 @@ testing module is not in the root).
 
 ```ts
 import { member } from "@argentic/chest-sdk/member";
+import { chest } from "@argentic/chest-sdk/chest";
 import { databaseUrl } from "@argentic/chest-sdk/database";
 import * as files from "@argentic/chest-sdk/files";
 import * as members from "@argentic/chest-sdk/members";
@@ -43,7 +46,7 @@ import * as notifications from "@argentic/chest-sdk/notifications";
 import * as events from "@argentic/chest-sdk/events";
 import * as ai from "@argentic/chest-sdk/ai";
 import { CapabilityNotGranted } from "@argentic/chest-sdk/errors";
-// or: import { member, databaseUrl, files, members, notifications, events, ai } from "@argentic/chest-sdk";
+// or: import { member, chest, databaseUrl, files, members, notifications, events, ai } from "@argentic/chest-sdk";
 ```
 
 Types refer to `node:http` (`IncomingMessage`): a TypeScript project needs
@@ -53,7 +56,7 @@ Types refer to `node:http` (`IncomingMessage`): a TypeScript project needs
 ### Next.js
 
 The SDK runs on the server only — it reads the tool's environment
-(`CHEST_TOKEN`, `DATABASE_URL`, `CHEST_API`) and uses Node built-ins. Import it
+(`CHEST_TOKEN`, `DATABASE_URL`, `CHEST_API`, `CHEST_TIME_ZONE`…) and uses Node built-ins. Import it
 in route handlers, server components or server actions, never in a
 `"use client"` module. Webpack and Turbopack resolve the
 compiled package with no configuration (no `transpilePackages`):
@@ -86,8 +89,8 @@ is described in the Chest repository, `docs/architecture.md`.
 A v2 tool is an ordinary web server; on its team host, the Chest relays
 `/chest` and everything below it with the `Chest-Member` header of the
 signed-in member. `member(request)` accepts a Node request (`IncomingMessage`)
-or a Web `Request` and returns a `SignedInMember` (a `Member`, the type the
-`members` API answers too, and two fields of the request):
+or a Web `Request` and returns a `Member`, the type the `members` API
+answers too:
 
 ```ts
 type Member = {
@@ -100,12 +103,9 @@ type Member = {
   isAdmin: boolean;      // owner or admin of the Chest
   isBuilder: boolean;    // builder of this tool
   groups: string[];      // "grp_…": the groups that give the member this tool
-  email?: string;        // only with the capability "members.email"
-};
-
-type SignedInMember = Member & {
   language: string;      // "en", "fr"…: the language the Chest speaks to this member
-  organization: string;  // "Acme SAS": the organization the Chest is of
+  timeZone: string;      // "America/New_York": the zone the member works in
+  email?: string;        // only with the capability "members.email"
 };
 ```
 
@@ -119,8 +119,8 @@ goes, so an assertion of another shape is refused rather than misread, and
 stays when a claim is added —, `aud` equal to
 `CHEST_TOOL`, `iat` and `exp` within 5 s, the shape of each claim (`sub` an
 `mbr_` identifier, `groups` `grp_` identifiers, `language` a primary tag of
-2 or 3 lowercase letters, `organization` 2 to 80 characters without control
-characters; an unknown claim is ignored). Without
+2 or 3 lowercase letters, `time_zone` a zone of `timeZonePattern`; an
+unknown claim is ignored). Without
 `CHEST_TOKEN` or `CHEST_TOOL`, nobody is a member. The function never throws
 for what a request carries.
 
@@ -144,10 +144,66 @@ default: a BCP 47 primary tag among those the product speaks (`en`, `fr`
 today; the SDK accepts any, so a language added to the Chest needs no new
 SDK). The tool's private part (`/chest`) speaks it — to this member, on every
 request — and offers no language switch of its own; only its public parts,
-where nobody is signed in, keep their own switch. A tool that does not
-speak that language uses its own default. `organization` is the organization the Chest
-is of ("Acme SAS"), plain text of 2 to 80 characters: show it in a header, a
-document or an export, never as HTML.
+where nobody is signed in, keep their own switch. The members API answers
+it too: a notification or an email to another member is written in *their*
+language (`members.get(id).language`), not in the sender's. A tool that does not
+speak that language uses its own default. `timeZone` is the zone the member
+works in: the one they chose in their profile, else the one their browser
+is in, else the Chest's. The members API answers it too, so a tool reminds
+each member at their own hour. What is the same for every member — the
+organization, the company's time zone — is not the member's: it is the
+Chest's (below).
+
+### Times: store in UTC, decide in the Chest's zone, show in the member's
+
+| What | Zone |
+|---|---|
+| An instant (created, due at, sent at) | stored as UTC: `timestamptz` in PostgreSQL, `Date` in code |
+| “Today”, “this week”, a deadline's day, business hours, working days | the company's: `chest.timeZone`, `chest.today()` (the database's `current_date` is the same) |
+| A time or a date shown to a member, a personal reminder's hour | theirs: `member(request).timeZone`, or `members.get(id).timeZone` outside their request |
+
+```ts
+const who = member(request)!;
+const due = await sql`select * from tasks where due_on = ${chest.today()}`; // the company's day
+const shown = new Intl.DateTimeFormat(who.language, { timeZone: who.timeZone, dateStyle: "medium", timeStyle: "short" }).format(task.remindAt);
+```
+
+## `chest` — the Chest the tool runs in
+
+```ts
+import { chest } from "@argentic/chest-sdk/chest";
+
+chest.organization.name; // "Acme SAS": the organization the Chest is of, as its owner wrote it
+chest.timeZone;          // "Europe/Paris": an IANA zone, "UTC" until the owner sets one
+chest.language;          // "fr": the Chest's own language (a member's is member(request).language)
+chest.today();           // "2026-09-30": the date now in the Chest's zone (or chest.today(at))
+```
+
+The Chest gives these to every tool in its environment at each start
+(`CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`), and starts every
+tool again when its owner changes one in Settings → General — the tool never
+asks its own admin for the company's name or zone. They are there outside a
+request too: a scheduled job, a start-up task, an export. No capability is
+needed: nothing here is more than what the Chest's pages show its members.
+
+- `organization.name` is plain text of 2 to 80 characters: show it in a
+  header, a document or an email, never as HTML.
+- `timeZone` is the day of “due today” and the hour of a reminder. The Chest
+  also makes it the `TimeZone` of the tool's database sessions: there,
+  `current_date`, `now()::date` and a `timestamptz` shown as text are in the
+  Chest's zone. A session may set its own (`SET TIME ZONE`), for itself.
+- `language` is the language of what the tool writes for no one in
+  particular: a public page before the visitor chooses, an export's default.
+  A page of `/chest` speaks `member(request).language` instead.
+- `today(at?)` is `YYYY-MM-DD` in the Chest's zone, for now or for an instant
+  (`Date` or milliseconds): compare it with dates your database keeps as
+  `date`, never with `new Date().toISOString().slice(0, 10)`, which is UTC's.
+
+Each value is read from the environment at each access, and checked: outside a
+Chest (a development server without the variables), or for a value the Chest
+never gives, reading it throws a `ChestError` with the code `not_in_chest` —
+a wrong zone read silently is exactly what this module exists to prevent. In
+tests, `fakeChest({chest: {organization, timeZone, language}})` sets them.
 
 ## `members` — who has the tool
 
@@ -615,7 +671,7 @@ version keeps them.
 ```ts
 import { fakeChest, signAssertion, withMember } from "@argentic/chest-sdk/testing";
 
-const camille = { id: "mbr_k2qhx4mzc7v3b6nfp5r2t7w4ya", firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [] };
+const camille = { id: "mbr_k2qhx4mzc7v3b6nfp5r2t7w4ya", firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [], language: "fr", timeZone: "Europe/Paris" };
 const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications", "ai"], ai: { reply: () => "Summary." } });
 const response = await handler(withMember(new Request("http://tool.test/chest/tasks"), camille));
 assert.equal(await chest.emit({ type: "member.erased", data: { id: camille.id, erasure: "era_k2qhx4mzc7v3b6nfp5r2t7w4ya", deadline: "2026-10-28T10:00:00Z" } }, request => handler(request)), 204);
@@ -630,9 +686,9 @@ await chest.close();
 
 | Function | Gives |
 |---|---|
-| `signAssertion(member, {token?, tool?, now?, language?, organization?})` | A `Chest-Member` header value signed like the Chest's (the token and tool of the environment by default; `language` `"en"` and `organization` `"Test organization"` by default, signed as given, so an invalid one makes `member()` refuse it) |
+| `signAssertion(member, {token?, tool?, now?})` | A `Chest-Member` header value signed like the Chest's for that `Member` (the token and tool of the environment by default), signed as given, so a language or a zone the Chest never sends makes `member()` refuse it |
 | `withMember(request, member, options?)` | The request carrying that assertion (the options of `signAssertion`): a new Web `Request`, or the same Node request |
-| `fakeChest({members?, former?, groups?, capabilities?, receives?, files?, ai?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set) and answers members, groups, files, badges, notifications, AI and erasure acknowledgments with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments). A former member `{id, name?, erased?}` looks up as `former`, or `erased` |
+| `fakeChest({members?, former?, groups?, capabilities?, receives?, files?, ai?, chest?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set), the Chest's `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE` (`chest: {organization, timeZone, language}`: `"Test organization"`, `"UTC"`, `"en"` by default) and answers members, groups, files, badges, notifications, AI and erasure acknowledgments with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments). A former member `{id, name?, erased?}` looks up as `former`, or `erased` |
 | `chest.emit(event, to)` | Delivers an event (`{type, data, id?, occurredAt?}`: a new id and now by default; name an id to deliver the same event twice) signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-events`) or a function of a Web `Request` — and says the status it answered. A `member.erased` makes its erasure one the tool may acknowledge |
 | `ai: {models?, reply?, cap?, unavailable?}` | The fake Chest's AI, deterministic and without any provider. `models`: the aliases the tool declared, `{alias, model, provider?, input?, output?}` (all four by default, `fake-default`…`fake-embedding`, provider `openrouter`, 1 and 2 USD per million tokens); another alias answers `model_not_allowed`. `reply(request)`: what a chat answers, given the wire request — a string, or `{text?, toolCalls?: {name, arguments, id?}[]}` (by default the last user message, echoed); streamed, it comes word by word, each tool call's arguments in two pieces, then the finish reason and the usage. Embeddings are unit vectors from a hash of each text (8 dimensions unless `dimensions`). Tokens count one per 4 characters; once the spending reaches `cap` (euros, 5 by default; 0 refuses at once) a call answers `cap_reached`. `unavailable` (`no_connector`, `provider_key_invalid`, `provider_unavailable`) makes chat and embeddings answer it. 60 requests a minute |
 | `chest.ai` | The tool's calls to AI, `{path, body}` in order (`body` null for a `GET`) |

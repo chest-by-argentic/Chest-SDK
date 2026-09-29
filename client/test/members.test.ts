@@ -9,9 +9,9 @@ import * as members from "../src/members.js";
 // SDK is tested against its routes, its shapes and its codes.
 const id = (name: string): string => "mbr_" + name + "a".repeat(26 - name.length);
 const nord = "grp_nordaaaaaaaaaaaaaaaaaaaaaa";
-const camille = { id: id("camille"), first_name: "Camille", last_name: "Martin", name: "Camille Martin", photo: "/_chest/members/" + id("camille") + "/photo?v=abcdefgh", role: "editor", admin: true, builder: false, groups: [nord] };
-const dan = { id: id("dan"), first_name: "", last_name: "", name: "dan", photo: null, role: null, admin: false, builder: true, groups: [] };
-const sdkCamille = { id: id("camille"), firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: camille.photo, role: "editor", isAdmin: true, isBuilder: false, groups: [nord] };
+const camille = { id: id("camille"), first_name: "Camille", last_name: "Martin", name: "Camille Martin", photo: "/_chest/members/" + id("camille") + "/photo?v=abcdefgh", role: "editor", admin: true, builder: false, groups: [nord], language: "fr", time_zone: "Europe/Paris" };
+const dan = { id: id("dan"), first_name: "", last_name: "", name: "dan", photo: null, role: null, admin: false, builder: true, groups: [], language: "en", time_zone: "UTC" };
+const sdkCamille = { id: id("camille"), firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: camille.photo, role: "editor", isAdmin: true, isBuilder: false, groups: [nord], language: "fr", timeZone: "Europe/Paris" };
 
 let seen: { method: string; url: string; body: string }[] = [];
 let reply: (url: URL, body: string) => { status: number; value: unknown } = () => ({ status: 404, value: { error: "not_found" } });
@@ -49,7 +49,7 @@ test("list asks one page with what it is given, and reads the Chest's members", 
   reply = () => ({ status: 200, value: { members: [camille, dan], next: "Y3Vyc29y" } });
   const page = await members.list({ q: "cam ma", limit: 2, role: "editor", group: nord, after: "YWZ0ZXI" });
   assert.deepEqual(seen.map(s => s.url), ["/members?after=YWZ0ZXI&limit=2&q=cam+ma&role=editor&group=" + nord]);
-  assert.deepEqual(page, { members: [sdkCamille, { id: id("dan"), firstName: "", lastName: "", name: "dan", photo: null, role: null, isAdmin: false, isBuilder: true, groups: [] }], next: "Y3Vyc29y" });
+  assert.deepEqual(page, { members: [sdkCamille, { id: id("dan"), firstName: "", lastName: "", name: "dan", photo: null, role: null, isAdmin: false, isBuilder: true, groups: [], language: "en", timeZone: "UTC" }], next: "Y3Vyc29y" });
   reply = () => ({ status: 200, value: { members: [{ ...dan, email: "dan@example.test" }], next: null } });
   assert.equal((await members.list()).members[0]?.email, "dan@example.test");
   assert.equal(seen.at(-1)?.url, "/members");
@@ -103,7 +103,7 @@ test("the Chest's refusals are errors the tool tests; an answer of another shape
     reply = () => ({ status, value: { error: code } });
     await assert.rejects(members.list(), (error: unknown) => error instanceof kind && error.status === status && error.code === code, code);
   }
-  for (const value of [{ members: [{ ...camille, id: "alice" }], next: null }, { members: [{ ...camille, groups: ["nord"] }], next: null }, { members: [{ ...camille, admin: "yes" }], next: null }, { members: "x", next: null }]) {
+  for (const value of [{ members: [{ ...camille, id: "alice" }], next: null }, { members: [{ ...camille, groups: ["nord"] }], next: null }, { members: [{ ...camille, admin: "yes" }], next: null }, { members: [{ ...camille, language: "French" }], next: null }, { members: [{ ...camille, language: undefined }], next: null }, { members: [{ ...camille, time_zone: "CET" }], next: null }, { members: [{ ...camille, time_zone: undefined }], next: null }, { members: "x", next: null }]) {
     reply = () => ({ status: 200, value });
     await assert.rejects(members.list(), Unavailable);
   }

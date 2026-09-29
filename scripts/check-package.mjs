@@ -20,7 +20,8 @@ const name = manifest.name;
 // testing.
 const expected = {
   errors: ["AiCapReached", "AiModelNotAllowed", "AiRefused", "AiUnavailable", "CapabilityNotGranted", "ChestError", "QuotaExceeded", "RateLimited", "TooLarge", "Unavailable"],
-  member: ["groupIdPattern", "member", "memberIdPattern"],
+  member: ["groupIdPattern", "languagePattern", "member", "memberIdPattern", "timeZonePattern"],
+  chest: ["chest"],
   database: ["databaseUrl"],
   files: ["delete", "get", "list", "move", "put", "stat", "uploadUrl", "url"],
   members: ["forget", "get", "groups", "list", "lookup"],
@@ -85,7 +86,7 @@ try {
     `try { database.databaseUrl(); } catch (error) { refused = error instanceof errors.CapabilityNotGranted && error instanceof root.ChestError; }`,
     `const nobody = modules[${JSON.stringify(name + "/member")}].member(new Request("http://tool.test/chest", { headers: { "chest-member": "a.b.c" } }));`,
     `const testing = modules[${JSON.stringify(name + "/testing")}];`,
-    `const chest = await testing.fakeChest({ members: [{ id: "mbr_" + "a".repeat(26), firstName: "Ada", lastName: "L", name: "Ada L", photo: null, role: null, isAdmin: false, isBuilder: false, groups: [] }] });`,
+    `const chest = await testing.fakeChest({ members: [{ id: "mbr_" + "a".repeat(26), firstName: "Ada", lastName: "L", name: "Ada L", photo: null, role: null, isAdmin: false, isBuilder: false, groups: [], language: "en", timeZone: "Europe/Paris" }] });`,
     `const listed = (await root.members.list()).members.map(m => m.name);`,
     `const delivered = (await root.notifications.notify([chest.members[0].id], { title: "Hello" })).delivered;`,
     `const kept = chest.notifications.map(n => n.title);`,
