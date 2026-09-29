@@ -226,11 +226,14 @@ at install and at every update.
 - **Speak the member's language.** In `/chest`, render in `member.language`
   (`"en"`, `"fr"`…; its own default for one it does not speak) and offer no
   language switch there; only public pages keep their own switch.
-- **The day is the Chest's.** “Today”, “this week”, a reminder's hour are in
-  `chest.timeZone`: use `chest.today()`, never
-  `new Date().toISOString().slice(0, 10)` (UTC's day) nor a zone written in
-  the code. The database's sessions are already in the Chest's zone
-  (`current_date` is its day); store instants as `timestamptz`.
+- **Store in UTC, decide in the Chest's zone, show in the member's.** Store
+  instants as `timestamptz`. “Today”, “this week”, a deadline's day and
+  business hours are the company's: `chest.today()`, `chest.timeZone` —
+  never `new Date().toISOString().slice(0, 10)` (UTC's day) nor a zone
+  written in the code; the database's `current_date` is already the Chest's
+  day. Times shown to a member, and their personal reminders, are in
+  `member.timeZone` (from `member(request)`, or `members.get` outside their
+  request).
 - **The company's name is the Chest's.** Show `chest.organization.name`
   (plain text, never HTML); never ask your own admin for it.
 - **`member()` is the only source of identity.** Check it on every request
@@ -283,6 +286,7 @@ at install and at every update.
 | `member()` always returns `null` locally | No `CHEST_TOKEN` / `CHEST_TOOL` in the environment: outside a Chest, nobody is a member. |
 | `ChestError` `not_in_chest` from `chest` | No `CHEST_ORGANIZATION` / `CHEST_TIME_ZONE` / `CHEST_LANGUAGE` in the environment: in a test, start a `fakeChest`; on a development server, set them. |
 | Dates one day off late in the evening | The day computed in UTC (`toISOString()`) or in a zone written in the code: use `chest.today()`. |
+| A member abroad sees times shifted by hours | Times formatted in the Chest's zone or the server's: format with `timeZone: member.timeZone`. |
 | `CapabilityNotGranted` from `databaseUrl()` | Capability missing in `chest.json`, not approved yet, or `DATABASE_URL` set by the tool itself. |
 | The browser's `PUT` answers 403 `invalid_token` | The upload token was already used, expired (`expiresIn`), or was not made for this host: ask a new `uploadUrl` for each upload. |
 | The browser's `PUT` answers 415 `type_refused` or 400 `type_mismatch` | The file's `Content-Type` is not one of `types`, or its first bytes are not of the type sent. |

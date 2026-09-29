@@ -20,7 +20,7 @@ const name = manifest.name;
 // testing.
 const expected = {
   errors: ["AiCapReached", "AiModelNotAllowed", "AiRefused", "AiUnavailable", "CapabilityNotGranted", "ChestError", "QuotaExceeded", "RateLimited", "TooLarge", "Unavailable"],
-  member: ["groupIdPattern", "member", "memberIdPattern"],
+  member: ["groupIdPattern", "member", "memberIdPattern", "timeZonePattern"],
   chest: ["chest"],
   database: ["databaseUrl"],
   files: ["delete", "get", "list", "move", "put", "stat", "uploadUrl", "url"],

@@ -1,6 +1,6 @@
 import { ask, json, refusal } from "./api.js";
 import { ChestError, Unavailable } from "./errors.js";
-import { groupIdPattern, memberIdPattern, type Member } from "./member.js";
+import { groupIdPattern, memberIdPattern, timeZonePattern, type Member } from "./member.js";
 
 // Who has the tool, for a server tool whose chest.json declares
 // "capabilities": ["members"] (and "members.email" for their addresses):
@@ -47,8 +47,8 @@ const text = (value: unknown, max: number): value is string => typeof value === 
 // Chest's answer.
 function shown(value: unknown): Member {
   const m = value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-  if (!m || typeof m["id"] !== "string" || !memberIdPattern.test(m["id"]) || !text(m["first_name"], 256) || !text(m["last_name"], 256) || !text(m["name"], 520) || !(m["photo"] === null || text(m["photo"], 200)) || !(m["role"] === null || text(m["role"], 48)) || typeof m["admin"] !== "boolean" || typeof m["builder"] !== "boolean" || !Array.isArray(m["groups"]) || m["groups"].length > 16 || !m["groups"].every(g => typeof g === "string" && groupIdPattern.test(g)) || !(m["email"] === undefined || text(m["email"], 254))) throw new Unavailable();
-  return { id: m["id"], firstName: m["first_name"], lastName: m["last_name"], name: m["name"], photo: m["photo"], role: m["role"], isAdmin: m["admin"], isBuilder: m["builder"], groups: [...m["groups"]] as string[], ...(m["email"] === undefined ? {} : { email: m["email"] }) };
+  if (!m || typeof m["id"] !== "string" || !memberIdPattern.test(m["id"]) || !text(m["first_name"], 256) || !text(m["last_name"], 256) || !text(m["name"], 520) || !(m["photo"] === null || text(m["photo"], 200)) || !(m["role"] === null || text(m["role"], 48)) || typeof m["admin"] !== "boolean" || typeof m["builder"] !== "boolean" || !Array.isArray(m["groups"]) || m["groups"].length > 16 || !m["groups"].every(g => typeof g === "string" && groupIdPattern.test(g)) || typeof m["time_zone"] !== "string" || !timeZonePattern.test(m["time_zone"]) || !(m["email"] === undefined || text(m["email"], 254))) throw new Unavailable();
+  return { id: m["id"], firstName: m["first_name"], lastName: m["last_name"], name: m["name"], photo: m["photo"], role: m["role"], isAdmin: m["admin"], isBuilder: m["builder"], groups: [...m["groups"]] as string[], timeZone: m["time_zone"], ...(m["email"] === undefined ? {} : { email: m["email"] }) };
 }
 
 // list says the members who have the tool, by name then identifier, limit

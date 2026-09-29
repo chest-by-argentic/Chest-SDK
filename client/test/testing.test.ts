@@ -13,9 +13,9 @@ import { chest as theChest } from "../src/chest.js";
 
 const id = (name: string): string => "mbr_" + name + "a".repeat(26 - name.length);
 const nord = "grp_nordaaaaaaaaaaaaaaaaaaaaaa";
-const camille: Member = { id: id("camille"), firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [nord], email: "camille@example.test" };
-const emile: Member = { id: id("emile"), firstName: "Émile", lastName: "Durand", name: "Émile Durand", photo: null, role: "reader", isAdmin: true, isBuilder: false, groups: [] };
-const zoe: Member = { id: id("zoe"), firstName: "Zoé", lastName: "Petit", name: "Zoé Petit", photo: null, role: "reader", isAdmin: false, isBuilder: true, groups: [] };
+const camille: Member = { id: id("camille"), firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [nord], timeZone: "Europe/Paris", email: "camille@example.test" };
+const emile: Member = { id: id("emile"), firstName: "Émile", lastName: "Durand", name: "Émile Durand", photo: null, role: "reader", isAdmin: true, isBuilder: false, groups: [], timeZone: "America/New_York" };
+const zoe: Member = { id: id("zoe"), firstName: "Zoé", lastName: "Petit", name: "Zoé Petit", photo: null, role: "reader", isAdmin: false, isBuilder: true, groups: [], timeZone: "UTC" };
 
 test("a fake Chest points the environment at itself, and restores it when closed", async () => {
   process.env["CHEST_TOOL"] = "notes";

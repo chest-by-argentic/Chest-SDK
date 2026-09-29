@@ -1,4 +1,5 @@
 import { ChestError } from "./errors.js";
+import { timeZonePattern } from "./member.js";
 
 // The Chest the tool runs in, the same for every member and every request:
 // the organization it is of, its time zone and its language. The Chest sets
@@ -31,10 +32,9 @@ export type Chest = {
 };
 
 // The shapes the Chest gives: the organization's (2 to 80 characters,
-// counted as code points, without control characters), a zone's (UTC, or an
-// area and a location, which this runtime must know), a language's.
+// counted as code points, without control characters), a zone's
+// (timeZonePattern, and one this runtime knows), a language's.
 const organizationPattern = /^[^\u0000-\u001f\u007f-\u009f]{2,80}$/u;
-const timeZonePattern = /^(?:UTC|[A-Z][A-Za-z_]{1,31}(?:\/[A-Za-z0-9_+-]{1,31}){1,2})$/u;
 const languagePattern = /^[a-z]{2,3}$/u;
 
 function read(name: string, valid: (value: string) => boolean): string {

@@ -120,7 +120,7 @@ export function signAssertion(member: Member, options: AssertionOptions = {}): s
   const body = encode({ alg: "HS256", typ: "JWT" }) + "." + encode({
     iss: `https://${tool}-chest.chest.test`, aud: tool, iat, exp: iat + 60, sub: member.id,
     given_name: member.firstName, family_name: member.lastName, name: member.name, picture: member.photo ?? "", role: member.role ?? "",
-    admin: member.isAdmin, builder: member.isBuilder, groups: member.groups, ...(member.email === undefined ? {} : { email: member.email }),
+    admin: member.isAdmin, builder: member.isBuilder, groups: member.groups, time_zone: member.timeZone, ...(member.email === undefined ? {} : { email: member.email }),
     language: options.language ?? "en",
   });
   // The key as the Chest derives it, and member() reads it: HMAC-SHA256 of
@@ -220,7 +220,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], ai: [], emit: async () => 0, close: async () => {} };
   const former = [...(options.former ?? [])];
   let window = 0, calls = 0;
-  const shown = (m: Member) => ({ id: m.id, first_name: m.firstName, last_name: m.lastName, name: m.name, photo: m.photo, role: m.role, admin: m.isAdmin, builder: m.isBuilder, groups: m.groups, ...(email && m.email !== undefined ? { email: m.email } : {}) });
+  const shown = (m: Member) => ({ id: m.id, first_name: m.firstName, last_name: m.lastName, name: m.name, photo: m.photo, role: m.role, admin: m.isAdmin, builder: m.isBuilder, groups: m.groups, time_zone: m.timeZone, ...(email && m.email !== undefined ? { email: m.email } : {}) });
   const key = (m: Member) => fold(m.name) + "\u0000" + m.id;
   const described = (name: string, f: FakeFile) => ({ name, type: f.type, size: f.data.byteLength, updated: f.updated });
 

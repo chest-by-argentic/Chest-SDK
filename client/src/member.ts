@@ -14,6 +14,10 @@ import type { IncomingMessage } from "node:http";
 //   declares: null when there is none.
 // - isBuilder says they build this tool; groups are the groups that give them
 //   this tool ("grp_…").
+// - timeZone is the IANA zone the member works in ("America/New_York"):
+//   the one they chose in their profile, else their browser's, else the
+//   Chest's. Show them times in it; remind them at their hour in it. The
+//   company's day and business rules are the Chest's (chest.timeZone).
 // - email is there only when the tool holds "members.email".
 export type Member = {
   id: string;
@@ -25,6 +29,7 @@ export type Member = {
   isAdmin: boolean;
   isBuilder: boolean;
   groups: string[];
+  timeZone: string;
   email?: string;
 };
 
@@ -43,6 +48,9 @@ export type SignedInMember = Member & { language: string };
 // the identifiers it stores.
 export const memberIdPattern = /^mbr_[a-z2-7]{26}$/u;
 export const groupIdPattern = /^grp_[a-z2-7]{26}$/u;
+// The grammar of a zone the Chest gives: UTC, or an area and a location
+// ("Europe/Paris", "America/Argentina/Buenos_Aires").
+export const timeZonePattern = /^(?:UTC|[A-Z][A-Za-z_]{1,31}(?:\/[A-Za-z0-9_+-]{1,31}){1,2})$/u;
 
 // The key of the assertions is HMAC-SHA256 of this label under the text of
 // CHEST_TOKEN, exactly as the Chest derives it (chest/toolfront). Its version
@@ -53,7 +61,7 @@ export const groupIdPattern = /^grp_[a-z2-7]{26}$/u;
 const label = "Chest-Member v2";
 // The claims every assertion carries; email only for a tool that holds
 // members.email.
-const claims = ["iss", "aud", "iat", "exp", "sub", "given_name", "family_name", "name", "picture", "role", "admin", "builder", "groups", "language"] as const;
+const claims = ["iss", "aud", "iat", "exp", "sub", "given_name", "family_name", "name", "picture", "role", "admin", "builder", "groups", "language", "time_zone"] as const;
 // A language is a primary tag, whichever the product speaks: a language added
 // to the Chest needs no change here.
 const languagePattern = /^[a-z]{2,3}$/u;
@@ -103,13 +111,13 @@ export function member(request: IncomingMessage | Request): SignedInMember | nul
   if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) return null;
   const payload = json(encodedPayload);
   if (!payload || !claims.every(name => Object.hasOwn(payload, name))) return null;
-  const { iss, aud, iat, exp, sub, given_name, family_name, name, email, picture, role, admin, builder, groups, language } = payload;
+  const { iss, aud, iat, exp, sub, given_name, family_name, name, email, picture, role, admin, builder, groups, language, time_zone } = payload;
   if (typeof iss !== "string" || iss === "" || aud !== tool || typeof sub !== "string" || !memberIdPattern.test(sub)) return null;
   if (typeof iat !== "number" || !Number.isSafeInteger(iat) || typeof exp !== "number" || !Number.isSafeInteger(exp) || exp <= iat) return null;
   const now = Math.floor(Date.now() / 1000);
   if (iat > now + skew || exp <= now - skew) return null;
   if (typeof given_name !== "string" || typeof family_name !== "string" || typeof name !== "string" || typeof picture !== "string" || typeof role !== "string" || typeof admin !== "boolean" || typeof builder !== "boolean") return null;
   if (!Array.isArray(groups) || groups.length > 16 || !groups.every(g => typeof g === "string" && groupIdPattern.test(g)) || (email !== undefined && typeof email !== "string")) return null;
-  if (typeof language !== "string" || !languagePattern.test(language)) return null;
-  return { id: sub, firstName: given_name, lastName: family_name, name, photo: picture === "" ? null : picture, role: role === "" ? null : role, isAdmin: admin, isBuilder: builder, groups: [...groups] as string[], ...(email === undefined ? {} : { email }), language };
+  if (typeof language !== "string" || !languagePattern.test(language) || typeof time_zone !== "string" || !timeZonePattern.test(time_zone)) return null;
+  return { id: sub, firstName: given_name, lastName: family_name, name, photo: picture === "" ? null : picture, role: role === "" ? null : role, isAdmin: admin, isBuilder: builder, groups: [...groups] as string[], timeZone: time_zone, ...(email === undefined ? {} : { email }), language };
 }

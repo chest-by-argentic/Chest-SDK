@@ -10,7 +10,7 @@ import * as members from "../src/members.js";
 import { fakeChest } from "../src/testing.js";
 
 const id = (name: string): string => "mbr_" + name + "a".repeat(26 - name.length);
-const camille: Member = { id: id("camille"), firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [] };
+const camille: Member = { id: id("camille"), firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [], timeZone: "Europe/Paris" };
 const erasure = "era_" + "b".repeat(26);
 
 // An event the Chest signed (chest/toolfront.EventSignature, Go) for the

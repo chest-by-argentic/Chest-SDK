@@ -24,7 +24,7 @@ testing module is not in the root).
 
 | Import | Gives |
 |---|---|
-| `@argentic/chest-sdk/member` | `member(request)`, types `SignedInMember`, `Member`: the member of a request on the team host of a server tool, with the language the Chest speaks to them, read from the `Chest-Member` assertion and verified; `null` without a valid assertion. `memberIdPattern`, `groupIdPattern`: the grammars of the identifiers (`mbr_…`, `grp_…`) |
+| `@argentic/chest-sdk/member` | `member(request)`, types `SignedInMember`, `Member`: the member of a request on the team host of a server tool, with the language the Chest speaks to them and the zone they work in, read from the `Chest-Member` assertion and verified; `null` without a valid assertion. `memberIdPattern`, `groupIdPattern`, `timeZonePattern`: the grammars of the identifiers (`mbr_…`, `grp_…`) and of a zone |
 | `@argentic/chest-sdk/chest` | `chest`, type `Chest`: the Chest the tool runs in — `chest.organization.name`, `chest.timeZone`, `chest.language`, `chest.today()` —, the same for every member, on a request or outside one |
 | `@argentic/chest-sdk/members` | `list`, `get`, `lookup`, `groups.list`, `forget`, types `MemberPage`, `Lookup`, `FormerMember`, `Group`: the members who have the tool (capability `members`, their addresses with `members.email`) |
 | `@argentic/chest-sdk/notifications` | `notify`, `withdraw`, `badge.set`, `badge.setMany`, types `Notice`, `Delivery`, `BadgeCount`, `BadgeWrite`: counters on the tool's tile and items in members' inboxes, inside the Chest (capability `notifications`) |
@@ -103,6 +103,7 @@ type Member = {
   isAdmin: boolean;      // owner or admin of the Chest
   isBuilder: boolean;    // builder of this tool
   groups: string[];      // "grp_…": the groups that give the member this tool
+  timeZone: string;      // "America/New_York": the zone the member works in
   email?: string;        // only with the capability "members.email"
 };
 
@@ -121,7 +122,8 @@ goes, so an assertion of another shape is refused rather than misread, and
 stays when a claim is added —, `aud` equal to
 `CHEST_TOOL`, `iat` and `exp` within 5 s, the shape of each claim (`sub` an
 `mbr_` identifier, `groups` `grp_` identifiers, `language` a primary tag of
-2 or 3 lowercase letters; an unknown claim is ignored). Without
+2 or 3 lowercase letters, `time_zone` a zone of `timeZonePattern`; an
+unknown claim is ignored). Without
 `CHEST_TOKEN` or `CHEST_TOOL`, nobody is a member. The function never throws
 for what a request carries.
 
@@ -146,9 +148,26 @@ today; the SDK accepts any, so a language added to the Chest needs no new
 SDK). The tool's private part (`/chest`) speaks it — to this member, on every
 request — and offers no language switch of its own; only its public parts,
 where nobody is signed in, keep their own switch. A tool that does not
-speak that language uses its own default. What is the same for every
-member — the organization, the time zone — is not the member's: it is the
+speak that language uses its own default. `timeZone` is the zone the member
+works in: the one they chose in their profile, else the one their browser
+is in, else the Chest's. The members API answers it too, so a tool reminds
+each member at their own hour. What is the same for every member — the
+organization, the company's time zone — is not the member's: it is the
 Chest's (below).
+
+### Times: store in UTC, decide in the Chest's zone, show in the member's
+
+| What | Zone |
+|---|---|
+| An instant (created, due at, sent at) | stored as UTC: `timestamptz` in PostgreSQL, `Date` in code |
+| “Today”, “this week”, a deadline's day, business hours, working days | the company's: `chest.timeZone`, `chest.today()` (the database's `current_date` is the same) |
+| A time or a date shown to a member, a personal reminder's hour | theirs: `member(request).timeZone`, or `members.get(id).timeZone` outside their request |
+
+```ts
+const who = member(request)!;
+const due = await sql`select * from tasks where due_on = ${chest.today()}`; // the company's day
+const shown = new Intl.DateTimeFormat(who.language, { timeZone: who.timeZone, dateStyle: "medium", timeStyle: "short" }).format(task.remindAt);
+```
 
 ## `chest` — the Chest the tool runs in
 
