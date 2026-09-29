@@ -13,9 +13,9 @@ import { chest as theChest } from "../src/chest.js";
 
 const id = (name: string): string => "mbr_" + name + "a".repeat(26 - name.length);
 const nord = "grp_nordaaaaaaaaaaaaaaaaaaaaaa";
-const camille: Member = { id: id("camille"), firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [nord], timeZone: "Europe/Paris", email: "camille@example.test" };
-const emile: Member = { id: id("emile"), firstName: "Émile", lastName: "Durand", name: "Émile Durand", photo: null, role: "reader", isAdmin: true, isBuilder: false, groups: [], timeZone: "America/New_York" };
-const zoe: Member = { id: id("zoe"), firstName: "Zoé", lastName: "Petit", name: "Zoé Petit", photo: null, role: "reader", isAdmin: false, isBuilder: true, groups: [], timeZone: "UTC" };
+const camille: Member = { id: id("camille"), firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [nord], language: "en", timeZone: "Europe/Paris", email: "camille@example.test" };
+const emile: Member = { id: id("emile"), firstName: "Émile", lastName: "Durand", name: "Émile Durand", photo: null, role: "reader", isAdmin: true, isBuilder: false, groups: [], language: "fr", timeZone: "America/New_York" };
+const zoe: Member = { id: id("zoe"), firstName: "Zoé", lastName: "Petit", name: "Zoé Petit", photo: null, role: "reader", isAdmin: false, isBuilder: true, groups: [], language: "en", timeZone: "UTC" };
 
 test("a fake Chest points the environment at itself, and restores it when closed", async () => {
   process.env["CHEST_TOOL"] = "notes";
@@ -41,11 +41,12 @@ test("a fake Chest points the environment at itself, and restores it when closed
 test("an assertion signed for a member reads as that member, in its language, on a Web Request and a Node request", async () => {
   const chest = await fakeChest();
   try {
-    assert.deepEqual(member(withMember(new Request("http://tool.test/chest"), camille)), { ...camille, language: "en" });
-    const request = withMember(new IncomingMessage(new Socket()), emile, { language: "fr" });
-    assert.deepEqual(member(request), { ...emile, language: "fr" });
-    // Signed as given: a language the Chest would never send is nobody.
-    assert.equal(member(withMember(new Request("http://tool.test/chest"), camille, { language: "French" })), null);
+    assert.deepEqual(member(withMember(new Request("http://tool.test/chest"), camille)), camille);
+    const request = withMember(new IncomingMessage(new Socket()), emile);
+    assert.deepEqual(member(request), emile);
+    // Signed as given: a language or a zone the Chest would never send is nobody.
+    assert.equal(member(withMember(new Request("http://tool.test/chest"), { ...camille, language: "French" })), null);
+    assert.equal(member(withMember(new Request("http://tool.test/chest"), { ...camille, timeZone: "CET" })), null);
     // Signed for another tool, or long ago, it is nobody.
     assert.equal(member(withMember(new Request("http://tool.test/chest"), camille, { tool: "other" })), null);
     assert.equal(member(withMember(new Request("http://tool.test/chest"), camille, { now: new Date(Date.now() - 120_000) })), null);

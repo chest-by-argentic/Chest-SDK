@@ -24,7 +24,7 @@ testing module is not in the root).
 
 | Import | Gives |
 |---|---|
-| `@argentic/chest-sdk/member` | `member(request)`, types `SignedInMember`, `Member`: the member of a request on the team host of a server tool, with the language the Chest speaks to them and the zone they work in, read from the `Chest-Member` assertion and verified; `null` without a valid assertion. `memberIdPattern`, `groupIdPattern`, `timeZonePattern`: the grammars of the identifiers (`mbr_…`, `grp_…`) and of a zone |
+| `@argentic/chest-sdk/member` | `member(request)`, type `Member`: the member of a request on the team host of a server tool, with the language the Chest speaks to them and the zone they work in, read from the `Chest-Member` assertion and verified; `null` without a valid assertion. `memberIdPattern`, `groupIdPattern`, `languagePattern`, `timeZonePattern`: the grammars of the identifiers (`mbr_…`, `grp_…`), of a language and of a zone |
 | `@argentic/chest-sdk/chest` | `chest`, type `Chest`: the Chest the tool runs in — `chest.organization.name`, `chest.timeZone`, `chest.language`, `chest.today()` —, the same for every member, on a request or outside one |
 | `@argentic/chest-sdk/members` | `list`, `get`, `lookup`, `groups.list`, `forget`, types `MemberPage`, `Lookup`, `FormerMember`, `Group`: the members who have the tool (capability `members`, their addresses with `members.email`) |
 | `@argentic/chest-sdk/notifications` | `notify`, `withdraw`, `badge.set`, `badge.setMany`, types `Notice`, `Delivery`, `BadgeCount`, `BadgeWrite`: counters on the tool's tile and items in members' inboxes, inside the Chest (capability `notifications`) |
@@ -89,8 +89,8 @@ is described in the Chest repository, `docs/architecture.md`.
 A v2 tool is an ordinary web server; on its team host, the Chest relays
 `/chest` and everything below it with the `Chest-Member` header of the
 signed-in member. `member(request)` accepts a Node request (`IncomingMessage`)
-or a Web `Request` and returns a `SignedInMember` (a `Member`, the type the
-`members` API answers too, and the language of the request):
+or a Web `Request` and returns a `Member`, the type the `members` API
+answers too:
 
 ```ts
 type Member = {
@@ -103,12 +103,9 @@ type Member = {
   isAdmin: boolean;      // owner or admin of the Chest
   isBuilder: boolean;    // builder of this tool
   groups: string[];      // "grp_…": the groups that give the member this tool
+  language: string;      // "en", "fr"…: the language the Chest speaks to this member
   timeZone: string;      // "America/New_York": the zone the member works in
   email?: string;        // only with the capability "members.email"
-};
-
-type SignedInMember = Member & {
-  language: string;      // "en", "fr"…: the language the Chest speaks to this member
 };
 ```
 
@@ -147,7 +144,9 @@ default: a BCP 47 primary tag among those the product speaks (`en`, `fr`
 today; the SDK accepts any, so a language added to the Chest needs no new
 SDK). The tool's private part (`/chest`) speaks it — to this member, on every
 request — and offers no language switch of its own; only its public parts,
-where nobody is signed in, keep their own switch. A tool that does not
+where nobody is signed in, keep their own switch. The members API answers
+it too: a notification or an email to another member is written in *their*
+language (`members.get(id).language`), not in the sender's. A tool that does not
 speak that language uses its own default. `timeZone` is the zone the member
 works in: the one they chose in their profile, else the one their browser
 is in, else the Chest's. The members API answers it too, so a tool reminds
@@ -672,7 +671,7 @@ version keeps them.
 ```ts
 import { fakeChest, signAssertion, withMember } from "@argentic/chest-sdk/testing";
 
-const camille = { id: "mbr_k2qhx4mzc7v3b6nfp5r2t7w4ya", firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [] };
+const camille = { id: "mbr_k2qhx4mzc7v3b6nfp5r2t7w4ya", firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [], language: "fr", timeZone: "Europe/Paris" };
 const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications", "ai"], ai: { reply: () => "Summary." } });
 const response = await handler(withMember(new Request("http://tool.test/chest/tasks"), camille));
 assert.equal(await chest.emit({ type: "member.erased", data: { id: camille.id, erasure: "era_k2qhx4mzc7v3b6nfp5r2t7w4ya", deadline: "2026-10-28T10:00:00Z" } }, request => handler(request)), 204);
@@ -687,7 +686,7 @@ await chest.close();
 
 | Function | Gives |
 |---|---|
-| `signAssertion(member, {token?, tool?, now?, language?})` | A `Chest-Member` header value signed like the Chest's (the token and tool of the environment by default; `language` `"en"` by default, signed as given, so an invalid one makes `member()` refuse it) |
+| `signAssertion(member, {token?, tool?, now?})` | A `Chest-Member` header value signed like the Chest's for that `Member` (the token and tool of the environment by default), signed as given, so a language or a zone the Chest never sends makes `member()` refuse it |
 | `withMember(request, member, options?)` | The request carrying that assertion (the options of `signAssertion`): a new Web `Request`, or the same Node request |
 | `fakeChest({members?, former?, groups?, capabilities?, receives?, files?, ai?, chest?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set), the Chest's `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE` (`chest: {organization, timeZone, language}`: `"Test organization"`, `"UTC"`, `"en"` by default) and answers members, groups, files, badges, notifications, AI and erasure acknowledgments with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments). A former member `{id, name?, erased?}` looks up as `former`, or `erased` |
 | `chest.emit(event, to)` | Delivers an event (`{type, data, id?, occurredAt?}`: a new id and now by default; name an id to deliver the same event twice) signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-events`) or a function of a Web `Request` — and says the status it answered. A `member.erased` makes its erasure one the tool may acknowledge |

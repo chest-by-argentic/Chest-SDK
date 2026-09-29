@@ -72,7 +72,7 @@ const people = await members.lookup(rows.map(r => r.assignee).filter(Boolean));
 // A test of the tool, with no Chest running.
 import { fakeChest, withMember } from "@argentic/chest-sdk/testing";
 const chest = await fakeChest({ members: [camille] });
-const response = await GET(withMember(new Request("http://tool.test/chest/api/me"), camille, { language: "fr" }));
+const response = await GET(withMember(new Request("http://tool.test/chest/api/me"), camille));
 await chest.close();
 ```
 
@@ -271,6 +271,9 @@ at install and at every update.
   send it, or the Chest may refuse it: write the name in your database only
   once `files.stat(name)` returns it (its type and size as the Chest kept
   them).
+- **Write to each member in their language.** A notification or an email to
+  another member is in `members.get(id).language` (or `lookup`), not the
+  sender's; their times in their `timeZone`.
 - **Notify members, never others.** Only members with access receive
   anything; send member ids from your data, never addresses.
 - **Mind the quotas.** 1,000 recipients an hour, 100 items per member a day,

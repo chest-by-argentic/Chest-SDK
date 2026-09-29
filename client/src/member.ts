@@ -14,6 +14,10 @@ import type { IncomingMessage } from "node:http";
 //   declares: null when there is none.
 // - isBuilder says they build this tool; groups are the groups that give them
 //   this tool ("grp_…").
+// - language is the language the Chest speaks to this member (their own,
+//   else the Chest's default): a BCP 47 primary tag the product speaks
+//   ("en", "fr"…). The tool's private part (/chest) speaks it to them; a
+//   notification or an email to them is written in it.
 // - timeZone is the IANA zone the member works in ("America/New_York"):
 //   the one they chose in their profile, else their browser's, else the
 //   Chest's. Show them times in it; remind them at their hour in it. The
@@ -29,27 +33,22 @@ export type Member = {
   isAdmin: boolean;
   isBuilder: boolean;
   groups: string[];
+  language: string;
   timeZone: string;
   email?: string;
 };
-
-// The member of a request, as member() reads them from the Chest's assertion:
-// a Member, and what the Chest says about that request.
-//
-// - language is the language the Chest speaks to this member (their own,
-//   else the Chest's default): a BCP 47 primary tag the product speaks
-//   ("en", "fr"…). The tool's private part (/chest) speaks it; only its public
-//   parts keep a language switch of their own.
-// What is the same for every member — the organization, the time zone — is
-// the Chest's: the chest module.
-export type SignedInMember = Member & { language: string };
+// What is the same for every member — the organization, the company's time
+// zone — is the Chest's: the chest module.
 
 // The grammars of the identifiers the Chest mints: a tool may check with them
 // the identifiers it stores.
 export const memberIdPattern = /^mbr_[a-z2-7]{26}$/u;
 export const groupIdPattern = /^grp_[a-z2-7]{26}$/u;
-// The grammar of a zone the Chest gives: UTC, or an area and a location
-// ("Europe/Paris", "America/Argentina/Buenos_Aires").
+// The grammar of a language the Chest gives: a primary tag, whichever the
+// product speaks (a language added to the Chest needs no change here); of a
+// zone: UTC, or an area and a location ("Europe/Paris",
+// "America/Argentina/Buenos_Aires").
+export const languagePattern = /^[a-z]{2,3}$/u;
 export const timeZonePattern = /^(?:UTC|[A-Z][A-Za-z_]{1,31}(?:\/[A-Za-z0-9_+-]{1,31}){1,2})$/u;
 
 // The key of the assertions is HMAC-SHA256 of this label under the text of
@@ -62,9 +61,6 @@ const label = "Chest-Member v2";
 // The claims every assertion carries; email only for a tool that holds
 // members.email.
 const claims = ["iss", "aud", "iat", "exp", "sub", "given_name", "family_name", "name", "picture", "role", "admin", "builder", "groups", "language", "time_zone"] as const;
-// A language is a primary tag, whichever the product speaks: a language added
-// to the Chest needs no change here.
-const languagePattern = /^[a-z]{2,3}$/u;
 // Clocks of the Chest and of the container may differ by this much, in seconds.
 const skew = 5;
 // An assertion is a few hundred bytes; anything longer is not one.
@@ -95,7 +91,7 @@ function json(part: string): Record<string, unknown> | null {
 // request carries. Only the Chest's front reaches the tool; the signature is a
 // second defence, and the tool still decides what a member may do with its
 // own rules.
-export function member(request: IncomingMessage | Request): SignedInMember | null {
+export function member(request: IncomingMessage | Request): Member | null {
   const token = process.env["CHEST_TOKEN"];
   const tool = process.env["CHEST_TOOL"];
   if (!token || !/^[A-Za-z0-9_-]{43,512}$/u.test(token) || !tool) return null;
@@ -119,5 +115,5 @@ export function member(request: IncomingMessage | Request): SignedInMember | nul
   if (typeof given_name !== "string" || typeof family_name !== "string" || typeof name !== "string" || typeof picture !== "string" || typeof role !== "string" || typeof admin !== "boolean" || typeof builder !== "boolean") return null;
   if (!Array.isArray(groups) || groups.length > 16 || !groups.every(g => typeof g === "string" && groupIdPattern.test(g)) || (email !== undefined && typeof email !== "string")) return null;
   if (typeof language !== "string" || !languagePattern.test(language) || typeof time_zone !== "string" || !timeZonePattern.test(time_zone)) return null;
-  return { id: sub, firstName: given_name, lastName: family_name, name, photo: picture === "" ? null : picture, role: role === "" ? null : role, isAdmin: admin, isBuilder: builder, groups: [...groups] as string[], timeZone: time_zone, ...(email === undefined ? {} : { email }), language };
+  return { id: sub, firstName: given_name, lastName: family_name, name, photo: picture === "" ? null : picture, role: role === "" ? null : role, isAdmin: admin, isBuilder: builder, groups: [...groups] as string[], language, timeZone: time_zone, ...(email === undefined ? {} : { email }) };
 }
