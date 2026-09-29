@@ -56,7 +56,8 @@ export type FakeAiCall = { path: string; body: unknown };
 // capabilities its version holds (a capability left out answers 403;
 // members, files, notifications and ai by default, members.email to read the
 // addresses), the events it receives (["member.*"] by default, [] to answer
-// an acknowledgment 403), the files it keeps and its AI.
+// an acknowledgment 403), the files it keeps, its AI, and what the Chest is
+// (the chest module: "Test organization", UTC and English by default).
 export type FakeChestOptions = {
   members?: Member[];
   former?: { id: string; name?: string; erased?: boolean }[];
@@ -65,6 +66,7 @@ export type FakeChestOptions = {
   receives?: string[];
   files?: Record<string, { data: Uint8Array | string; type?: string }>;
   ai?: FakeAi;
+  chest?: { organization?: string; timeZone?: string; language?: string };
 };
 
 // An event for emit: its type and data; its id (a new evt_… by default) and
@@ -100,12 +102,11 @@ const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).to
 
 // What an assertion is signed with and says besides the member: the token
 // (CHEST_TOKEN by default) and the tool (CHEST_TOOL by default) it is for,
-// when it is issued (now by default), the language the Chest speaks to the
-// member ("en" by default) and the organization the Chest is of ("Test
-// organization" by default). They are signed as given: a language that is
-// not a primary tag, or an organization outside 2 to 80 characters, makes
-// member() refuse the assertion, as it refuses the Chest's.
-export type AssertionOptions = { token?: string; tool?: string; now?: Date; language?: string; organization?: string };
+// when it is issued (now by default) and the language the Chest speaks to the
+// member ("en" by default). They are signed as given: a language that is not
+// a primary tag makes member() refuse the assertion, as it refuses the
+// Chest's.
+export type AssertionOptions = { token?: string; tool?: string; now?: Date; language?: string };
 
 // signAssertion is the Chest-Member value the Chest's front would send for
 // that member: HS256 under the key of the token, for the tool, valid 60
@@ -120,7 +121,7 @@ export function signAssertion(member: Member, options: AssertionOptions = {}): s
     iss: `https://${tool}-chest.chest.test`, aud: tool, iat, exp: iat + 60, sub: member.id,
     given_name: member.firstName, family_name: member.lastName, name: member.name, picture: member.photo ?? "", role: member.role ?? "",
     admin: member.isAdmin, builder: member.isBuilder, groups: member.groups, ...(member.email === undefined ? {} : { email: member.email }),
-    language: options.language ?? "en", organization: options.organization ?? "Test organization",
+    language: options.language ?? "en",
   });
   // The key as the Chest derives it, and member() reads it: HMAC-SHA256 of
   // the label of the assertion's shape under the text of the token.
@@ -201,8 +202,9 @@ async function body(request: IncomingMessage, limit: number): Promise<Buffer | n
 
 // fakeChest starts a Chest's API on 127.0.0.1 and points the environment at
 // it: CHEST_API, CHEST_TOKEN (a new one) and CHEST_TOOL ("tool" unless the
-// environment names one). What member() and the modules of the SDK read is
-// then this Chest's.
+// environment names one), and what the Chest is (CHEST_ORGANIZATION,
+// CHEST_TIME_ZONE, CHEST_LANGUAGE, as options.chest says). What member(),
+// chest and the modules of the SDK read is then this Chest's.
 export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChest> {
   const capabilities = new Set(options.capabilities ?? ["members", "files", "notifications", "ai"]);
   const email = capabilities.has("members.email");
@@ -537,9 +539,9 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     route(request, response, url).catch(() => { if (!response.headersSent) send(response, 503, { error: "unavailable" }); else response.destroy(); });
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  const saved = Object.fromEntries(["CHEST_API", "CHEST_TOKEN", "CHEST_TOOL"].map(name => [name, process.env[name]]));
+  const saved = Object.fromEntries(["CHEST_API", "CHEST_TOKEN", "CHEST_TOOL", "CHEST_ORGANIZATION", "CHEST_TIME_ZONE", "CHEST_LANGUAGE"].map(name => [name, process.env[name]]));
   chest.api = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
-  Object.assign(process.env, { CHEST_API: chest.api, CHEST_TOKEN: token, CHEST_TOOL: tool });
+  Object.assign(process.env, { CHEST_API: chest.api, CHEST_TOKEN: token, CHEST_TOOL: tool, CHEST_ORGANIZATION: options.chest?.organization ?? "Test organization", CHEST_TIME_ZONE: options.chest?.timeZone ?? "UTC", CHEST_LANGUAGE: options.chest?.language ?? "en" });
   forget();
   chest.emit = async (event, to) => {
     const id = event.id ?? "evt_" + Array.from(randomBytes(26), b => "abcdefghijklmnopqrstuvwxyz234567"[b & 31]).join("");

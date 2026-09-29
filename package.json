@@ -1,7 +1,7 @@
 {
   "name": "@argentic/chest-sdk",
   "version": "0.3.0",
-  "description": "The client a Chest server tool embeds: the member the Chest asserts on a request, who else has the tool, the tool's own database, its private files, badges and notifications inside the Chest, the events of its members' lifecycle, AI models through the Chest, and a fake Chest for its tests.",
+  "description": "The client a Chest server tool embeds: the member the Chest asserts on a request, the Chest itself (its organization, time zone and language), who else has the tool, the tool's own database, its private files, badges and notifications inside the Chest, the events of its members' lifecycle, AI models through the Chest, and a fake Chest for its tests.",
   "keywords": [
     "chest",
     "argentic",
@@ -44,6 +44,10 @@
       "types": "./dist/src/member.d.ts",
       "default": "./dist/src/member.js"
     },
+    "./chest": {
+      "types": "./dist/src/chest.d.ts",
+      "default": "./dist/src/chest.js"
+    },
     "./database": {
       "types": "./dist/src/database.d.ts",
       "default": "./dist/src/database.js"
@@ -80,6 +84,7 @@
     "client/src/api.ts",
     "client/src/errors.ts",
     "client/src/member.ts",
+    "client/src/chest.ts",
     "client/src/members.ts",
     "client/src/database.ts",
     "client/src/files.ts",

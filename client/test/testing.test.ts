@@ -9,6 +9,7 @@ import { member, type Member } from "../src/member.js";
 import * as members from "../src/members.js";
 import * as notifications from "../src/notifications.js";
 import { fakeChest, signAssertion, withMember } from "../src/testing.js";
+import { chest as theChest } from "../src/chest.js";
 
 const id = (name: string): string => "mbr_" + name + "a".repeat(26 - name.length);
 const nord = "grp_nordaaaaaaaaaaaaaaaaaaaaaa";
@@ -26,24 +27,25 @@ test("a fake Chest points the environment at itself, and restores it when closed
     assert.match(chest.api, /^http:\/\/127\.0\.0\.1:[0-9]+$/u);
     assert.equal(process.env["CHEST_TOKEN"], chest.token);
     assert.equal(chest.tool, "notes");
+    assert.deepEqual([theChest.organization.name, theChest.timeZone, theChest.language], ["Test organization", "UTC", "en"]);
   } finally {
     await chest.close();
   }
   assert.equal(process.env["CHEST_API"], undefined);
   assert.equal(process.env["CHEST_TOKEN"], undefined);
+  assert.throws(() => theChest.timeZone, (e: unknown) => e instanceof ChestError && e.code === "not_in_chest");
   assert.equal(process.env["CHEST_TOOL"], "notes");
   delete process.env["CHEST_TOOL"];
 });
 
-test("an assertion signed for a member reads as that member, in its language and organization, on a Web Request and a Node request", async () => {
+test("an assertion signed for a member reads as that member, in its language, on a Web Request and a Node request", async () => {
   const chest = await fakeChest();
   try {
-    assert.deepEqual(member(withMember(new Request("http://tool.test/chest"), camille)), { ...camille, language: "en", organization: "Test organization" });
-    const request = withMember(new IncomingMessage(new Socket()), emile, { language: "fr", organization: "Atelier SAS" });
-    assert.deepEqual(member(request), { ...emile, language: "fr", organization: "Atelier SAS" });
-    // Signed as given: a language or an organization the Chest would never send is nobody.
+    assert.deepEqual(member(withMember(new Request("http://tool.test/chest"), camille)), { ...camille, language: "en" });
+    const request = withMember(new IncomingMessage(new Socket()), emile, { language: "fr" });
+    assert.deepEqual(member(request), { ...emile, language: "fr" });
+    // Signed as given: a language the Chest would never send is nobody.
     assert.equal(member(withMember(new Request("http://tool.test/chest"), camille, { language: "French" })), null);
-    assert.equal(member(withMember(new Request("http://tool.test/chest"), camille, { organization: "" })), null);
     // Signed for another tool, or long ago, it is nobody.
     assert.equal(member(withMember(new Request("http://tool.test/chest"), camille, { tool: "other" })), null);
     assert.equal(member(withMember(new Request("http://tool.test/chest"), camille, { now: new Date(Date.now() - 120_000) })), null);

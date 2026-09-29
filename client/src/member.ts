@@ -35,9 +35,9 @@ export type Member = {
 //   else the Chest's default): a BCP 47 primary tag the product speaks
 //   ("en", "fr"…). The tool's private part (/chest) speaks it; only its public
 //   parts keep a language switch of their own.
-// - organization is the organization the Chest is of ("Acme SAS"), plain
-//   text of 2 to 80 characters: to show in a header or a document.
-export type SignedInMember = Member & { language: string; organization: string };
+// What is the same for every member — the organization, the time zone — is
+// the Chest's: the chest module.
+export type SignedInMember = Member & { language: string };
 
 // The grammars of the identifiers the Chest mints: a tool may check with them
 // the identifiers it stores.
@@ -53,12 +53,10 @@ export const groupIdPattern = /^grp_[a-z2-7]{26}$/u;
 const label = "Chest-Member v2";
 // The claims every assertion carries; email only for a tool that holds
 // members.email.
-const claims = ["iss", "aud", "iat", "exp", "sub", "given_name", "family_name", "name", "picture", "role", "admin", "builder", "groups", "language", "organization"] as const;
+const claims = ["iss", "aud", "iat", "exp", "sub", "given_name", "family_name", "name", "picture", "role", "admin", "builder", "groups", "language"] as const;
 // A language is a primary tag, whichever the product speaks: a language added
-// to the Chest needs no change here. An organization is plain text of 2 to 80
-// characters (counted as code points), without control characters.
+// to the Chest needs no change here.
 const languagePattern = /^[a-z]{2,3}$/u;
-const organizationPattern = /^[^\u0000-\u001f\u007f-\u009f]{2,80}$/u;
 // Clocks of the Chest and of the container may differ by this much, in seconds.
 const skew = 5;
 // An assertion is a few hundred bytes; anything longer is not one.
@@ -105,13 +103,13 @@ export function member(request: IncomingMessage | Request): SignedInMember | nul
   if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) return null;
   const payload = json(encodedPayload);
   if (!payload || !claims.every(name => Object.hasOwn(payload, name))) return null;
-  const { iss, aud, iat, exp, sub, given_name, family_name, name, email, picture, role, admin, builder, groups, language, organization } = payload;
+  const { iss, aud, iat, exp, sub, given_name, family_name, name, email, picture, role, admin, builder, groups, language } = payload;
   if (typeof iss !== "string" || iss === "" || aud !== tool || typeof sub !== "string" || !memberIdPattern.test(sub)) return null;
   if (typeof iat !== "number" || !Number.isSafeInteger(iat) || typeof exp !== "number" || !Number.isSafeInteger(exp) || exp <= iat) return null;
   const now = Math.floor(Date.now() / 1000);
   if (iat > now + skew || exp <= now - skew) return null;
   if (typeof given_name !== "string" || typeof family_name !== "string" || typeof name !== "string" || typeof picture !== "string" || typeof role !== "string" || typeof admin !== "boolean" || typeof builder !== "boolean") return null;
   if (!Array.isArray(groups) || groups.length > 16 || !groups.every(g => typeof g === "string" && groupIdPattern.test(g)) || (email !== undefined && typeof email !== "string")) return null;
-  if (typeof language !== "string" || !languagePattern.test(language) || typeof organization !== "string" || !organizationPattern.test(organization)) return null;
-  return { id: sub, firstName: given_name, lastName: family_name, name, photo: picture === "" ? null : picture, role: role === "" ? null : role, isAdmin: admin, isBuilder: builder, groups: [...groups] as string[], ...(email === undefined ? {} : { email }), language, organization };
+  if (typeof language !== "string" || !languagePattern.test(language)) return null;
+  return { id: sub, firstName: given_name, lastName: family_name, name, photo: picture === "" ? null : picture, role: role === "" ? null : role, isAdmin: admin, isBuilder: builder, groups: [...groups] as string[], ...(email === undefined ? {} : { email }), language };
 }

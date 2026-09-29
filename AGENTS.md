@@ -12,7 +12,8 @@ server-side:
 
 | Need | Import | Requires |
 |---|---|---|
-| Who is signed in on this request, the language to speak to them, the Chest's organization | `member(request)` from `@argentic/chest-sdk/member` | nothing (the Chest sets `CHEST_TOKEN`, `CHEST_TOOL`) |
+| Who is signed in on this request, the language to speak to them | `member(request)` from `@argentic/chest-sdk/member` | nothing (the Chest sets `CHEST_TOKEN`, `CHEST_TOOL`) |
+| The Chest itself: its organization's name, its time zone and today's date there, its language — on a request or not | `chest` from `@argentic/chest-sdk/chest` | nothing (the Chest sets `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`) |
 | The tool's own PostgreSQL database | `databaseUrl()` from `@argentic/chest-sdk/database` | `"capabilities": ["database"]` in `chest.json` |
 | The tool's private files | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` (and `"files": {"quota", "maxObject"}` beyond 1 GiB, 32 MiB per object) |
 | Who else has the tool | `list`, `get`, `lookup`, `groups.list` from `@argentic/chest-sdk/members` | `"capabilities": ["members"]` (`"members.email"` too for addresses) |
@@ -20,7 +21,7 @@ server-side:
 | Tell members what needs their attention | `notify`, `withdraw`, `badge.set`, `badge.setMany` from `@argentic/chest-sdk/notifications` | `"capabilities": ["notifications"]` |
 | Call AI models (chat, streamed or not, tools, embeddings) | `chat`, `embed`, `models`, `usage` from `@argentic/chest-sdk/ai` | `"capabilities": ["ai"]` and `"ai": {"monthly", "models", "purpose"}` |
 | Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `Unavailable`, `AiCapReached`, `AiUnavailable`, `AiModelNotAllowed`, `AiRefused` from `@argentic/chest-sdk/errors` | — |
-| Tests without a Chest | `fakeChest` (and its `emit`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
+| Tests without a Chest | `fakeChest` (and its `emit`, and `chest: {organization, timeZone, language}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
 
 ## Install
 
@@ -225,7 +226,13 @@ at install and at every update.
 - **Speak the member's language.** In `/chest`, render in `member.language`
   (`"en"`, `"fr"`…; its own default for one it does not speak) and offer no
   language switch there; only public pages keep their own switch.
-  `member.organization` is the Chest's company name, plain text.
+- **The day is the Chest's.** “Today”, “this week”, a reminder's hour are in
+  `chest.timeZone`: use `chest.today()`, never
+  `new Date().toISOString().slice(0, 10)` (UTC's day) nor a zone written in
+  the code. The database's sessions are already in the Chest's zone
+  (`current_date` is its day); store instants as `timestamptz`.
+- **The company's name is the Chest's.** Show `chest.organization.name`
+  (plain text, never HTML); never ask your own admin for it.
 - **`member()` is the only source of identity.** Check it on every request
   under `/chest`; `null` means "not a member" — answer 401/403. Never trust a
   user id, email or role sent in a body, query or cookie of your own.
@@ -274,6 +281,8 @@ at install and at every update.
 | Symptom | Cause |
 |---|---|
 | `member()` always returns `null` locally | No `CHEST_TOKEN` / `CHEST_TOOL` in the environment: outside a Chest, nobody is a member. |
+| `ChestError` `not_in_chest` from `chest` | No `CHEST_ORGANIZATION` / `CHEST_TIME_ZONE` / `CHEST_LANGUAGE` in the environment: in a test, start a `fakeChest`; on a development server, set them. |
+| Dates one day off late in the evening | The day computed in UTC (`toISOString()`) or in a zone written in the code: use `chest.today()`. |
 | `CapabilityNotGranted` from `databaseUrl()` | Capability missing in `chest.json`, not approved yet, or `DATABASE_URL` set by the tool itself. |
 | The browser's `PUT` answers 403 `invalid_token` | The upload token was already used, expired (`expiresIn`), or was not made for this host: ask a new `uploadUrl` for each upload. |
 | The browser's `PUT` answers 415 `type_refused` or 400 `type_mismatch` | The file's `Content-Type` is not one of `types`, or its first bytes are not of the type sent. |
