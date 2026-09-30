@@ -1,4 +1,5 @@
-# Publish @argentic/chest-sdk to npm when a tag vX.Y.Z is pushed, through npm
+# Publish @argentic/chest-sdk and @argentic/chest-check (check/, the
+# workspace of the same version) to npm when a tag vX.Y.Z is pushed, through npm
 # trusted publishing (OIDC): no NPM_TOKEN, provenance attached. The trusted
 # publisher is configured on npmjs.com for this repository and this file
 # (publish.yml); see PUBLISHING.md.
@@ -36,12 +37,15 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: |
-          version="v$(node -p 'require("./package.json").version')"
-          if [ "$TAG" != "$version" ]; then
-            echo "Tag $TAG does not match package.json ($version)" >&2
-            exit 1
-          fi
+          for file in package.json check/package.json; do
+            version="v$(node -p "require('./$file').version")"
+            if [ "$TAG" != "$version" ]; then
+              echo "Tag $TAG does not match $file ($version)" >&2
+              exit 1
+            fi
+          done
       - run: npm ci
       - run: npm test
       - run: npm run check:package
       - run: npm publish
+      - run: npm publish -w check

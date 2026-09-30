@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { mock, test } from "node:test";
@@ -27,7 +28,8 @@ test("a fake Chest points the environment at itself, and restores it when closed
     assert.match(chest.api, /^http:\/\/127\.0\.0\.1:[0-9]+$/u);
     assert.equal(process.env["CHEST_TOKEN"], chest.token);
     assert.equal(chest.tool, "notes");
-    assert.deepEqual([theChest.organization.name, theChest.timeZone, theChest.language], ["Test organization", "UTC", "en"]);
+    assert.deepEqual([theChest.organization.name, theChest.timeZone, theChest.language, theChest.currency], ["Test organization", "UTC", "en", "EUR"]);
+    assert.deepEqual(theChest.tool, { teamUrl: "https://notes-chest.chest.test", publicUrl: "https://notes.chest.test" });
   } finally {
     await chest.close();
   }
@@ -58,7 +60,7 @@ test("an assertion signed for a member reads as that member, in its language, on
 });
 
 test("its members answer as a Chest's: order, pages, search, lookup, groups, addresses only with members.email", async () => {
-  const chest = await fakeChest({ members: [zoe, camille, emile], former: [{ id: id("dan"), name: "Dan" }, { id: id("eve"), name: "Eve", erased: true }], groups: [{ id: nord, name: "Nord", members: [camille.id] }], capabilities: ["members"] });
+  const chest = await fakeChest({ members: [zoe, camille, emile], former: [{ id: id("dan"), name: "Dan" }, { id: id("eve"), name: "Eve", status: "erased" }, { id: id("rose"), name: "Rose Lemaire", status: "no_access" }], groups: [{ id: nord, name: "Nord", members: [camille.id] }], capabilities: ["members"] });
   try {
     const first = await members.list({ limit: 2 });
     assert.deepEqual(first.members.map(m => m.name), ["Camille Martin", "Émile Durand"]);
@@ -69,6 +71,9 @@ test("its members answer as a Chest's: order, pages, search, lookup, groups, add
     assert.equal(await members.get(id("mallory")), null);
     const found = await members.lookup([id("dan"), zoe.id, id("mallory")]);
     assert.deepEqual([found.members.map(m => m.id), found.former, found.unknown], [[zoe.id], [{ id: id("dan"), name: "Dan", status: "former" }], [id("mallory")]]);
+    // Without access to the tool, a member of the Chest keeps their name.
+    assert.deepEqual((await members.lookup([id("rose")])).former, [{ id: id("rose"), name: "Rose Lemaire", status: "no_access" }]);
+    assert.equal(await members.get(id("rose")), null);
     // Erased, a former member has no name any more.
     assert.deepEqual((await members.lookup([id("eve")])).former, [{ id: id("eve"), name: null, status: "erased" }]);
     assert.deepEqual(await members.groups.list(), [{ id: nord, name: "Nord", members: [camille.id] }]);
@@ -94,9 +99,10 @@ test("its bounds and refusals are a Chest's", async () => {
     assert.equal(await files.stat("none.txt"), null);
     assert.equal((await files.move("notes/a.txt", "notes/b.txt")).name, "notes/b.txt");
     assert.equal((await files.move("notes/b.txt", "notes/a.txt")).name, "notes/a.txt");
-    assert.match((await files.uploadUrl("photos/", { maxSize: 1024, types: ["image/*"] })).url, /^https:\/\/tool-chest\.chest\.test\/_chest\/files\/upload\//u);
+    assert.ok((await files.uploadUrl("photos/", { maxSize: 1024, types: ["image/*"] })).url.startsWith(chest.api + "/_chest/files/upload/"));
     assert.deepEqual([...chest.files.keys()].sort(), ["hello.txt", "notes/a.txt"]);
-    assert.match((await files.url("notes/a.txt")).url, /^https:\/\/tool-chest\.chest\.test\/_chest\/files\//u);
+    assert.ok((await files.url("notes/a.txt")).url.startsWith(chest.api + "/_chest/files/"));
+    await assert.rejects(files.uploadUrl("big/", { maxSize: (32 << 20) + 1 }), TooLarge);
     await assert.rejects(files.url("none.txt"), (error: unknown) => error instanceof ChestError && error.code === "not_found");
     assert.equal(await files.delete("hello.txt"), true);
     await assert.rejects(files.put("big", new Uint8Array((32 << 20) + 1)), TooLarge);
@@ -109,6 +115,49 @@ test("its bounds and refusals are a Chest's", async () => {
     await assert.rejects(members.groups.list(), RateLimited);
   } finally {
     await busy.close();
+  }
+});
+
+test("its team host serves the links it signs and takes the uploads it authorises, as the Chest's does", async () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const chest = await fakeChest({ capabilities: ["files"], files: { "photos/cat.png": { data: png, type: "image/png" }, "notes.txt": { data: "hello", type: "text/plain" } } });
+  try {
+    // A link opens the content it was signed for; a thumbnail is of an image only.
+    const link = await files.url("photos/cat.png", { thumbnail: 256 });
+    const opened = await fetch(link.url);
+    assert.equal(opened.status, 200);
+    assert.equal(opened.headers.get("content-type"), "image/png");
+    assert.deepEqual(new Uint8Array(await opened.arrayBuffer()), png);
+    await assert.rejects(files.url("notes.txt", { thumbnail: 1024 }), (e: unknown) => e instanceof ChestError && e.code === "no_thumbnail" && e.status === 400);
+    const download = await fetch((await files.url("notes.txt", { download: true })).url);
+    assert.equal(download.headers.get("content-disposition"), `attachment; filename="notes.txt"`);
+    assert.equal(await download.text(), "hello");
+    // Changed since, the link opens nothing.
+    const stale = await files.url("notes.txt");
+    await files.put("notes.txt", "changed");
+    assert.equal((await fetch(stale.url)).status, 404);
+    // An upload into a folder: named by the Chest, its type and size checked, once.
+    const up = await files.uploadUrl("photos/", { maxSize: 64, types: ["image/*"] });
+    const sent = await fetch(up.url, { method: "PUT", body: png, headers: { "Content-Type": "image/png" } });
+    assert.equal(sent.status, 201);
+    const { name, type, size } = await sent.json() as { name: string; type: string; size: number };
+    assert.match(name, /^photos\/[a-f0-9]{20}\.png$/u);
+    assert.deepEqual([type, size], ["image/png", png.length]);
+    assert.equal((await files.stat(name))?.sha256, createHash("sha256").update(png).digest("hex"));
+    assert.equal((await fetch(up.url, { method: "PUT", body: png, headers: { "Content-Type": "image/png" } })).status, 403);
+    const refusals: [{ types?: string[]; maxSize?: number }, Uint8Array<ArrayBuffer>, string, number, string][] = [
+      [{ types: ["image/*"] }, png, "application/pdf", 415, "type_refused"],
+      [{ types: ["image/*"] }, new Uint8Array([1, 2, 3]), "image/png", 400, "type_mismatch"],
+      [{ maxSize: 4 }, png, "image/png", 413, "too_large"],
+    ];
+    for (const [grant, body, contentType, status, error] of refusals) {
+      const one = await files.uploadUrl("upload.bin", grant);
+      const answer = await fetch(one.url, { method: "PUT", body, headers: { "Content-Type": contentType } });
+      assert.deepEqual([answer.status, (await answer.json() as { error: string }).error], [status, error]);
+    }
+    assert.equal(await files.stat("upload.bin"), null);
+  } finally {
+    await chest.close();
   }
 });
 
