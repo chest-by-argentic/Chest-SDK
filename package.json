@@ -1,7 +1,7 @@
 {
   "name": "@argentic/chest-sdk",
   "version": "0.3.0",
-  "description": "The client a Chest server tool embeds: the member the Chest asserts on a request, the Chest itself (its organization, time zone and language), who else has the tool, the tool's own database, its private files, badges and notifications inside the Chest, the events of its members' lifecycle, AI models through the Chest, and a fake Chest for its tests.",
+  "description": "The client a Chest server tool embeds: the member the Chest asserts on a request, the Chest itself (its organization, time zone and language), who else has the tool, the tool's own database, its private files, badges and notifications inside the Chest, the events of its members' lifecycle, the runs of its schedules, AI models through the Chest, and a fake Chest for its tests.",
   "keywords": [
     "chest",
     "argentic",
@@ -13,6 +13,7 @@
     "members",
     "notifications",
     "events",
+    "schedules",
     "ai",
     "llm"
   ],
@@ -68,6 +69,10 @@
       "types": "./dist/src/events.d.ts",
       "default": "./dist/src/events.js"
     },
+    "./schedules": {
+      "types": "./dist/src/schedules.d.ts",
+      "default": "./dist/src/schedules.js"
+    },
     "./ai": {
       "types": "./dist/src/ai.d.ts",
       "default": "./dist/src/ai.js"
@@ -82,6 +87,7 @@
     "dist",
     "client/index.ts",
     "client/src/api.ts",
+    "client/src/signed.ts",
     "client/src/errors.ts",
     "client/src/member.ts",
     "client/src/chest.ts",
@@ -90,6 +96,7 @@
     "client/src/files.ts",
     "client/src/notifications.ts",
     "client/src/events.ts",
+    "client/src/schedules.ts",
     "client/src/ai.ts",
     "client/src/testing.ts"
   ],

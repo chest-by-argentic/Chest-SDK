@@ -1,9 +1,9 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import { ask, refusal } from "./api.js";
 import { ChestError, Unavailable } from "./errors.js";
 import { memberIdPattern } from "./member.js";
 import { forget } from "./members.js";
+import { delivery, eventChannel, instant, json, memorySeen, object, type Seen } from "./signed.js";
 
 // What the Chest tells a server tool of its members' lifecycle, for a tool
 // whose chest.json declares "capabilities": ["members"] and "receives":
@@ -44,115 +44,21 @@ export type ChestEventType = ChestEvent["type"];
 // What handle() calls for each type; a type left out is accepted and ignored.
 export type Handlers = { [K in ChestEventType]?: (event: Extract<ChestEvent, { type: K }>) => void | Promise<void> };
 
-// Where handle() remembers the ids of the events already handled: a store
-// the tool chooses. Keep it durable — a table of the tool's database — so a
-// delivery made again after a restart of the tool is recognised:
-//
-//   create table chest_events (id text primary key, at timestamptz not null default now());
-//   const seen = {
-//     has: async (id: string) => (await sql`select 1 from chest_events where id = ${id}`).length > 0,
-//     add: async (id: string) => { await sql`insert into chest_events (id) values (${id}) on conflict do nothing`; },
-//   };
-export type Seen = { has(id: string): boolean | Promise<boolean>; add(id: string): void | Promise<void> };
+// Where handle() remembers the ids of the events already handled (Seen), and
+// memorySeen, which keeps them in this process: shared with schedules.
+export { memorySeen, type Seen } from "./signed.js";
 
-// memorySeen keeps the last limit ids in this process: lost at a restart,
-// enough for a tool whose handlers are idempotent anyway.
-export function memorySeen(limit = 10000): Seen {
-  const ids = new Set<string>();
-  return {
-    has: id => ids.has(id),
-    add: id => {
-      ids.delete(id);
-      ids.add(id);
-      while (ids.size > limit) ids.delete(ids.values().next().value as string);
-    },
-  };
-}
-
-// The key of the events is HMAC-SHA256 of this label under the text of
-// CHEST_TOKEN, exactly as the Chest derives it (chest/toolfront): neither the
-// token itself nor the key of the Chest-Member assertion.
-const label = "Chest-Event v1";
-const claims = ["aud", "iat", "exp", "jti", "digest"] as const;
-// Clocks of the Chest and of the container may differ by this much, in seconds.
-const skew = 5;
-const maxSignature = 2048;
-const maxBody = 64 << 10;
-const compact = /^([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/u;
-const eventIdPattern = /^evt_[a-z2-7]{26}$/u;
 // The grammar of an erasure's identifier, as the Chest mints it.
 export const erasureIdPattern = /^era_[a-z2-7]{26}$/u;
 const changes: readonly string[] = ["name", "photo", "role", "groups", "email"];
-
-function object(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-function json(raw: string): unknown {
-  try {
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return null;
-  }
-}
-const instant = (v: unknown): v is string => typeof v === "string" && v.length <= 40 && !Number.isNaN(Date.parse(v));
-
-function headerOf(request: IncomingMessage | Request): string | null {
-  const headers = request.headers as Headers | IncomingMessage["headers"];
-  const value = typeof (headers as Headers).get === "function" ? (headers as Headers).get("chest-event") : (headers as IncomingMessage["headers"])["chest-event"];
-  return typeof value === "string" && value.length <= maxSignature ? value : null;
-}
-
-// bodyOf reads the body, 64 KiB at most; null beyond, or when it was read
-// already.
-async function bodyOf(request: IncomingMessage | Request): Promise<Buffer | null> {
-  try {
-    if (request instanceof Request) {
-      if (request.bodyUsed || Number(request.headers.get("content-length") ?? "0") > maxBody) return null;
-      const raw = Buffer.from(await request.arrayBuffer());
-      return raw.length <= maxBody ? raw : null;
-    }
-    const chunks: Buffer[] = [];
-    let size = 0;
-    for await (const chunk of request) {
-      size += (chunk as Buffer).length;
-      if (size > maxBody) return null;
-      chunks.push(chunk as Buffer);
-    }
-    return Buffer.concat(chunks);
-  } catch {
-    return null;
-  }
-}
 
 // envelope reads a signed delivery: the envelope when the signature, the tool,
 // the time and the digest of the body hold; known says its type is one this
 // SDK reads.
 async function envelope(request: IncomingMessage | Request): Promise<{ event: ChestEvent; known: true } | { event: { id: string }; known: false } | null> {
-  const token = process.env["CHEST_TOKEN"];
-  const tool = process.env["CHEST_TOOL"];
-  if (!token || !/^[A-Za-z0-9_-]{43,512}$/u.test(token) || !tool || request.method !== "POST") return null;
-  const signature = headerOf(request);
-  const parts = signature === null ? null : compact.exec(signature);
-  if (!parts) return null;
-  const [, encodedHeader = "", encodedPayload = "", encodedSignature = ""] = parts;
-  const header = object(json(Buffer.from(encodedHeader, "base64url").toString("utf8")));
-  if (!header || Object.keys(header).length !== 2 || header["alg"] !== "HS256" || header["typ"] !== "JWT") return null;
-  const key = createHmac("sha256", Buffer.from(token, "utf8")).update(label).digest();
-  const expected = createHmac("sha256", key).update(encodedHeader + "." + encodedPayload).digest();
-  const given = Buffer.from(encodedSignature, "base64url");
-  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
-  const payload = object(json(Buffer.from(encodedPayload, "base64url").toString("utf8")));
-  if (!payload || Object.keys(payload).length !== claims.length || !claims.every(name => Object.hasOwn(payload, name))) return null;
-  const { aud, iat, exp, jti, digest } = payload;
-  if (aud !== tool || typeof jti !== "string" || !eventIdPattern.test(jti) || typeof digest !== "string") return null;
-  if (typeof iat !== "number" || !Number.isSafeInteger(iat) || typeof exp !== "number" || !Number.isSafeInteger(exp) || exp <= iat) return null;
-  const now = Math.floor(Date.now() / 1000);
-  if (iat > now + skew || exp <= now - skew) return null;
-  const body = await bodyOf(request);
-  if (body === null) return null;
-  const sum = createHash("sha256").update(body).digest();
-  const told = Buffer.from(digest, "base64url");
-  if (told.length !== sum.length || !timingSafeEqual(told, sum)) return null;
+  const signed = await delivery(request, eventChannel);
+  if (!signed) return null;
+  const { id: jti, body } = signed;
   const e = object(json(body.toString("utf8")));
   if (!e || Object.keys(e).length !== 4 || e["id"] !== jti || typeof e["type"] !== "string" || !instant(e["occurredAt"])) return null;
   const data = object(e["data"]);
