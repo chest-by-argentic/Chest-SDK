@@ -26,8 +26,10 @@ import { delivery, eventChannel, instant, json, memorySeen, object, type Seen } 
 // is out of sync and reconciles by listing its members (members.list) at its
 // next start. Every event also empties what members.lookup keeps.
 
-// What changed of a member the tool sees; "email" only with members.email.
-export type MemberChange = "name" | "photo" | "role" | "groups" | "email";
+// What changed of a member the tool sees; "email" only with members.email;
+// "language" and "timeZone": the language the Chest speaks to them and the
+// zone they work in — what the tool writes to them, and at what hour.
+export type MemberChange = "name" | "photo" | "role" | "groups" | "email" | "language" | "timeZone";
 // Something the tool sees of a member who has it changed.
 export type MemberUpdated = { id: string; type: "member.updated"; occurredAt: string; data: { id: string; changed: MemberChange[] } };
 // The member lost access to the tool but stays in the Chest.
@@ -50,7 +52,7 @@ export { memorySeen, type Seen } from "./signed.js";
 
 // The grammar of an erasure's identifier, as the Chest mints it.
 export const erasureIdPattern = /^era_[a-z2-7]{26}$/u;
-const changes: readonly string[] = ["name", "photo", "role", "groups", "email"];
+const changes: readonly string[] = ["name", "photo", "role", "groups", "email", "language", "timeZone"];
 
 // envelope reads a signed delivery: the envelope when the signature, the tool,
 // the time and the digest of the body hold; known says its type is one this

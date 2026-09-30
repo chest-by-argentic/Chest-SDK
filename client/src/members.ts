@@ -5,8 +5,9 @@ import { groupIdPattern, languagePattern, memberIdPattern, timeZonePattern, type
 // Who has the tool, for a server tool whose chest.json declares
 // "capabilities": ["members"] (and "members.email" for their addresses):
 // exactly the members who have access to it at the time of the call — by a
-// grant, a group, open to all, or because they run it. A member without
-// access is indistinguishable from an identifier that does not exist.
+// grant, a group, open to all, or because they run it. list and get see
+// only them; lookup also names those the tool had who no longer have it
+// (FormerMember), so that what they did keeps its author.
 //
 //   import * as members from "@argentic/chest-sdk/members";
 //   const { members: page, next } = await members.list({ q: "cam" });
@@ -21,12 +22,15 @@ import { groupIdPattern, languagePattern, memberIdPattern, timeZonePattern, type
 
 // A page of the list, and the cursor of the next one (null after the last).
 export type MemberPage = { members: Member[]; next: string | null };
-// A member who left the Chest after having the tool: "former" with the name
-// they had, or "erased" without any once the owner had their data erased —
-// render “Former member”.
-export type FormerMember = { id: string; name: string | null; status: "former" | "erased" };
-// What a lookup found: members who have the tool, former members, and
-// identifiers the tool does not know.
+// Someone the tool had who no longer has it: "no_access" with their name, a
+// member of the Chest who lost access to the tool — render “Léa Dubois (no
+// access)” —; "former" with the name they had, a member who left the Chest —
+// “Léa Dubois (former member)” —; or "erased" without any once the owner had
+// their data erased — “Former member”.
+export type FormerMember = { id: string; name: string | null; status: "no_access" | "former" | "erased" };
+// What a lookup found: members who have the tool, those it had who no
+// longer have it, and identifiers the tool does not know — never had, or
+// forgotten.
 export type Lookup = { members: Member[]; former: FormerMember[]; unknown: string[] };
 // A group that gives the tool, with the identifiers of its members.
 export type Group = { id: string; name: string; members: string[] };
@@ -76,8 +80,9 @@ export async function list(options: { after?: string; limit?: number; q?: string
   return { members: page.members.map(shown), next: page.next };
 }
 
-// get is the member of that identifier, or null when the tool does not know
-// them: never a member, a former one, or one without access.
+// get is the member of that identifier, or null when they do not have the
+// tool: never a member, a former one, or one without access (lookup names
+// the last two).
 export async function get(id: string): Promise<Member | null> {
   const response = await ask("members", "GET", "/members/" + checkId(id));
   if (response.status === 404) {
@@ -106,8 +111,8 @@ function keep(id: string, answer: Omit<Known, "at">): void {
 }
 
 // lookup resolves identifiers, each once, in the order given: the members
-// who have the tool, the former members who had it, and the identifiers it
-// does not know. Any number of them: the SDK asks 200 at a time, and keeps
+// who have the tool, those it had who no longer have it, and the identifiers
+// it does not know. Any number of them: the SDK asks 200 at a time, and keeps
 // each answer a minute.
 export async function lookup(ids: Iterable<string>): Promise<Lookup> {
   const wanted = [...new Set([...ids].map(checkId))];
@@ -129,7 +134,7 @@ export async function lookup(ids: Iterable<string>): Promise<Lookup> {
     }
     for (const value of answer.former) {
       const f = value as { id?: unknown; name?: unknown; status?: unknown } | null;
-      if (!f || typeof f.id !== "string" || !memberIdPattern.test(f.id) || !(f.status === "former" ? f.name === undefined || text(f.name, 520) : f.status === "erased" && f.name === undefined)) throw new Unavailable();
+      if (!f || typeof f.id !== "string" || !memberIdPattern.test(f.id) || !(f.status === "former" ? f.name === undefined || text(f.name, 520) : f.status === "no_access" ? text(f.name, 520) : f.status === "erased" && f.name === undefined)) throw new Unavailable();
       keep(f.id, { former: { id: f.id, name: (f.name as string | undefined) ?? null, status: f.status as FormerMember["status"] } });
       told.add(f.id);
     }

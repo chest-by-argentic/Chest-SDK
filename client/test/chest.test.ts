@@ -65,3 +65,24 @@ test("a fake Chest is the Chest a test names, and restores the environment when 
   assert.equal(process.env["CHEST_TIME_ZONE"], "Asia/Tokyo");
   assert.throws(() => chest.organization, notInChest);
 });
+
+test("its currency, and where the tool is reached: origins the Chest gives, the public one only with a public part", () => {
+  const names = ["CHEST_CURRENCY", "CHEST_TEAM_URL", "CHEST_PUBLIC_URL"];
+  try {
+    set({ CHEST_CURRENCY: "CHF", CHEST_TEAM_URL: "https://tasks-chest.acme.argentic.work", CHEST_PUBLIC_URL: "https://status.acme.com" });
+    assert.equal(chest.currency, "CHF");
+    assert.deepEqual(chest.tool, { teamUrl: "https://tasks-chest.acme.argentic.work", publicUrl: "https://status.acme.com" });
+    assert.equal(new URL("/chest/tasks/42", chest.tool.teamUrl).href, "https://tasks-chest.acme.argentic.work/chest/tasks/42");
+    delete process.env["CHEST_PUBLIC_URL"];
+    assert.deepEqual(chest.tool, { teamUrl: "https://tasks-chest.acme.argentic.work", publicUrl: null });
+    for (const [name, value] of [["CHEST_CURRENCY", "eur"], ["CHEST_CURRENCY", "EURO"], ["CHEST_TEAM_URL", "http://tasks-chest.acme.argentic.work"], ["CHEST_TEAM_URL", "https://tasks-chest.acme.argentic.work/chest"], ["CHEST_TEAM_URL", "https://user@evil.example"], ["CHEST_PUBLIC_URL", "https://status.acme.com/"]] as const) {
+      set({ CHEST_CURRENCY: "CHF", CHEST_TEAM_URL: "https://tasks-chest.acme.argentic.work", [name]: value });
+      assert.throws(() => name === "CHEST_CURRENCY" ? chest.currency : chest.tool, notInChest, `${name}=${value}`);
+      delete process.env["CHEST_PUBLIC_URL"];
+    }
+    delete process.env["CHEST_TEAM_URL"];
+    assert.throws(() => chest.tool, notInChest);
+  } finally {
+    for (const name of names) delete process.env[name];
+  }
+});

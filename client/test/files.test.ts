@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { createHash } from "node:crypto";
 import { after, afterEach, before, test } from "node:test";
+import { fakeOrigins } from "../src/api.js";
 import { CapabilityNotGranted, ChestError, QuotaExceeded, TooLarge, Unavailable } from "../src/errors.js";
 import * as files from "../src/files.js";
 
@@ -26,7 +28,8 @@ async function body(request: IncomingMessage): Promise<Buffer> {
   for await (const chunk of request) chunks.push(chunk as Buffer);
   return Buffer.concat(chunks);
 }
-const describe = (name: string, k: Kept) => ({ name, type: k.type, size: k.data.length, updated: k.updated, ...(k.width ? { width: k.width, height: k.height } : {}) });
+const sha256 = (data: Buffer | string) => createHash("sha256").update(data).digest("hex");
+const describe = (name: string, k: Kept) => ({ name, type: k.type, size: k.data.length, sha256: sha256(k.data), updated: k.updated, ...(k.width ? { width: k.width, height: k.height } : {}) });
 
 const server: Server = createServer(async (request, response) => {
   const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -95,7 +98,7 @@ afterEach(() => {
 });
 
 test("put, get, list, delete and url, as the Chest's API answers them", async () => {
-  assert.deepEqual(await files.put("notes/a.txt", "hello"), { name: "notes/a.txt", type: "text/plain; charset=utf-8", size: 5, updated: "1970-01-01T00:00:00.000Z" });
+  assert.deepEqual(await files.put("notes/a.txt", "hello"), { name: "notes/a.txt", type: "text/plain; charset=utf-8", size: 5, sha256: sha256("hello"), updated: "1970-01-01T00:00:00.000Z" });
   await files.put("photos/cat.png", new Uint8Array([0x89, 0x50]), "image/png");
   await files.put("raw.bin", new Uint8Array([1, 2, 3]));
   assert.deepEqual(seen.map(s => [s.method, s.url, s.type]), [["PUT", "/files/notes/a.txt", "text/plain; charset=utf-8"], ["PUT", "/files/photos/cat.png", "image/png"], ["PUT", "/files/raw.bin", "application/octet-stream"]]);
@@ -127,11 +130,11 @@ test("stat, move and the options of a link, as the Chest's API answers them", as
   kept.get("photos/cat.png")!.width = 640;
   kept.get("photos/cat.png")!.height = 480;
   await files.put("notes/a.txt", "hello");
-  assert.deepEqual(await files.stat("photos/cat.png"), { name: "photos/cat.png", type: "image/png", size: 2, updated: "1970-01-01T00:00:00.000Z", width: 640, height: 480 });
+  assert.deepEqual(await files.stat("photos/cat.png"), { name: "photos/cat.png", type: "image/png", size: 2, sha256: sha256(Buffer.from([0x89, 0x50])), updated: "1970-01-01T00:00:00.000Z", width: 640, height: 480 });
   assert.equal(seen.at(-1)?.url, "/files/photos/cat.png?stat");
-  assert.deepEqual(await files.stat("notes/a.txt"), { name: "notes/a.txt", type: "text/plain; charset=utf-8", size: 5, updated: "1970-01-01T00:00:00.000Z" });
+  assert.deepEqual(await files.stat("notes/a.txt"), { name: "notes/a.txt", type: "text/plain; charset=utf-8", size: 5, sha256: sha256("hello"), updated: "1970-01-01T00:00:00.000Z" });
   assert.equal(await files.stat("none"), null);
-  assert.deepEqual(await files.move("notes/a.txt", "archive/a.txt"), { name: "archive/a.txt", type: "text/plain; charset=utf-8", size: 5, updated: "1970-01-01T00:00:00.000Z" });
+  assert.deepEqual(await files.move("notes/a.txt", "archive/a.txt"), { name: "archive/a.txt", type: "text/plain; charset=utf-8", size: 5, sha256: sha256("hello"), updated: "1970-01-01T00:00:00.000Z" });
   assert.deepEqual(JSON.parse(seen.at(-1)!.body), { from: "notes/a.txt", to: "archive/a.txt" });
   assert.equal(await files.stat("notes/a.txt"), null);
   await assert.rejects(files.move("notes/a.txt", "b.txt"), (error: unknown) => error instanceof ChestError && error.code === "not_found" && error.status === 404);
@@ -171,17 +174,23 @@ test("uploadUrl authorises one upload of a name or into a folder, within its bou
 });
 
 test("an answer that is not the Chest's is Unavailable", async () => {
-  const object = { name: "a", type: "image/png", size: 2, updated: "1970-01-01T00:00:00.000Z" };
+  const object = { name: "a", type: "image/png", size: 2, sha256: sha256("ab"), updated: "1970-01-01T00:00:00.000Z" };
   const answers: [() => Promise<unknown>, unknown][] = [
     [() => files.stat("a"), { ...object, name: "b" }],
     [() => files.stat("a"), { ...object, width: 0, height: 1 }],
     [() => files.stat("a"), { ...object, width: 10 }],
     [() => files.stat("a"), { ...object, width: 10, height: 70000 }],
+    [() => files.stat("a"), { ...object, sha256: undefined }],
+    [() => files.stat("a"), { ...object, sha256: sha256("ab").toUpperCase() }],
     [() => files.move("a", "c"), object],
     [() => files.url("a"), { url: "https://web-chest.atelier.example/_chest/files/upload/" + "a.b", expires_in: 900 }],
     [() => files.url("a"), { url: "https://web-chest.atelier.example/_chest/files/" + "a".repeat(1535) + ".b", expires_in: 900 }],
     [() => files.url("a"), { url: "http://web-chest.atelier.example/_chest/files/a.b", expires_in: 900 }],
     [() => files.url("a"), { url: "https://user@evil.example/_chest/files/a.b", expires_in: 900 }],
+    // Local links are those of a fake Chest of this process only.
+    [() => files.url("a"), { url: "http://127.0.0.1:3000/_chest/files/a.b", expires_in: 900 }],
+    [() => files.url("a"), { url: "http://localhost:3000/_chest/files/a.b", expires_in: 900 }],
+    [() => files.uploadUrl("a"), { url: "http://127.0.0.1:3000/_chest/files/upload/a.b", method: "PUT", expires_in: 900 }],
     [() => files.uploadUrl("a"), { url: link, method: "PUT", expires_in: 900 }],
     [() => files.uploadUrl("a"), { url: upload, method: "POST", expires_in: 900 }],
     [() => files.uploadUrl("a"), { url: upload, method: "PUT", expires_in: 901 }],
@@ -192,6 +201,22 @@ test("an answer that is not the Chest's is Unavailable", async () => {
     forged = { value };
     await assert.rejects(call(), Unavailable, JSON.stringify(value).slice(0, 120));
   }
+});
+
+test("a local link is taken only from the origin of a fake Chest while it runs", async () => {
+  const local = "http://127.0.0.1:3000";
+  forged = { value: { url: local + "/_chest/files/a.b", expires_in: 900 } };
+  await assert.rejects(files.url("a"), Unavailable);
+  fakeOrigins.add(local);
+  try {
+    assert.deepEqual(await files.url("a"), { url: local + "/_chest/files/a.b", expiresIn: 900 });
+    forged = { value: { url: "http://127.0.0.1:3001/_chest/files/a.b", expires_in: 900 } };
+    await assert.rejects(files.url("a"), Unavailable);
+  } finally {
+    fakeOrigins.delete(local);
+  }
+  forged = { value: { url: local + "/_chest/files/a.b", expires_in: 900 } };
+  await assert.rejects(files.url("a"), Unavailable);
 });
 
 test("names outside the grammar and objects beyond 512 MiB never leave the tool", async () => {

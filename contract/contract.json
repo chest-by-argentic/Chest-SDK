@@ -1,0 +1,239 @@
+{
+  "contract": "0.4",
+  "manifest": {
+    "file": "chest.json",
+    "maxBytes": 16384,
+    "keys": [
+      {
+        "key": "chest",
+        "required": true,
+        "rule": "The version of the tool contract the tool is written for, \"MAJOR.MINOR\" — the SDK's MAJOR.MINOR. A Chest serves every version up to its own; an older Chest refuses the tool before reading anything else: \"This tool needs a newer version of your Chest\".",
+        "pattern": "^(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
+        "example": "0.4"
+      },
+      {
+        "key": "name",
+        "required": true,
+        "rule": "The tool's name and the label of its address: a lowercase letter, then up to 47 lowercase letters, digits or dashes; never login, node, nor a name ending in -chest. Whoever installs the tool may give it another address.",
+        "pattern": "^[a-z][a-z0-9-]{0,47}$",
+        "example": "tasks"
+      },
+      {
+        "key": "title",
+        "rule": "Shown in lists: 1 to 48 printable characters.",
+        "example": "Tasks"
+      },
+      {
+        "key": "description",
+        "rule": "Shown in the catalogue: 1 to 160 printable characters.",
+        "example": "The team's tasks, by project."
+      },
+      {
+        "key": "icon",
+        "rule": "The tool's icon, a file of the chest/ directory: SVG or PNG, 64 KiB at most.",
+        "pattern": "^chest/[a-z0-9][a-z0-9._-]{0,63}\\.(svg|png)$",
+        "example": "chest/icon.svg"
+      },
+      {
+        "key": "preview",
+        "rule": "A picture of the tool for the catalogue, a file of the chest/ directory: PNG, JPEG or WebP, 512 KiB at most.",
+        "pattern": "^chest/[a-z0-9][a-z0-9._-]{0,63}\\.(png|jpg|jpeg|webp)$",
+        "example": "chest/preview.png"
+      },
+      {
+        "key": "roles",
+        "rule": "The roles a member holds in the tool, the first the default: 1 to 16 distinct identifiers, each of the grammar of name. The tool is told each member's role; its own code decides what a role may do.",
+        "pattern": "^[a-z][a-z0-9-]{0,47}$",
+        "example": [
+          "manager",
+          "member"
+        ]
+      },
+      {
+        "key": "role_labels",
+        "rule": "How declared roles are shown: an object giving roles of roles 1 to 40 printable characters each. Presentation only: never approved.",
+        "example": {
+          "manager": "Manager"
+        }
+      },
+      {
+        "key": "public",
+        "rule": "true for a part served to anyone on the Internet, on the tool's public host, outside /chest. Approved as a permission; closed at installation until whoever runs the tool opens it.",
+        "example": true
+      },
+      {
+        "key": "csp",
+        "rule": "\"tool\": the public part sends its own Content-Security-Policy (a nonce per response, as Next.js needs), and the Chest adds beside it only its floor policy instead of its default one. Requires public; approved as a permission.",
+        "example": "tool"
+      },
+      {
+        "key": "capabilities",
+        "rule": "What the tool uses of its Chest, each at most once, each approved as a permission: database (its own PostgreSQL), files (its private files), members (who has the tool), members.email (their addresses; with members), notifications (badges and inbox items), ai (AI models through the Chest; with the key ai).",
+        "example": [
+          "database",
+          "files",
+          "members",
+          "members.email",
+          "notifications",
+          "ai"
+        ]
+      },
+      {
+        "key": "files",
+        "rule": "With the capability files: \"quota\" and \"maxObject\", sizes such as \"5 GiB\" or \"100 MiB\" — the quota from 100 MiB to 100 GiB (1 GiB without it), the largest object from 1 MiB to 512 MiB (32 MiB without it).",
+        "example": {
+          "quota": "5 GiB",
+          "maxObject": "100 MiB"
+        }
+      },
+      {
+        "key": "ai",
+        "rule": "Required with the capability ai: \"monthly\", the whole euros a month the tool suggests, 1 to 1000 (5 without it; the owner's cap decides); \"models\", the aliases it calls among default, fast, smart, embedding, each once (default without it); \"purpose\", what it does with AI, 1 to 120 printable characters.",
+        "example": {
+          "monthly": 5,
+          "models": [
+            "default",
+            "embedding"
+          ],
+          "purpose": "Summarises the tasks of a project"
+        }
+      },
+      {
+        "key": "receives",
+        "rule": "[\"member.*\"]: the members' lifecycle events, posted to POST /chest-events. Requires the capability members; approved as a permission.",
+        "example": [
+          "member.*"
+        ]
+      },
+      {
+        "key": "schedules",
+        "rule": "Work the tool does by itself at set times, 1 to 8: each {\"name\", \"cron\"} — a name of its own (^[a-z][a-z0-9-]{0,31}$) and a five-field cron line (minute hour day month weekday: numbers, *, ranges, lists and steps, one space apart, Sunday 0 or 7, no names nor macros) read on the wall clock of the Chest's time zone, its runs 15 minutes apart at least. Each run is posted, signed, to POST /chest-schedules, the tool woken if it sleeps, and answered within 5 minutes. Each schedule approved as a permission; running by itself is what is approved.",
+        "example": [
+          {
+            "name": "morning",
+            "cron": "30 7 * * 1-5"
+          }
+        ]
+      },
+      {
+        "key": "network",
+        "rule": "The hosts the server reaches on the Internet, 1 to 32, none covered by another: a host name, *.domain for every name under it, or * alone for any host. Each approved as a permission. Without it, the tool reaches nothing.",
+        "example": [
+          "api.example.com",
+          "*.example.org"
+        ]
+      },
+      {
+        "key": "env",
+        "rule": "The names of the variables the tool expects, 1 to 32 distinct: never PORT, HOME, PATH, HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY, nor a name starting with CHEST_, NODE_, NPM_. Whoever runs the tool sets their values in the Chest, never in the code.",
+        "pattern": "^[A-Z_][A-Z0-9_]{0,63}$",
+        "example": [
+          "TASKS_MAIL_FROM"
+        ]
+      },
+      {
+        "key": "build",
+        "required": true,
+        "rule": "How the Chest builds and starts the tool: fixed commands run as argument vectors, never through a shell.",
+        "example": {
+          "runtime": "node",
+          "install": "npm ci",
+          "command": "npm run build",
+          "start": "npm start",
+          "port": 3000,
+          "static": [
+            "/_next/static/"
+          ]
+        }
+      },
+      {
+        "key": "build.runtime",
+        "required": true,
+        "rule": "\"node\": the Chest's pinned Node image.",
+        "example": "node"
+      },
+      {
+        "key": "build.install",
+        "required": true,
+        "rule": "\"npm ci\": exactly what package-lock.json says, which is required at the root.",
+        "example": "npm ci"
+      },
+      {
+        "key": "build.command",
+        "rule": "The build, \"npm run \u003cscript\u003e\"; none without it.",
+        "pattern": "^[a-z0-9][a-z0-9:_-]{0,63}$",
+        "example": "npm run build"
+      },
+      {
+        "key": "build.start",
+        "rule": "\"npm start\" or \"npm run \u003cscript\u003e\".",
+        "pattern": "^[a-z0-9][a-z0-9:_-]{0,63}$",
+        "example": "npm start"
+      },
+      {
+        "key": "build.port",
+        "required": true,
+        "rule": "The port the server listens on, 1024 to 65535; the Chest sets PORT to it.",
+        "example": 3000
+      },
+      {
+        "key": "build.static",
+        "rule": "The path prefixes of built files, served as they are on both hosts: up to 4, each \"/…/\" (/_next/static/ without it); never /chest/, /_chest/, /chest-events/ or /chest-schedules/.",
+        "example": [
+          "/_next/static/"
+        ]
+      }
+    ]
+  },
+  "source": {
+    "required": [
+      "chest.json",
+      "package.json",
+      "package-lock.json"
+    ],
+    "maxArchiveBytes": 33554432,
+    "maxExpandedBytes": 268435456,
+    "maxEntries": 20000,
+    "refused": [
+      "node_modules, anywhere: the Chest installs the dependencies from package-lock.json",
+      "a symbolic or hard link, a device, a socket or a pipe",
+      ".git, and a Dockerfile, Containerfile, .dockerignore or .containerignore directory at the root",
+      "extended attributes, and a path that leaves the tree"
+    ]
+  },
+  "migrations": {
+    "dir": "migrations",
+    "pattern": "^[0-9]{4}_[a-z0-9_-]{1,64}\\.sql$",
+    "max": 256,
+    "maxBytes": 1048576,
+    "maxTotalBytes": 8388608,
+    "rule": "Played in the order of their names, each once, as one simple query in a transaction of its own, as the tool's database role: the owner of its database, not a superuser. Only with the capability database. UTF-8 SQL text without NUL; a migration played is never changed: a change is a new one.",
+    "trustedExtensions": [
+      "btree_gin",
+      "btree_gist",
+      "citext",
+      "cube",
+      "dict_int",
+      "fuzzystrmatch",
+      "hstore",
+      "intarray",
+      "isn",
+      "lo",
+      "ltree",
+      "pg_trgm",
+      "pgcrypto",
+      "seg",
+      "tablefunc",
+      "tcn",
+      "tsm_system_rows",
+      "tsm_system_time",
+      "unaccent",
+      "uuid-ossp"
+    ]
+  },
+  "policies": {
+    "public": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+    "publicOwn": "frame-ancestors 'none'; base-uri 'self'; object-src 'none'",
+    "team": "frame-ancestors 'none'"
+  }
+}

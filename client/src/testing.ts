@@ -6,12 +6,14 @@ import type { AiUnavailableReason } from "./errors.js";
 import type { ChestEvent } from "./events.js";
 import { groupIdPattern, memberIdPattern, type Member } from "./member.js";
 import { forget } from "./members.js";
+import { fakeOrigins } from "./api.js";
 import { eventChannel, scheduleChannel, sign, signClaims, type Channel } from "./signed.js";
 
 // For a tool's own tests, never imported by its production code: a member's
 // assertion signed as the Chest signs it, and a Chest's API in the test's
-// process that answers members, groups, files (stat, move, links; an upload
-// it authorises but does not receive), badges, notifications, AI (chat,
+// process that answers members, groups, files (stat, move, links and
+// uploads, which it serves and takes itself as the team host would, on its
+// own origin), badges, notifications, AI (chat,
 // streamed or not, embeddings, models, usage: deterministic answers, no
 // provider) and the acknowledgment of an erasure with the Chest's bounds,
 // quotas and errors; and that delivers an event or a run of a schedule to
@@ -30,6 +32,10 @@ import { eventChannel, scheduleChannel, sign, signClaims, type Channel } from ".
 export type FakeGroup = { id: string; name: string; members: string[] };
 // A file as a fake Chest keeps it.
 export type FakeFile = { data: Uint8Array; type: string; updated: string };
+// Someone the tool had who no longer has it: a member of the Chest without
+// access to it, a member who left ("former", by default), or one whose data
+// was erased (their name gone).
+export type FakeFormer = { id: string; name?: string; status?: "no_access" | "former" | "erased" };
 // A notification as a fake Chest keeps it: the member it went to, its text
 // cleaned as the Chest cleans it, its path (/chest when not said) and its
 // key.
@@ -53,22 +59,24 @@ export type FakeAi = { models?: FakeAiModel[]; reply?: (request: Record<string, 
 // sent (null for a GET).
 export type FakeAiCall = { path: string; body: unknown };
 
-// What a fake Chest is given: the members who have the tool, those who left
-// it (erased: their data was erased, the name gone), its groups, the
+// What a fake Chest is given: the members who have the tool, those it had
+// who no longer have it (FakeFormer), its groups, the
 // capabilities its version holds (a capability left out answers 403;
 // members, files, notifications and ai by default, members.email to read the
 // addresses), the events it receives (["member.*"] by default, [] to answer
 // an acknowledgment 403), the files it keeps, its AI, and what the Chest is
-// (the chest module: "Test organization", UTC and English by default).
+// (the chest module: "Test organization", UTC, English and euros by default;
+// the tool at https://<tool>-chest.chest.test, its public part at
+// https://<tool>.chest.test).
 export type FakeChestOptions = {
   members?: Member[];
-  former?: { id: string; name?: string; erased?: boolean }[];
+  former?: FakeFormer[];
   groups?: FakeGroup[];
   capabilities?: string[];
   receives?: string[];
   files?: Record<string, { data: Uint8Array | string; type?: string }>;
   ai?: FakeAi;
-  chest?: { organization?: string; timeZone?: string; language?: string };
+  chest?: { organization?: string; timeZone?: string; language?: string; currency?: string; teamUrl?: string; publicUrl?: string | null };
 };
 
 // An event for emit: its type and data; its id (a new evt_… by default) and
@@ -81,8 +89,9 @@ export type FakeEvent = { [K in ChestEvent["type"]]: { type: K; data: Extract<Ch
 // default).
 export type FakeRun = { id?: string; scheduledAt?: string; attempt?: number };
 
-// A fake Chest in the test's process: its address, the token and the tool it
-// set in the environment, what it keeps (members, groups and files a test
+// A fake Chest in the test's process: its address — its API, and the origin
+// where it serves the links and takes the uploads it signs —, the token and
+// the tool it set in the environment, what it keeps (members, groups and files a test
 // changes or reads; the notifications the tool sent, in the order sent, a
 // replaced one last; each member's badge; the erasures the tool
 // acknowledged; its calls to AI, in order), emit, which delivers an event to the tool — POST
@@ -152,6 +161,19 @@ export function withMember<R extends Request | IncomingMessage>(request: R, memb
 const maxLimit = 500, defaultLimit = 100, maxLookup = 200, callsPerMinute = 600;
 const maxObject = 32 << 20, maxObjects = 10000, maxTotal = 1 << 30;
 const namePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,7}$/u;
+// Its links and uploads: their paths on the team host, their lives in
+// seconds, the images it makes thumbnails of, the first bytes an upload of
+// a type must start with, the endings of the names it chooses (chest/toolfiles).
+const linkPath = "/_chest/files/", uploadPath = "/_chest/files/upload/", linkLife = 900, uploadLife = 900;
+const mediaPattern = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,62}\/(\*|[a-z0-9][a-z0-9!#$&^_.+-]{0,62})$/u;
+const thumbnailed = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+const starts = (...heads: string[]) => (data: Buffer): boolean => heads.some(head => data.subarray(0, head.length).equals(Buffer.from(head, "latin1")));
+const signatures: Record<string, (data: Buffer) => boolean> = {
+  "image/jpeg": starts("\xff\xd8\xff"), "image/png": starts("\x89PNG\r\n\x1a\n"), "image/gif": starts("GIF87a", "GIF89a"),
+  "image/webp": data => data.subarray(0, 4).toString("latin1") === "RIFF" && data.subarray(8, 12).toString("latin1") === "WEBP", "application/pdf": starts("%PDF-"),
+};
+const extensions: Record<string, string> = { "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp", "image/avif": ".avif", "image/heic": ".heic", "application/pdf": ".pdf", "text/plain": ".txt", "text/csv": ".csv", "application/json": ".json", "application/zip": ".zip", "video/mp4": ".mp4", "audio/mpeg": ".mp3" };
+const newToken = (): string => randomBytes(18).toString("base64url") + "." + randomBytes(12).toString("base64url");
 // Its notifications: recipients and badges a call, text, quotas.
 const maxRecipients = 500, maxTitle = 80, maxText = 280, maxPath = 512, maxCount = 9999;
 const recipientsPerHour = 1000, itemsPerDay = 100, badgesPerMinute = 600;
@@ -217,7 +239,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   let window = 0, calls = 0;
   const shown = (m: Member) => ({ id: m.id, first_name: m.firstName, last_name: m.lastName, name: m.name, photo: m.photo, role: m.role, admin: m.isAdmin, builder: m.isBuilder, groups: m.groups, language: m.language, time_zone: m.timeZone, ...(email && m.email !== undefined ? { email: m.email } : {}) });
   const key = (m: Member) => fold(m.name) + "\u0000" + m.id;
-  const described = (name: string, f: FakeFile) => ({ name, type: f.type, size: f.data.byteLength, updated: f.updated });
+  const described = (name: string, f: FakeFile) => ({ name, type: f.type, size: f.data.byteLength, sha256: createHash("sha256").update(f.data).digest("hex"), updated: f.updated });
 
   async function members(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     if (!capabilities.has("members")) return send(response, 403, { error: "capability_not_granted" });
@@ -248,7 +270,8 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       for (const id of new Set(ids as string[])) {
         const m = chest.members.find(x => x.id === id), f = former.find(x => x.id === id);
         if (m) answer.members.push(shown(m));
-        else if (f?.erased) answer.former.push({ id, status: "erased" });
+        else if (f?.status === "erased") answer.former.push({ id, status: "erased" });
+        else if (f?.status === "no_access") answer.former.push({ id, name: f.name ?? "Test member", status: "no_access" });
         else if (f) answer.former.push({ id, ...(f.name ? { name: f.name } : {}), status: "former" });
         else answer.unknown.push(id);
       }
@@ -271,23 +294,30 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       const names = [...files.keys()].filter(n => n.startsWith(prefix) && n > after).sort();
       return send(response, 200, { files: names.slice(0, 1000).map(n => described(n, files.get(n)!)), next: names.length > 1000 ? names[999] : null });
     }
-    if (request.method === "POST" && url.pathname === "/files/url") {
-      const raw = await body(request, 4096);
-      let name: unknown;
-      try { name = (JSON.parse(raw?.toString() ?? "") as { name?: unknown }).name; } catch { name = undefined; }
-      if (typeof name !== "string") return send(response, 400, { error: "invalid_body" });
-      if (!files.has(name)) return send(response, 404, { error: "not_found" });
-      return send(response, 200, { url: `https://${tool}-chest.chest.test/_chest/files/${Buffer.from(name).toString("base64url")}.fake`, expires_in: 900 });
-    }
-    if (request.method === "POST" && (url.pathname === "/files/move" || url.pathname === "/files/upload-url")) {
+    if (request.method === "POST" && (url.pathname === "/files/url" || url.pathname === "/files/move" || url.pathname === "/files/upload-url")) {
       const raw = await body(request, 4096);
       let command: Record<string, unknown> = {};
       try { command = JSON.parse(raw?.toString() ?? "") as Record<string, unknown>; } catch { command = {}; }
+      if (url.pathname === "/files/url") {
+        const { name, thumbnail, download } = command;
+        if (typeof name !== "string" || !(thumbnail === undefined || thumbnail === 256 || thumbnail === 1024) || !(download === undefined || typeof download === "boolean")) return send(response, 400, { error: "invalid_body" });
+        const object = files.get(name);
+        if (!object) return send(response, 404, { error: "not_found" });
+        if (thumbnail !== undefined && !thumbnailed.includes(object.type)) return send(response, 400, { error: "no_thumbnail" });
+        const token = newToken();
+        links.set(token, { name, object, until: Date.now() + linkLife * 1000, download: download === true });
+        return send(response, 200, { url: `${chest.api}${linkPath}${token}`, expires_in: linkLife });
+      }
       if (url.pathname === "/files/upload-url") {
-        // The upload itself goes from a member's browser to the team host,
-        // which a fake Chest does not play: it only authorises it.
-        if (typeof command["name"] !== "string") return send(response, 400, { error: "invalid_body" });
-        return send(response, 200, { url: `https://${tool}-chest.chest.test/_chest/files/upload/${Buffer.from(command["name"]).toString("base64url")}.fake`, method: "PUT", expires_in: typeof command["expires_in"] === "number" ? command["expires_in"] : 900 });
+        const { name, max_size: maxSize, types, expires_in: expiresIn } = command;
+        const folder = typeof name === "string" && name.endsWith("/");
+        if (typeof name !== "string" || !namePattern.test(folder ? name.slice(0, -1) : name)) return send(response, 400, { error: "invalid_name" });
+        if (!(types === undefined || (Array.isArray(types) && types.length <= 8 && types.every(t => typeof t === "string" && mediaPattern.test(t))))) return send(response, 400, { error: "invalid_type" });
+        if (!(maxSize === undefined || (typeof maxSize === "number" && Number.isSafeInteger(maxSize) && maxSize > 0)) || !(expiresIn === undefined || (typeof expiresIn === "number" && Number.isInteger(expiresIn) && expiresIn > 0 && expiresIn <= uploadLife))) return send(response, 400, { error: "invalid_body" });
+        if ((maxSize ?? 0) > maxObject) return send(response, 413, { error: "too_large" });
+        const token = newToken(), life = (expiresIn as number | undefined) ?? uploadLife;
+        uploads.set(token, { name, maxSize: (maxSize as number | undefined) ?? maxObject, types: (types as string[] | undefined) ?? [], until: Date.now() + life * 1000 });
+        return send(response, 200, { url: `${chest.api}${uploadPath}${token}`, method: "PUT", expires_in: life });
       }
       const from = command["from"], to = command["to"];
       if (typeof from !== "string" || typeof to !== "string" || !namePattern.test(from) || !namePattern.test(to)) return send(response, 400, { error: "invalid_name" });
@@ -317,6 +347,39 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       return send(response, 204);
     }
     send(response, 404, { error: "not_found" });
+  }
+
+  // The team host's part of the files, on the fake's own origin: a link it
+  // signed opens the content it was signed for, for its life, as long as
+  // the file is that content — a thumbnail is the image itself, a fake does
+  // not reduce it —; an upload token takes one file, once, within its life,
+  // of the types it names and up to its size, whose first bytes are those of
+  // its type, named by the Chest in a folder. Nobody's session is checked:
+  // the Chest's own front does that.
+  const links = new Map<string, { name: string; object: FakeFile; until: number; download: boolean }>();
+  const uploads = new Map<string, { name: string; maxSize: number; types: string[]; until: number }>();
+  async function front(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    if (request.method === "GET" && url.pathname.startsWith(linkPath) && !url.pathname.startsWith(uploadPath)) {
+      const link = links.get(url.pathname.slice(linkPath.length));
+      if (!link || link.until < Date.now() || files.get(link.name) !== link.object) return send(response, 404, { error: "not_found" });
+      const headers: Record<string, string> = { "Content-Type": link.object.type, "Content-Length": String(link.object.data.byteLength), "X-Content-Type-Options": "nosniff" };
+      if (link.download) headers["Content-Disposition"] = `attachment; filename="${link.name.split("/").pop()}"`;
+      return void response.writeHead(200, headers).end(link.object.data);
+    }
+    if (request.method !== "PUT" || !url.pathname.startsWith(uploadPath)) return send(response, 404, { error: "not_found" });
+    const token = url.pathname.slice(uploadPath.length), grant = uploads.get(token);
+    uploads.delete(token);
+    if (!grant || grant.until < Date.now()) return send(response, 403, { error: "invalid_token" });
+    const type = (request.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+    if (!mediaPattern.test(type) || type.endsWith("/*") || (grant.types.length > 0 && !grant.types.some(t => t === type || (t.endsWith("/*") && type.startsWith(t.slice(0, -1)))))) return send(response, 415, { error: "type_refused" });
+    const data = await body(request, grant.maxSize);
+    if (data === null) return send(response, 413, { error: "too_large" });
+    if (signatures[type] && !signatures[type]!(data)) return send(response, 400, { error: "type_mismatch" });
+    const name = grant.name.endsWith("/") ? grant.name + randomBytes(10).toString("hex") + (extensions[type] ?? "") : grant.name;
+    const total = [...files.entries()].reduce((sum, [n, f]) => n === name ? sum : sum + f.data.byteLength, 0);
+    if (total + data.length > maxTotal || (!files.has(name) && files.size >= maxObjects)) return send(response, 429, { error: "quota_exceeded" });
+    files.set(name, { data: new Uint8Array(data), type, updated: new Date().toISOString() });
+    send(response, 201, { name, type, size: data.length });
   }
 
   // The windows of the notification quotas, each from the first call it
@@ -525,7 +588,8 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
 
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const route = url.pathname.startsWith("/erasures/") ? erasuresRoute
+    const route = url.pathname.startsWith("/_chest/files/") ? front
+      : url.pathname.startsWith("/erasures/") ? erasuresRoute
       : url.pathname.startsWith("/ai/") ? aiRoute
       : url.pathname === "/members" || url.pathname.startsWith("/members/") || url.pathname === "/groups" ? members
       : url.pathname === "/files" || url.pathname.startsWith("/files/") ? filesRoute
@@ -534,9 +598,15 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     route(request, response, url).catch(() => { if (!response.headersSent) send(response, 503, { error: "unavailable" }); else response.destroy(); });
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  const saved = Object.fromEntries(["CHEST_API", "CHEST_TOKEN", "CHEST_TOOL", "CHEST_ORGANIZATION", "CHEST_TIME_ZONE", "CHEST_LANGUAGE"].map(name => [name, process.env[name]]));
+  const saved = Object.fromEntries(["CHEST_API", "CHEST_TOKEN", "CHEST_TOOL", "CHEST_ORGANIZATION", "CHEST_TIME_ZONE", "CHEST_LANGUAGE", "CHEST_CURRENCY", "CHEST_TEAM_URL", "CHEST_PUBLIC_URL"].map(name => [name, process.env[name]]));
   chest.api = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
-  Object.assign(process.env, { CHEST_API: chest.api, CHEST_TOKEN: token, CHEST_TOOL: tool, CHEST_ORGANIZATION: options.chest?.organization ?? "Test organization", CHEST_TIME_ZONE: options.chest?.timeZone ?? "UTC", CHEST_LANGUAGE: options.chest?.language ?? "en" });
+  // Its links are taken by the files module of this process, for as long as
+  // it runs (api.ts, fakeOrigins).
+  fakeOrigins.add(chest.api);
+  const publicUrl = options.chest?.publicUrl === undefined ? `https://${tool}.chest.test` : options.chest.publicUrl;
+  Object.assign(process.env, { CHEST_API: chest.api, CHEST_TOKEN: token, CHEST_TOOL: tool, CHEST_ORGANIZATION: options.chest?.organization ?? "Test organization", CHEST_TIME_ZONE: options.chest?.timeZone ?? "UTC", CHEST_LANGUAGE: options.chest?.language ?? "en", CHEST_CURRENCY: options.chest?.currency ?? "EUR", CHEST_TEAM_URL: options.chest?.teamUrl ?? `https://${tool}-chest.chest.test` });
+  if (publicUrl === null) delete process.env["CHEST_PUBLIC_URL"];
+  else process.env["CHEST_PUBLIC_URL"] = publicUrl;
   forget();
   // post delivers what the Chest posts to the tool on a channel — at its
   // address, or to a handler — and says the status it answered.
@@ -559,6 +629,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     return post("/chest-schedules", scheduleChannel, id, body, to);
   };
   chest.close = async () => {
+    fakeOrigins.delete(chest.api);
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     for (const [name, value] of Object.entries(saved)) {

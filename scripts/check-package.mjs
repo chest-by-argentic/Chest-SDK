@@ -63,11 +63,19 @@ try {
     assert.ok(shipped.includes(target.slice(2)), `export target missing from the package: ${target}`);
   }
 
+  // The runtime client stays small: the checker is its own package.
+  assert.ok(packed.size < 200 * 1024, `${name} packs ${packed.size} bytes: the runtime client must stay small`);
+  step("npm pack @argentic/chest-check");
+  const [checkPacked] = JSON.parse(run(npm, ["pack", "--json", "--pack-destination", work], join(root, "check")).replace(/^[^[]*/su, ""));
+  console.log(`${checkPacked.filename}: ${checkPacked.files.length} files, ${checkPacked.size} bytes (unpacked ${checkPacked.unpackedSize})`);
+  assert.deepEqual(checkPacked.files.map(file => file.path).sort(), ["README.md", "check.wasm.gz", "check.wasm.sha256", "dist/cli.js", "package.json"]);
+  assert.equal(checkPacked.version, manifest.version, "the checker is released with the SDK");
+
   step("install the tarball into a throwaway project");
   const consumer = join(work, "consumer");
   mkdirSync(consumer);
   writeFileSync(join(consumer, "package.json"), JSON.stringify({ name: "consumer", private: true, type: "module" }) + "\n");
-  run(npm, ["install", "--no-audit", "--no-fund", "--ignore-scripts", "--no-package-lock", tarball], consumer);
+  run(npm, ["install", "--no-audit", "--no-fund", "--ignore-scripts", "--no-package-lock", tarball, join(work, checkPacked.filename)], consumer);
   console.log(`installed ${name} in ${consumer}`);
 
   // The same probe runs from Node and from the bundle: every subpath, its
@@ -119,6 +127,19 @@ try {
     for (const specifier of specifiers) console.log(`  ${specifier}: ${result.names[specifier].join(", ")}`);
   }
 
+  step("run chest check, @argentic/chest-check's command, on a tool's repository");
+  const tool = join(work, "tool");
+  mkdirSync(tool);
+  writeFileSync(join(tool, "chest.json"), JSON.stringify({ chest: manifest.version.split(".").slice(0, 2).join("."), name: "tasks", build: { runtime: "node", install: "npm ci", start: "npm start", port: 3000 } }));
+  writeFileSync(join(tool, "package.json"), "{}");
+  writeFileSync(join(tool, "package-lock.json"), "{}");
+  run("git", ["init", "-q"], tool);
+  const bin = join(consumer, "node_modules", ".bin", "chest");
+  const verdict = JSON.parse(run(bin, ["check", tool, "--json"], consumer));
+  assert.deepEqual([verdict.ok, verdict.name, verdict.checker], [true, "tasks", manifest.version.split(".").slice(0, 2).join(".")], "chest check, installed, judges a repository");
+  assert.equal(run(bin, ["--version"], consumer).trim(), manifest.version);
+  console.log(`  chest check: ${verdict.name} would be taken (contract ${verdict.checker})`);
+
   step("import every subpath from Node");
   writeFileSync(join(consumer, "probe.mjs"), probe);
   verify(run(process.execPath, ["probe.mjs"], consumer), "Node");
@@ -148,6 +169,7 @@ import { member, type Member } from "${name}/member";
 import { databaseUrl } from "${name}/database";
 import * as files from "${name}/files";
 import type { FileData, FileObject, FilePage } from "${name}/files";
+import { chest as theChest, type Chest } from "${name}/chest";
 import * as members from "${name}/members";
 import { groups, type Group, type Lookup, type MemberPage } from "${name}/members";
 import * as notifications from "${name}/notifications";
@@ -159,6 +181,7 @@ import type { AiModel, AiUsage, ChatChunk, ChatMessage, ChatResult, ChatTool, Em
 import { fakeChest, signAssertion, withMember, type FakeAi, type FakeAiCall, type FakeChest, type FakeEvent, type FakeNotification } from "${name}/testing";
 
 export function who(request: Request | IncomingMessage): Member | null { return member(request); }
+export function where(): [Chest, string, string, string | null] { return [theChest, theChest.currency, new URL("/chest", theChest.tool.teamUrl).href, theChest.tool.publicUrl]; }
 export const url: string = databaseUrl();
 export async function keep(): Promise<[FileObject, FileData | null, FilePage, boolean, { url: string; expiresIn: number }]> {
   return [await files.put("a.txt", "a", "text/plain"), await files.get("a.txt"), await files.list({ prefix: "a" }), await files.delete("a.txt"), await sdk.files.url("a.txt")];

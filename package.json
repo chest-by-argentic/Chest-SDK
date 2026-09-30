@@ -1,7 +1,7 @@
 {
   "name": "@argentic/chest-sdk",
   "version": "0.4.0",
-  "description": "The client a Chest server tool embeds: the member the Chest asserts on a request, the Chest itself (its organization, time zone and language), who else has the tool, the tool's own database, its private files, badges and notifications inside the Chest, the events of its members' lifecycle, the runs of its schedules, AI models through the Chest, and a fake Chest for its tests.",
+  "description": "The client a Chest server tool embeds: the member the Chest asserts on a request, the Chest itself (its organization, time zone, language and currency, and where the tool is reached), who else has the tool, the tool's own database, its private files, badges and notifications inside the Chest, the events of its members' lifecycle, the runs of its schedules, AI models through the Chest, a fake Chest for its tests — and the tool contract, published in its repository (chest check is @argentic/chest-check).",
   "keywords": [
     "chest",
     "argentic",
@@ -32,6 +32,9 @@
     "node": ">=22"
   },
   "sideEffects": false,
+  "workspaces": [
+    "check"
+  ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -107,7 +110,8 @@
   "scripts": {
     "clean": "node -e \"for (const d of ['dist', 'build']) require('node:fs').rmSync(d, {recursive: true, force: true})\"",
     "build": "npm run clean && tsc -p tsconfig.build.json",
-    "test": "npm run build && tsc -p tsconfig.json && node --test build/client/test/*.test.js",
+    "test": "npm run build && tsc -p tsconfig.json && node scripts/contract.mjs --check && node --test build/client/test/*.test.js && npm test -w check",
+    "contract": "node scripts/contract.mjs",
     "check:package": "node scripts/check-package.mjs",
     "prepack": "npm run build",
     "prepublishOnly": "npm test && npm run check:package"

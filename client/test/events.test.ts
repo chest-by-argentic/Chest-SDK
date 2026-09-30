@@ -74,11 +74,11 @@ test("each event is typed by its type", async () => {
   const chest = await fakeChest({ members: [camille] });
   const { requests, tool } = capture();
   try {
-    await chest.emit({ type: "member.updated", data: { id: camille.id, changed: ["name", "role"] } }, tool);
+    await chest.emit({ type: "member.updated", data: { id: camille.id, changed: ["name", "role", "language", "timeZone"] } }, tool);
     await chest.emit({ type: "member.erased", data: { id: camille.id, erasure, deadline: "2026-10-28T10:00:00Z" } }, tool);
     const [updated, erased] = [await events.verify(requests[0]!), await events.verify(requests[1]!)];
     assert.ok(updated?.type === "member.updated" && erased?.type === "member.erased");
-    assert.deepEqual(updated.data.changed, ["name", "role"]);
+    assert.deepEqual(updated.data.changed, ["name", "role", "language", "timeZone"]);
     assert.deepEqual(erased.data, { id: camille.id, erasure, deadline: "2026-10-28T10:00:00Z" });
     // Read once: the body is gone.
     assert.equal(await events.verify(requests[0]!), null);

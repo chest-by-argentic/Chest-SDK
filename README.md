@@ -1,13 +1,16 @@
 # Chest SDK
 
-`@argentic/chest-sdk` is what a server tool (tool contract v2) embeds to talk
+`@argentic/chest-sdk` is what a server tool (tool contract 0.4) embeds to talk
 with its Chest: the member the Chest asserts on a request, the Chest itself
-(its organization, time zone and language), the other members
-who have the tool, the address of the tool's own database, its private
-files, the badges and notifications it shows members inside the Chest, the
-events of its members' lifecycle, AI models through the Chest — and, for the
-tool's tests, a fake Chest. The SDK has no dependency: it
-only imports `node:*`.
+(its organization, time zone, language and currency, and where the tool is
+reached), the other members who have the tool, the address of the tool's own
+database, its private files, the badges and notifications it shows members
+inside the Chest, the events of its members' lifecycle, AI models through the
+Chest — and, for the tool's tests, a fake Chest. It also publishes the tool
+contract ([`contract/`](contract/README.md): what `chest.json` may say, what
+the Chest builds, what migrations may do, the policies it adds) and `chest
+check`, the Chest's own validator. The SDK has no dependency: it only
+imports `node:*`.
 
 ```sh
 npm install @argentic/chest-sdk
@@ -25,7 +28,7 @@ and `ai` (the testing module is not in the root).
 | Import | Gives |
 |---|---|
 | `@argentic/chest-sdk/member` | `member(request)`, type `Member`: the member of a request on the team host of a server tool, with the language the Chest speaks to them and the zone they work in, read from the `Chest-Member` assertion and verified; `null` without a valid assertion. `memberIdPattern`, `groupIdPattern`, `languagePattern`, `timeZonePattern`: the grammars of the identifiers (`mbr_…`, `grp_…`), of a language and of a zone |
-| `@argentic/chest-sdk/chest` | `chest`, type `Chest`: the Chest the tool runs in — `chest.organization.name`, `chest.timeZone`, `chest.language`, `chest.today()` —, the same for every member, on a request or outside one |
+| `@argentic/chest-sdk/chest` | `chest`, type `Chest`: the Chest the tool runs in — `chest.organization.name`, `chest.timeZone`, `chest.language`, `chest.currency`, `chest.today()` — and where the tool is reached — `chest.tool.teamUrl`, `chest.tool.publicUrl` —, the same for every member, on a request or outside one |
 | `@argentic/chest-sdk/members` | `list`, `get`, `lookup`, `groups.list`, `forget`, types `MemberPage`, `Lookup`, `FormerMember`, `Group`: the members who have the tool (capability `members`, their addresses with `members.email`) |
 | `@argentic/chest-sdk/notifications` | `notify`, `withdraw`, `badge.set`, `badge.setMany`, types `Notice`, `Delivery`, `BadgeCount`, `BadgeWrite`: counters on the tool's tile and items in members' inboxes, inside the Chest (capability `notifications`) |
 | `@argentic/chest-sdk/events` | `handle`, `verify`, `acknowledgeErasure`, `memorySeen`, `erasureIdPattern`, types `ChestEvent`, `MemberUpdated`, `AccessRevoked`, `MemberRemoved`, `MemberErased`, `MemberChange`, `Handlers`, `Seen`: the events of the members' lifecycle the Chest posts to the tool's `/chest-events` (`"receives": ["member.*"]`), verified, deduplicated by id, and the acknowledgment of an erasure |
@@ -34,7 +37,7 @@ and `ai` (the testing module is not in the root).
 | `@argentic/chest-sdk/database` | `databaseUrl()`: the address of the tool's own PostgreSQL database (capability `database`) |
 | `@argentic/chest-sdk/files` | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl`, types `FileObject`, `FileData`, `FilePage`: the tool's private files (capability `files`), kept by the Chest, a 15-minute signed link to one (or to its thumbnail), and uploads straight from a member's browser |
 | `@argentic/chest-sdk/errors` | `ChestError` (`code`, `status`), `CapabilityNotGranted` (403), `TooLarge` (413), `QuotaExceeded` (429), `RateLimited` (429), `Unavailable` (503), and for AI `AiCapReached` (402), `AiModelNotAllowed` (403), `AiRefused` (422), `AiUnavailable` (502, 503), type `AiUnavailableReason`: what the SDK throws when the Chest does not give what a tool asks |
-| `@argentic/chest-sdk/testing` | `signAssertion`, `withMember`, `fakeChest`, types `AssertionOptions`, `FakeChest`, `FakeChestOptions`, `FakeGroup`, `FakeFile`, `FakeNotification`, `FakeEvent`, `FakeRun`, `FakeAi`, `FakeAiModel`, `FakeAiReply`, `FakeAiCall`: for the tool's own tests only |
+| `@argentic/chest-sdk/testing` | `signAssertion`, `withMember`, `fakeChest`, types `AssertionOptions`, `FakeChest`, `FakeChestOptions`, `FakeGroup`, `FakeFile`, `FakeFormer`, `FakeNotification`, `FakeEvent`, `FakeRun`, `FakeAi`, `FakeAiModel`, `FakeAiReply`, `FakeAiCall`: for the tool's own tests only |
 | `@argentic/chest-sdk` | all of the above but `testing`; `files`, `members`, `notifications`, `events`, `schedules` and `ai` as namespaces |
 
 ```ts
@@ -49,6 +52,10 @@ import * as ai from "@argentic/chest-sdk/ai";
 import { CapabilityNotGranted } from "@argentic/chest-sdk/errors";
 // or: import { member, chest, databaseUrl, files, members, notifications, events, ai } from "@argentic/chest-sdk";
 ```
+
+`chest check`, the Chest's validator, is a separate development package,
+`@argentic/chest-check` (see [Check a tool](#check-a-tool--chest-check)):
+this one stays a small runtime client.
 
 Types refer to `node:http` (`IncomingMessage`): a TypeScript project needs
 `@types/node`, as any Node project does. Both `moduleResolution` `bundler` and
@@ -74,7 +81,7 @@ export function GET(request: Request) {
 
 ## The contract, in short
 
-A v2 tool is an ordinary web server in a container without network, run by
+A tool is an ordinary web server in a container without network, run by
 its Chest. The Chest's front is the only one to reach it; the tool reaches only
 what its launcher gives it on `127.0.0.1` (its database, the Chest's API for
 its files, its members, its notifications and AI), and the Chest posts it the
@@ -82,13 +89,39 @@ events it receives on `/chest-events` and the runs of its schedules on
 `/chest-schedules`, through the same launcher. Rights come
 from the Chest — the signed member, the capabilities approved for the
 version — and the Chest enforces them even outside the SDK:
-the SDK makes the calls easier, it is not a security boundary. The full
-contract (manifest `chest.json`, capabilities, build from source, catalogue)
-is described in the Chest repository, `docs/architecture.md`.
+the SDK makes the calls easier, it is not a security boundary. The contract
+itself — every key of `chest.json` and its bounds, what the Chest builds,
+what migrations may create, the Content-Security-Policy it adds, Next.js on
+a Chest — is [`contract/README.md`](contract/README.md), rendered from the
+Chest's own code.
 
-## `member(request)` — server tool (contract v2)
+## Check a tool — `chest check`
 
-A v2 tool is an ordinary web server; on its team host, the Chest relays
+```sh
+npm install --save-dev @argentic/chest-check
+npx chest check          # in the tool's repository
+npx chest check --json   # for agents and CI
+```
+
+The Chest's own validator — the code a Chest runs on every repository it
+builds, compiled to WebAssembly (1.6 MB, in its own package, `check/` of
+this repository, so that a tool's runtime dependencies stay small) — judges the repository as
+the Chest would receive it: the files Git tracks or would add, as they are
+now, committed or not. It says `OK` with the tool's name, roles, what it
+asks and its migrations, or `Refused` with the Chest's reason (`manifest`,
+`migrations`, `no_lock`, `newer_chest`…) and the rule broken; exit status 0,
+1, or 2 when it could not run (not a Git repository). It reads nothing but
+the archive it is given, and needs no network and no Chest. Details:
+[`contract/README.md`](contract/README.md#check-a-repository).
+
+`chest.json` names the version of the contract the tool is written for,
+`"chest": "0.4"` — the MAJOR.MINOR of this SDK. A Chest older than that
+refuses the tool with “This tool needs a newer version of your Chest”;
+up to its own version, a key it does not know is refused, never ignored.
+
+## `member(request)` — the member of a request
+
+A tool is an ordinary web server; on its team host, the Chest relays
 `/chest` and everything below it with the `Chest-Member` header of the
 signed-in member. `member(request)` accepts a Node request (`IncomingMessage`)
 or a Web `Request` and returns a `Member`, the type the `members` API
@@ -178,13 +211,20 @@ import { chest } from "@argentic/chest-sdk/chest";
 chest.organization.name; // "Acme SAS": the organization the Chest is of, as its owner wrote it
 chest.timeZone;          // "Europe/Paris": an IANA zone, "UTC" until the owner sets one
 chest.language;          // "fr": the Chest's own language (a member's is member(request).language)
+chest.currency;          // "EUR": the Chest's currency, ISO 4217
+chest.tool.teamUrl;      // "https://tasks-chest.acme.argentic.work": where members open /chest
+chest.tool.publicUrl;    // "https://status.acme.com": the public part (its custom domain), or null
 chest.today();           // "2026-09-30": the date now in the Chest's zone (or chest.today(at))
 ```
 
 The Chest gives these to every tool in its environment at each start
-(`CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`), and starts every
-tool again when its owner changes one in Settings → General — the tool never
-asks its own admin for the company's name or zone. They are there outside a
+(`CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_CURRENCY`,
+`CHEST_TEAM_URL`, `CHEST_PUBLIC_URL`), and starts every tool that is awake
+again when one changes — the owner changes the first four in Settings →
+General; a custom domain served, or no longer, changes the public address —;
+a tool asleep reads them when it wakes. The tool never asks its own admin for
+the company's name, zone or currency, nor guesses its own address from a
+request. They are there outside a
 request too: a scheduled job, a start-up task, an export. No capability is
 needed: nothing here is more than what the Chest's pages show its members.
 
@@ -197,6 +237,16 @@ needed: nothing here is more than what the Chest's pages show its members.
 - `language` is the language of what the tool writes for no one in
   particular: a public page before the visitor chooses, an export's default.
   A page of `/chest` speaks `member(request).language` instead.
+- `currency` is the ISO 4217 code of the Chest's currency (`"EUR"` until
+  the owner sets one): the amounts of a quote, a price, an expense. Format
+  them with `Intl.NumberFormat(language, { style: "currency", currency:
+  chest.currency })`.
+- `tool.teamUrl` and `tool.publicUrl` are origins, without a path: build a
+  link where no request tells the host — an email sent from a scheduled job,
+  a calendar feed — with `new URL("/chest/tasks/42", chest.tool.teamUrl)`.
+  `publicUrl` is the company's own domain once the owner connected one, else
+  the tool's public host; `null` for a tool without a public part. Store
+  paths in your data, never these origins: they change.
 - `today(at?)` is `YYYY-MM-DD` in the Chest's zone, for now or for an instant
   (`Date` or milliseconds): compare it with dates your database keeps as
   `date`, never with `new Date().toISOString().slice(0, 10)`, which is UTC's.
@@ -205,11 +255,12 @@ Each value is read from the environment at each access, and checked: outside a
 Chest (a development server without the variables), or for a value the Chest
 never gives, reading it throws a `ChestError` with the code `not_in_chest` —
 a wrong zone read silently is exactly what this module exists to prevent. In
-tests, `fakeChest({chest: {organization, timeZone, language}})` sets them.
+tests, `fakeChest({chest: {organization, timeZone, language, currency,
+teamUrl, publicUrl}})` sets them.
 
 ## `members` — who has the tool
 
-A v2 tool that declares `"capabilities": ["members"]` (approved like a
+A tool that declares `"capabilities": ["members"]` (approved like a
 permission: “Sees the name, photo, role and groups of the members who have
 access to it.”) reads the members who have it, through the Chest's API
 (`CHEST_API`, as for files). `"members.email"`, a permission of its own that
@@ -226,8 +277,9 @@ const teams = await members.groups.list();                                  // [
 
 - **Who**: exactly the members who have the tool now — by a grant, a group,
   open to all, or because they run it (owner, admins, its builders);
-  recomputed at every call. A member without access answers as an identifier
-  that does not exist (`get` → `null`, `lookup` → `unknown`).
+  recomputed at every call. `list` and `get` see only them (`get` → `null`
+  for anyone else); `lookup` also names those the tool had who no longer
+  have it (below).
 - **`list({after, limit, q, role, group})`**: ordered by name (accents aside)
   then identifier; `limit` 100 by default, 500 at most; `next` is an opaque
   cursor for `after`, `null` after the last page. `q` finds the start of a
@@ -235,10 +287,14 @@ const teams = await members.groups.list();                                  // [
   —, whatever its case and accents; `role` and `group` keep the members of that
   role or group.
 - **`lookup(ids)`**: each identifier once, in the order given: `members`,
-  `former` (`{id, name, status: "former"}`: someone who left the Chest after
-  having the tool, so a record still reads “Camille Martin (former member)”;
-  `{id, name: null, status: "erased"}` once the owner had their data erased,
-  rendered “Former member”) and `unknown`. The SDK asks 200 at a time and
+  `former` — those the tool had who no longer have it: `{id, name, status:
+  "no_access"}`, a member of the Chest who lost access to the tool (“Léa
+  Dubois (no access)”: the laptops she holds, the goals that need a new
+  owner); `{id, name, status: "former"}`, someone who left the Chest, so a
+  record still reads “Camille Martin (former member)”; `{id, name: null,
+  status: "erased"}` once the owner had their data erased, rendered “Former
+  member” — and `unknown`: an identifier the tool never had (the Chest names
+  nobody the tool never had, not even a member of the Chest). The SDK asks 200 at a time and
   keeps each answer a minute in the process (5,000 at most); `forget()`
   empties it, and so does every event of the members' lifecycle
   (`events.handle`).
@@ -271,7 +327,7 @@ To search tasks by assignee name: `members.list({ q })` first, then
 
 ## `notifications` — badges and inbox items
 
-A v2 tool that declares `"capabilities": ["notifications"]` (approved like a
+A tool that declares `"capabilities": ["notifications"]` (approved like a
 permission: “Shows counters and sends notifications, inside the Chest, to the
 members who have access to it.”) tells its members what needs their
 attention, inside the Chest only — no email, no push to a phone. Two
@@ -351,13 +407,13 @@ away by itself once handled.
 
 ## `events` — the members' lifecycle
 
-A v2 tool that holds `members` and declares `"receives": ["member.*"]` in its
+A tool that holds `members` and declares `"receives": ["member.*"]` in its
 `chest.json` (approved like a permission: “Is told when the members who have
 access to it change or leave.”) is told, on its own `POST /chest-events`:
 
 | Event | `data` | When |
 |---|---|---|
-| `member.updated` | `{id, changed: ("name" \| "photo" \| "role" \| "groups" \| "email")[]}` | Something the tool sees of a member who has it changed (`email` only with `members.email`) |
+| `member.updated` | `{id, changed: ("name" \| "photo" \| "role" \| "groups" \| "email" \| "language" \| "timeZone")[]}` | Something the tool sees of a member who has it changed (`email` only with `members.email`; `language` and `timeZone`: the language the Chest speaks to them and the zone they work in — a digest's words and hour) |
 | `access.revoked` | `{id}` | The member lost access to the tool but stays in the Chest |
 | `member.removed` | `{id}` | The member left the Chest: `lookup` now reads them `former` |
 | `member.erased` | `{id, erasure, deadline}` | The owner asked for this person's data to be erased: delete or anonymise what the tool keeps of them before `deadline` (30 days), then `acknowledgeErasure(erasure)` |
@@ -422,7 +478,7 @@ export async function POST(request: Request) {
 
 ## `ai` — AI models through the Chest
 
-A v2 tool that declares the `ai` capability calls AI models through its
+A tool that declares the `ai` capability calls AI models through its
 Chest. The Chest's owner connects OpenRouter with the company's own key;
 the tool calls models by four **aliases**: `default`, `fast`, `smart`,
 `embedding`, each led by the Chest to a model it chose (the owner may choose
@@ -531,7 +587,7 @@ before it.
 
 ## `databaseUrl()` — database of a server tool
 
-A v2 tool that declares `"capabilities": ["database"]` in its `chest.json`
+A tool that declares `"capabilities": ["database"]` in its `chest.json`
 gets a PostgreSQL database of its own (the capability is shown and approved
 like a permission, in the approval screen). The container has no network: its
 launcher listens on `127.0.0.1` and relays each connection to the Chest. The
@@ -567,7 +623,7 @@ previous version working — going back to the previous version undoes nothing.
 
 ## `files` — files of a server tool
 
-A v2 tool that declares `"capabilities": ["files"]` (approved like a permission)
+A tool that declares `"capabilities": ["files"]` (approved like a permission)
 keeps private files **through its Chest**, never on its disk (the container's
 root is read-only). The launcher gives the tool
 `CHEST_API=http://127.0.0.1:<port>` — its own port, relayed to the Chest; the
@@ -578,7 +634,7 @@ its own files only.
 import * as files from "@argentic/chest-sdk/files";
 await files.put("photos/cat.png", bytes, "image/png");       // Uint8Array or text
 const file = await files.get("photos/cat.png");              // {data, type, size} or null
-const info = await files.stat("photos/cat.png");             // {name, type, size, updated, width?, height?} or null
+const info = await files.stat("photos/cat.png");             // {name, type, size, sha256, updated, width?, height?} or null
 const { files: page, next } = await files.list({ prefix: "photos/" }); // 1000 per page
 await files.move("photos/cat.png", "archive/cat.png");       // atomic; replaces archive/cat.png
 await files.delete("archive/cat.png");                       // true, or false if it did not exist
@@ -658,6 +714,18 @@ first frame — and WebP up to 40 megapixels; `ChestError` `no_thumbnail`
 otherwise); thumbnails are made once, not counted in the quota. `stat` gives
 `width` and `height` for these images. Give a link to a member's browser,
 never to a public page.
+
+Every file the Chest answers (`put`, `stat`, `list`, `move`) carries
+`sha256`, the digest of its content in hex, as the Chest took it: compare
+it, or detect a duplicate receipt, without reading the file again.
+
+The SDK takes a link or an upload address from the Chest only in `https`
+on the team host. The one exception is a fake Chest of the same process
+(`@argentic/chest-sdk/testing`): while it runs, the links and uploads it
+signs on its own origin, `http://127.0.0.1:<port>`, are taken too. Only the
+testing module opens that exception, for that origin alone, until
+`close()`; nothing in the environment does, so production code that never
+imports the testing module never takes a local link.
 
 Errors: `CapabilityNotGranted` (a version without the capability, or no
 `CHEST_API`), `TooLarge` (413), `QuotaExceeded` (429), `Unavailable` (the
@@ -764,7 +832,8 @@ await chest.close();
 |---|---|
 | `signAssertion(member, {token?, tool?, now?})` | A `Chest-Member` header value signed like the Chest's for that `Member` (the token and tool of the environment by default), signed as given, so a language or a zone the Chest never sends makes `member()` refuse it |
 | `withMember(request, member, options?)` | The request carrying that assertion (the options of `signAssertion`): a new Web `Request`, or the same Node request |
-| `fakeChest({members?, former?, groups?, capabilities?, receives?, files?, ai?, chest?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set), the Chest's `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE` (`chest: {organization, timeZone, language}`: `"Test organization"`, `"UTC"`, `"en"` by default) and answers members, groups, files, badges, notifications, AI and erasure acknowledgments with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments). A former member `{id, name?, erased?}` looks up as `former`, or `erased` |
+| `fakeChest({members?, former?, groups?, capabilities?, receives?, files?, ai?, chest?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set), the Chest's `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_CURRENCY`, `CHEST_TEAM_URL`, `CHEST_PUBLIC_URL` (`chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`: `"Test organization"`, `"UTC"`, `"en"`, `"EUR"`, `https://<tool>-chest.chest.test`, `https://<tool>.chest.test` by default; `publicUrl: null` for a tool without a public part) and answers members, groups, files, badges, notifications, AI and erasure acknowledgments with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments). `former: [{id, name?, status?}]` are those the tool had who no longer have it: `lookup` answers them `no_access`, `former` (by default) or `erased` |
+| Links and uploads | The fake serves the team host's part of the files on its own origin (`chest.api`): a link from `files.url` opens the content it was signed for (the image itself for a thumbnail — a fake does not reduce it; `no_thumbnail` for a file that is not a JPEG, PNG, GIF or WebP image), until it expires or the file changes; an address from `files.uploadUrl` takes one `PUT`, within its life, of the types and size it names and whose first bytes are those of its type (403 `invalid_token`, 415 `type_refused`, 400 `type_mismatch`, 413 `too_large`, as the Chest's), named by the Chest in a folder (20 hex characters and the type's ending), and answers `201 {name, type, size}`. It checks no session: a test's `fetch` is the member's browser |
 | `chest.emit(event, to)` | Delivers an event (`{type, data, id?, occurredAt?}`: a new id and now by default; name an id to deliver the same event twice) signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-events`) or a function of a Web `Request` — and says the status it answered. A `member.erased` makes its erasure one the tool may acknowledge |
 | `ai: {models?, reply?, cap?, unavailable?}` | The fake Chest's AI, deterministic and without any provider. `models`: the aliases the tool declared, `{alias, model, provider?, input?, output?}` (all four by default, `fake-default`…`fake-embedding`, provider `openrouter`, 1 and 2 USD per million tokens); another alias answers `model_not_allowed`. `reply(request)`: what a chat answers, given the wire request — a string, or `{text?, toolCalls?: {name, arguments, id?}[]}` (by default the last user message, echoed); streamed, it comes word by word, each tool call's arguments in two pieces, then the finish reason and the usage. Embeddings are unit vectors from a hash of each text (8 dimensions unless `dimensions`). Tokens count one per 4 characters; once the spending reaches `cap` (euros, 5 by default; 0 refuses at once) a call answers `cap_reached`. `unavailable` (`no_connector`, `provider_key_invalid`, `provider_unavailable`) makes chat and embeddings answer it. 60 requests a minute |
 | `chest.run(name, to, {id?, scheduledAt?, attempt?})` | Delivers a run of the schedule `name` (a new id, now and attempt 1 by default; name an id to deliver the same run twice) signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-schedules`) or a function of a Web `Request` — and says the status it answered |
@@ -777,7 +846,9 @@ await chest.close();
 ## Version
 
 The package version is `version` in `package.json` (semver), published by a
-tag `vX.Y.Z` (see `PUBLISHING.md`).
+tag `vX.Y.Z` (see `PUBLISHING.md`). Its MAJOR.MINOR is the version of the
+tool contract it is written for (`"chest"` in `chest.json`): 0.4.x for the
+contract 0.4. A new contract version is a new MINOR of the SDK.
 
 ## The MCP server
 
@@ -795,10 +866,21 @@ that carry a manifest — never offers it.
 
 ```sh
 npm ci
-npm test               # build dist/, compile the tests into build/, run them
-npm run check:package  # npm pack, install into a temp project, import every subpath
-                       # from Node and through esbuild, type-check a TS consumer
+npm test               # build dist/, compile the tests into build/, check that
+                       # contract/README.md says what contract.json says, run them,
+                       # then check/'s (the chest command)
+npm run check:package  # npm pack both packages, the SDK under 200 KiB, install into a
+                       # temp project, run chest check, import every subpath from Node
+                       # and through esbuild, type-check a TS consumer
 ```
+
+`contract/contract.json`, `check/check.wasm.gz` and
+`check/check.wasm.sha256` are written by the Chest's repository
+(`scripts/build-contract.mjs`) from the code that decides; never edit them
+here. `npm run contract` renders the parts of `contract/README.md` they say;
+the words around them are written here. `check/` is the workspace of
+`@argentic/chest-check`, released with the SDK under the same version
+(`PUBLISHING.md`); `check/src/cli.ts` is the `chest` command.
 
 `client/src` holds the modules, `client/index.ts` the package root,
 `client/test` the tests. `npm run build` compiles `client/index.ts`, the
