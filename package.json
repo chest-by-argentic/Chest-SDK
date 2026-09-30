@@ -1,6 +1,6 @@
 {
   "name": "@argentic/chest-sdk",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "The client a Chest server tool embeds: the member the Chest asserts on a request, the Chest itself (its organization, time zone and language), who else has the tool, the tool's own database, its private files, badges and notifications inside the Chest, the events of its members' lifecycle, the runs of its schedules, AI models through the Chest, and a fake Chest for its tests.",
   "keywords": [
     "chest",
