@@ -15,7 +15,7 @@ server-side:
 | Who is signed in on this request, the language to speak to them | `member(request)` from `@argentic/chest-sdk/member` | nothing (the Chest sets `CHEST_TOKEN`, `CHEST_TOOL`) |
 | The Chest itself: its organization's name, its time zone and today's date there, its language, its currency — on a request or not | `chest` from `@argentic/chest-sdk/chest` | nothing (the Chest sets `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_CURRENCY`) |
 | The tool's own addresses, for links in an email or a feed | `chest.tool.teamUrl`, `chest.tool.publicUrl` from `@argentic/chest-sdk/chest` | nothing (`CHEST_TEAM_URL`, `CHEST_PUBLIC_URL` with `"public": true`) |
-| Will the Chest take this repository? | `npx chest check` (`--json`) | a Git repository |
+| Will the Chest take this repository? | `npx chest check` (`--json`) from `@argentic/chest-check` | a devDependency, a Git repository |
 | The tool's own PostgreSQL database | `databaseUrl()` from `@argentic/chest-sdk/database` | `"capabilities": ["database"]` in `chest.json` |
 | The tool's private files | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` (and `"files": {"quota", "maxObject"}` beyond 1 GiB, 32 MiB per object) |
 | Who else has the tool | `list`, `get`, `lookup`, `groups.list` from `@argentic/chest-sdk/members` | `"capabilities": ["members"]` (`"members.email"` too for addresses) |
@@ -47,6 +47,7 @@ Node 22 or later, ESM only, no runtime dependency. TypeScript projects need
 ```
 
 ```sh
+npm install --save-dev @argentic/chest-check
 npx chest check   # before every push: the Chest's own verdict on the repository
 ```
 

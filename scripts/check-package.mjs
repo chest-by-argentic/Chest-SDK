@@ -56,17 +56,25 @@ try {
   console.log(`${packed.filename}: ${shipped.length} files, ${packed.size} bytes`);
   for (const path of shipped) console.log("  " + path);
   for (const path of shipped) {
-    assert.ok(/^(package\.json|README\.md|LICENSE|dist\/.+\.(js|d\.ts)(\.map)?|client\/(index|cli)\.ts|client\/src\/[a-z]+\.ts|contract\/(README\.md|contract\.json|check\.wasm\.gz|check\.wasm\.sha256))$/u.test(path), `unexpected file in the package: ${path}`);
+    assert.ok(/^(package\.json|README\.md|LICENSE|dist\/.+\.(js|d\.ts)(\.map)?|client\/index\.ts|client\/src\/[a-z]+\.ts)$/u.test(path), `unexpected file in the package: ${path}`);
   }
   for (const target of Object.values(manifest.exports).flatMap(entry => typeof entry === "string" ? [entry] : Object.values(entry))) {
     assert.ok(shipped.includes(target.slice(2)), `export target missing from the package: ${target}`);
   }
 
+  // The runtime client stays small: the checker is its own package.
+  assert.ok(packed.size < 200 * 1024, `${name} packs ${packed.size} bytes: the runtime client must stay small`);
+  step("npm pack @argentic/chest-check");
+  const [checkPacked] = JSON.parse(run(npm, ["pack", "--json", "--pack-destination", work], join(root, "check")).replace(/^[^[]*/su, ""));
+  console.log(`${checkPacked.filename}: ${checkPacked.files.length} files, ${checkPacked.size} bytes (unpacked ${checkPacked.unpackedSize})`);
+  assert.deepEqual(checkPacked.files.map(file => file.path).sort(), ["README.md", "check.wasm.gz", "check.wasm.sha256", "dist/cli.js", "package.json"]);
+  assert.equal(checkPacked.version, manifest.version, "the checker is released with the SDK");
+
   step("install the tarball into a throwaway project");
   const consumer = join(work, "consumer");
   mkdirSync(consumer);
   writeFileSync(join(consumer, "package.json"), JSON.stringify({ name: "consumer", private: true, type: "module" }) + "\n");
-  run(npm, ["install", "--no-audit", "--no-fund", "--ignore-scripts", "--no-package-lock", tarball], consumer);
+  run(npm, ["install", "--no-audit", "--no-fund", "--ignore-scripts", "--no-package-lock", tarball, join(work, checkPacked.filename)], consumer);
   console.log(`installed ${name} in ${consumer}`);
 
   // The same probe runs from Node and from the bundle: every subpath, its
@@ -118,7 +126,7 @@ try {
     for (const specifier of specifiers) console.log(`  ${specifier}: ${result.names[specifier].join(", ")}`);
   }
 
-  step("run chest check, the package's command, on a tool's repository");
+  step("run chest check, @argentic/chest-check's command, on a tool's repository");
   const tool = join(work, "tool");
   mkdirSync(tool);
   writeFileSync(join(tool, "chest.json"), JSON.stringify({ chest: manifest.version.split(".").slice(0, 2).join("."), name: "tasks", build: { runtime: "node", install: "npm ci", start: "npm start", port: 3000 } }));

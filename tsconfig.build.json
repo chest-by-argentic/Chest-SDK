@@ -9,7 +9,6 @@
   },
   "files": [
     "client/index.ts",
-    "client/cli.ts",
     "client/src/api.ts",
     "client/src/errors.ts",
     "client/src/member.ts",

@@ -1,4 +1,11 @@
-# Publishing `@argentic/chest-sdk`
+# Publishing `@argentic/chest-sdk` and `@argentic/chest-check`
+
+This repository publishes two packages of one version: the runtime client
+`@argentic/chest-sdk` (the root) and the development tool
+`@argentic/chest-check` (`check/`, an npm workspace: `chest check`, the
+Chest's validator in WebAssembly, kept out of the runtime client so that a
+tool's image stays small). One tag publishes both; both `package.json`
+carry the same version.
 
 For maintainers. Releases are published to npm by GitHub Actions through npm
 **trusted publishing** (OIDC): no npm token exists anywhere, and every version
@@ -15,7 +22,7 @@ this GitHub repository exactly.
 1. In a pull request, bump the version (the lockfile follows):
 
    ```sh
-   npm version 0.1.1 --no-git-tag-version
+   npm version 0.1.1 --no-git-tag-version --workspaces --include-workspace-root
    ```
 
    Before 1.0: `0.1.x` for a fix, `0.2.0` for an addition or an API change.
@@ -65,4 +72,9 @@ npm trust github @argentic/chest-sdk --file publish.yml --repo chest-by-argentic
 
 Trusted publishing can only be configured on a package that already exists;
 the first version was published once by hand, with `--provenance=false`
-(provenance can only be generated in CI).
+(provenance can only be generated in CI). The same holds for
+`@argentic/chest-check`: its first version (0.4.0) is published once by hand
+(`npm publish -w check --provenance=false`), then its trusted publisher is
+set to the same repository and workflow (`npm trust github
+@argentic/chest-check --file publish.yml --repo chest-by-argentic/Chest-SDK
+--allow-publish`).

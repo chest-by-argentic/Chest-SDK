@@ -12,14 +12,15 @@ Version **0.4** — `"chest": "0.4"`, the SDK 0.4.x.
 **One source.** The rules below are the Chest's own code: the tables and
 lists of rules are rendered from [`contract.json`](contract.json), which the
 Chest's repository writes from the packages that decide, together with
-[`check.wasm.gz`](check.wasm.gz), those packages compiled to WebAssembly —
-what `chest check` runs. The Chest's tests fail when either differs from its
+[`check.wasm.gz`](../check/check.wasm.gz), those packages compiled to
+WebAssembly — what `chest check` (`@argentic/chest-check`) runs. The Chest's tests fail when either differs from its
 code; this repository's tests fail when this page differs from
 `contract.json`, or when `check.wasm.gz` says another contract.
 
 ## Check a repository
 
 ```sh
+npm install --save-dev @argentic/chest-check   # a development tool, never in the tool's image
 npx chest check              # in the tool's repository; --json for agents and CI
 ```
 

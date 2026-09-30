@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
-import { archive, check, main, run } from "../cli.js";
+import { archive, check, main, run } from "../src/cli.js";
 
 // Repositories as a tool's author has them: a Git repository, files
 // committed or not.
@@ -70,7 +70,7 @@ test("the contract it runs is the one this package publishes", async () => {
   const { status, output } = await run(["-contract"], Buffer.alloc(0));
   assert.equal(status, 0);
   assert.equal(output, readFileSync(new URL("../../../contract/contract.json", import.meta.url), "utf8"));
-  const version = JSON.parse(readFileSync(new URL("../../../package.json", import.meta.url), "utf8")).version as string;
+  const version = JSON.parse(readFileSync(new URL("../../package.json", import.meta.url), "utf8")).version as string;
   assert.equal(version.split(".").slice(0, 2).join("."), JSON.parse(output).contract);
 });
 

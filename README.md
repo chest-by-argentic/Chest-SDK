@@ -52,8 +52,9 @@ import { CapabilityNotGranted } from "@argentic/chest-sdk/errors";
 // or: import { member, chest, databaseUrl, files, members, notifications, events, ai } from "@argentic/chest-sdk";
 ```
 
-The package also has a command, `chest` (`npx chest check`: see
-[Check a tool](#check-a-tool--chest-check)).
+`chest check`, the Chest's validator, is a separate development package,
+`@argentic/chest-check` (see [Check a tool](#check-a-tool--chest-check)):
+this one stays a small runtime client.
 
 Types refer to `node:http` (`IncomingMessage`): a TypeScript project needs
 `@types/node`, as any Node project does. Both `moduleResolution` `bundler` and
@@ -95,12 +96,14 @@ Chest's own code.
 ## Check a tool — `chest check`
 
 ```sh
+npm install --save-dev @argentic/chest-check
 npx chest check          # in the tool's repository
 npx chest check --json   # for agents and CI
 ```
 
 The Chest's own validator — the code a Chest runs on every repository it
-builds, compiled to WebAssembly and shipped here — judges the repository as
+builds, compiled to WebAssembly (1.6 MB, in its own package, `check/` of
+this repository, so that a tool's runtime dependencies stay small) — judges the repository as
 the Chest would receive it: the files Git tracks or would add, as they are
 now, committed or not. It says `OK` with the tool's name, roles, what it
 asks and its migrations, or `Refused` with the Chest's reason (`manifest`,
@@ -787,18 +790,20 @@ that carry a manifest — never offers it.
 ```sh
 npm ci
 npm test               # build dist/, compile the tests into build/, check that
-                       # contract/README.md says what contract.json says, run them
-npm run check:package  # npm pack, install into a temp project, run chest check,
-                       # import every subpath from Node and through esbuild,
-                       # type-check a TS consumer
+                       # contract/README.md says what contract.json says, run them,
+                       # then check/'s (the chest command)
+npm run check:package  # npm pack both packages, the SDK under 200 KiB, install into a
+                       # temp project, run chest check, import every subpath from Node
+                       # and through esbuild, type-check a TS consumer
 ```
 
-`contract/contract.json`, `contract/check.wasm.gz` and
-`contract/check.wasm.sha256` are written by the Chest's repository
+`contract/contract.json`, `check/check.wasm.gz` and
+`check/check.wasm.sha256` are written by the Chest's repository
 (`scripts/build-contract.mjs`) from the code that decides; never edit them
 here. `npm run contract` renders the parts of `contract/README.md` they say;
-the words around them are written here. `client/cli.ts` is the `chest`
-command.
+the words around them are written here. `check/` is the workspace of
+`@argentic/chest-check`, released with the SDK under the same version
+(`PUBLISHING.md`); `check/src/cli.ts` is the `chest` command.
 
 `client/src` holds the modules, `client/index.ts` the package root,
 `client/test` the tests. `npm run build` compiles `client/index.ts`, the

@@ -14,6 +14,7 @@ const root = new URL("..", import.meta.url);
 const contract = JSON.parse(readFileSync(new URL("contract/contract.json", root), "utf8"));
 const page = new URL("contract/README.md", root);
 const version = JSON.parse(readFileSync(new URL("package.json", root), "utf8")).version;
+const checkVersion = JSON.parse(readFileSync(new URL("check/package.json", root), "utf8")).version;
 
 const size = bytes => bytes % (1 << 30) === 0 ? `${bytes / (1 << 30)} GiB` : bytes % (1 << 20) === 0 ? `${bytes / (1 << 20)} MiB` : bytes % 1024 === 0 ? `${bytes / 1024} KiB` : `${bytes} bytes`;
 const cell = text => text.replaceAll("|", "\\|");
@@ -56,6 +57,7 @@ for (const [name, render] of Object.entries(parts)) {
 }
 const problems = [];
 if (version.split(".").slice(0, 2).join(".") !== contract.contract) problems.push(`package.json ${version} is not of the contract ${contract.contract}: the SDK MAJOR.MINOR is the contract's`);
+if (checkVersion !== version) problems.push(`check/package.json ${checkVersion} is not the SDK's ${version}: both are released together`);
 if (process.argv.includes("--check")) {
   if (after !== before) problems.push("contract/README.md is not what contract.json says: npm run contract");
 } else {

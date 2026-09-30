@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// `chest`, the command of the SDK (npx chest …, once @argentic/chest-sdk is a
-// dependency):
+// `chest`, the command of @argentic/chest-check (npx chest …, once it is a
+// devDependency of the tool):
 //
 //   chest check [directory] [--json]   will the Chest take this repository?
 //   chest --version
 //
 // check judges the tool's repository with the Chest's own code: the
 // validator the Chest runs on every source it builds, compiled to
-// WebAssembly (contract/check.wasm.gz, written by the Chest's repository)
+// WebAssembly (check.wasm.gz, written by the Chest's repository)
 // and run here by Node's WASI, with no access to anything but the archive it
 // is given. The archive is what the Chest would receive: the tree as `git
 // archive` makes it — the files Git tracks or would add, ignored ones left
@@ -29,13 +29,13 @@ import { WASI } from "node:wasi";
 // What chest-check says of a source (cmd/chest-check of the Chest).
 export type Verdict = { checker: string; ok: boolean; reason?: string; detail?: string; contract?: string; name?: string; roles?: string[]; permissions?: string[]; migrations?: number };
 
-// The package's root: the directory above this module that holds its
-// contract/ — dist/ once packed, build/client/ in the SDK's own tests.
+// The package's root: the directory above this module that holds
+// check.wasm.gz — above dist/ once packed, above build/src/ in its tests.
 function packageRoot(): string {
   for (let dir = dirname(fileURLToPath(import.meta.url)); dir !== dirname(dir); dir = dirname(dir)) {
-    if (existsSync(join(dir, "contract", "check.wasm.gz"))) return dir;
+    if (existsSync(join(dir, "check.wasm.gz"))) return dir;
   }
-  throw new Error("contract/check.wasm.gz not found: reinstall @argentic/chest-sdk");
+  throw new Error("check.wasm.gz not found: reinstall @argentic/chest-check");
 }
 // The bound of a source archive (the Chest's MaxArchiveBytes).
 const maxArchive = 32 << 20;
@@ -61,9 +61,9 @@ export function archive(dir: string): Buffer {
 
 // checker is chest-check, checked against the digest the Chest wrote.
 function checker(): Promise<WebAssembly.Module> {
-  const contract = join(packageRoot(), "contract");
-  const wasm = gunzipSync(readFileSync(join(contract, "check.wasm.gz")));
-  if (createHash("sha256").update(wasm).digest("hex") !== readFileSync(join(contract, "check.wasm.sha256"), "utf8").trim()) throw new Error("contract/check.wasm.gz does not match its digest: reinstall @argentic/chest-sdk");
+  const root = packageRoot();
+  const wasm = gunzipSync(readFileSync(join(root, "check.wasm.gz")));
+  if (createHash("sha256").update(wasm).digest("hex") !== readFileSync(join(root, "check.wasm.sha256"), "utf8").trim()) throw new Error("check.wasm.gz does not match its digest: reinstall @argentic/chest-check");
   return WebAssembly.compile(wasm);
 }
 

@@ -1,0 +1,46 @@
+{
+  "name": "@argentic/chest-check",
+  "version": "0.4.0",
+  "description": "chest check: the Chest's own validator, compiled to WebAssembly, judging a tool's repository before a Chest takes it. A development tool: install it as a devDependency; the runtime client is @argentic/chest-sdk.",
+  "keywords": [
+    "chest",
+    "argentic",
+    "chest-tool",
+    "manifest",
+    "validator",
+    "webassembly"
+  ],
+  "homepage": "https://github.com/chest-by-argentic/Chest-SDK/tree/main/check#readme",
+  "bugs": {
+    "url": "https://github.com/chest-by-argentic/Chest-SDK/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/chest-by-argentic/Chest-SDK.git",
+    "directory": "check"
+  },
+  "license": "MIT",
+  "author": "Argentic",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "bin": {
+    "chest": "dist/cli.js"
+  },
+  "files": [
+    "dist/cli.js",
+    "check.wasm.gz",
+    "check.wasm.sha256",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "node -e \"require('node:fs').rmSync('dist', {recursive: true, force: true})\" && tsc -p tsconfig.json",
+    "test": "npm run build && tsc -p tsconfig.test.json && node --test build/test/*.test.js",
+    "prepack": "npm run build"
+  }
+}
