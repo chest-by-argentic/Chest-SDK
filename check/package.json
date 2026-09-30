@@ -1,6 +1,7 @@
 {
   "name": "@argentic/chest-check",
   "version": "0.4.0",
+  "private": true,
   "description": "chest check: the Chest's own validator, compiled to WebAssembly, judging a tool's repository before a Chest takes it. A development tool: install it as a devDependency; the runtime client is @argentic/chest-sdk.",
   "keywords": [
     "chest",
@@ -34,13 +35,9 @@
     "check.wasm.sha256",
     "README.md"
   ],
-  "publishConfig": {
-    "access": "public",
-    "provenance": true
-  },
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist', {recursive: true, force: true})\" && tsc -p tsconfig.json",
     "test": "npm run build && tsc -p tsconfig.test.json && node --test build/test/*.test.js",
-    "prepack": "npm run build"
+    "prepare": "npm run build"
   }
 }

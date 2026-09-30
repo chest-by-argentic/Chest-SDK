@@ -24,7 +24,6 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
-import { WASI } from "node:wasi";
 
 // What chest-check says of a source (cmd/chest-check of the Chest).
 export type Verdict = { checker: string; ok: boolean; reason?: string; detail?: string; contract?: string; name?: string; roles?: string[]; permissions?: string[]; migrations?: number };
@@ -82,6 +81,7 @@ export async function run(args: string[], input: Buffer): Promise<{ status: numb
     if (!String(warning).includes("WASI")) (emit as (...a: unknown[]) => void).call(process, warning, ...rest);
   }) as typeof process.emitWarning;
   try {
+    const { WASI } = await import("node:wasi");
     const wasi = new WASI({ version: "preview1", args: ["chest-check", ...args], env: {}, stdin, stdout, stderr: stdout, returnOnExit: true });
     const instance = await WebAssembly.instantiate(module, wasi.getImportObject() as WebAssembly.Imports);
     const status = wasi.start(instance);
