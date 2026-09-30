@@ -3,12 +3,17 @@
 `@argentic/chest-check` answers “will a Chest take this repository?” with
 the Chest's own code: the validator a Chest runs on every source it builds,
 compiled to WebAssembly and run by Node's WASI. A development tool: the
-runtime client of a tool is `@argentic/chest-sdk`, which stays small.
+runtime client of a tool is `@argentic/chest-sdk`, which stays small. It is
+**not published on npm yet** (`"private": true`): use it from a clone of
+this repository.
 
 ```sh
-npm install --save-dev @argentic/chest-check
-npx chest check          # in the tool's repository
-npx chest check --json   # for agents and CI
+# once, in a clone of chest-by-argentic/Chest-SDK (not on npm yet)
+npm ci                                   # builds check/ too
+npx chest check /path/to/the/tool        # --json for agents and CI
+# or, in the tool's repository, a local devDependency
+npm install --save-dev /path/to/Chest-SDK/check
+npx chest check
 ```
 
 It judges the repository as the Chest would receive it — the files Git

@@ -20,8 +20,12 @@ code; this repository's tests fail when this page differs from
 ## Check a repository
 
 ```sh
-npm install --save-dev @argentic/chest-check   # a development tool, never in the tool's image
-npx chest check              # in the tool's repository; --json for agents and CI
+# once, in a clone of chest-by-argentic/Chest-SDK (not on npm yet)
+npm ci                                   # builds check/ too
+npx chest check /path/to/the/tool        # --json for agents and CI
+# or, in the tool's repository, a local devDependency
+npm install --save-dev /path/to/Chest-SDK/check
+npx chest check
 ```
 
 It reads the repository as the Chest would receive it — the files Git

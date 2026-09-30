@@ -53,7 +53,7 @@ import { CapabilityNotGranted } from "@argentic/chest-sdk/errors";
 ```
 
 `chest check`, the Chest's validator, is a separate development package,
-`@argentic/chest-check` (see [Check a tool](#check-a-tool--chest-check)):
+`@argentic/chest-check`, not published yet (see [Check a tool](#check-a-tool--chest-check)):
 this one stays a small runtime client.
 
 Types refer to `node:http` (`IncomingMessage`): a TypeScript project needs
@@ -96,10 +96,16 @@ Chest's own code.
 ## Check a tool — `chest check`
 
 ```sh
-npm install --save-dev @argentic/chest-check
-npx chest check          # in the tool's repository
-npx chest check --json   # for agents and CI
+# once, in a clone of chest-by-argentic/Chest-SDK (not on npm yet)
+npm ci                                   # builds check/ too
+npx chest check /path/to/the/tool        # --json for agents and CI
+# or, in the tool's repository, a local devDependency
+npm install --save-dev /path/to/Chest-SDK/check
+npx chest check
 ```
+
+`@argentic/chest-check` is `check/` of this repository, not published on npm
+yet: it runs from a clone.
 
 The Chest's own validator — the code a Chest runs on every repository it
 builds, compiled to WebAssembly (1.6 MB, in its own package, `check/` of
