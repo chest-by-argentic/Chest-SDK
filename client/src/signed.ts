@@ -1,10 +1,11 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 
-// What the Chest posts to a server tool — the events of its members
-// (events), the runs of its schedules (schedules) —, through its launcher
-// only (never from the Internet), each on a route of its own and signed for
-// this tool: one mechanism, shared by the modules that read it. Not a
+// What the Chest signs for a server tool — the member of a request
+// (member), the events of its members (events), the runs of its schedules
+// (schedules), the last two posted through its launcher only (never from the
+// Internet), each on a route of its own —: one mechanism, shared by the
+// modules that read it and by testing, which signs as the Chest. Not a
 // published module.
 //
 // The signature is a compact JWS, HS256, typ JWT, in the channel's header,
@@ -43,10 +44,49 @@ export function json(raw: string): unknown {
 // An instant as the Chest writes it (RFC 3339).
 export const instant = (v: unknown): v is string => typeof v === "string" && v.length <= 40 && !Number.isNaN(Date.parse(v));
 
-function headerOf(request: IncomingMessage | Request, name: string): string | null {
+// headerValue is the value of a header, maxLength at most; null for none,
+// longer, or repeated (a Web Request joins repeated values with ", ", which
+// no signature contains; a Node request keeps them as an array).
+export function headerValue(request: IncomingMessage | Request, name: string, maxLength: number): string | null {
   const headers = request.headers as Headers | IncomingMessage["headers"];
   const value = typeof (headers as Headers).get === "function" ? (headers as Headers).get(name) : (headers as IncomingMessage["headers"])[name];
-  return typeof value === "string" && value.length <= maxSignature ? value : null;
+  return typeof value === "string" && value.length <= maxLength ? value : null;
+}
+
+// signedClaims reads what the Chest signed for this tool under a label: the
+// claims of a compact JWS, HS256, typ JWT, under HMAC-SHA256 of the label
+// keyed by the text of CHEST_TOKEN, when the signature holds, its audience
+// is CHEST_TOOL and now is within iat and exp (5 s of skew each way); null
+// otherwise, or outside a Chest. It never throws for what it is given.
+export function signedClaims(value: string | null, label: string): Record<string, unknown> | null {
+  const token = process.env["CHEST_TOKEN"];
+  const tool = process.env["CHEST_TOOL"];
+  if (!token || !/^[A-Za-z0-9_-]{43,512}$/u.test(token) || !tool) return null;
+  const parts = value === null ? null : compact.exec(value);
+  if (!parts) return null;
+  const [, encodedHeader = "", encodedPayload = "", encodedSignature = ""] = parts;
+  const header = object(json(Buffer.from(encodedHeader, "base64url").toString("utf8")));
+  if (!header || Object.keys(header).length !== 2 || header["alg"] !== "HS256" || header["typ"] !== "JWT") return null;
+  const key = createHmac("sha256", Buffer.from(token, "utf8")).update(label).digest();
+  const expected = createHmac("sha256", key).update(encodedHeader + "." + encodedPayload).digest();
+  const given = Buffer.from(encodedSignature, "base64url");
+  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
+  const payload = object(json(Buffer.from(encodedPayload, "base64url").toString("utf8")));
+  if (!payload || payload["aud"] !== tool) return null;
+  const { iat, exp } = payload;
+  if (typeof iat !== "number" || !Number.isSafeInteger(iat) || typeof exp !== "number" || !Number.isSafeInteger(exp) || exp <= iat) return null;
+  const now = Math.floor(Date.now() / 1000);
+  return iat > now + skew || exp <= now - skew ? null : payload;
+}
+
+// signClaims is what the Chest would sign under a label for these claims
+// (their aud, iat and exp included), with that token: for the fake Chest of
+// a tool's tests (testing).
+export function signClaims(label: string, claims: Record<string, unknown>, token: string): string {
+  const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString("base64url");
+  const signed = encode({ alg: "HS256", typ: "JWT" }) + "." + encode(claims);
+  const key = createHmac("sha256", Buffer.from(token, "utf8")).update(label).digest();
+  return signed + "." + createHmac("sha256", key).update(signed).digest("base64url");
 }
 
 // bodyOf reads the body, limit bytes at most; null beyond, or when it was
@@ -77,26 +117,11 @@ async function bodyOf(request: IncomingMessage | Request, limit: number): Promis
 // another tool, expired, a body other than the one signed. It reads the
 // body. It never throws for what a request carries.
 export async function delivery(request: IncomingMessage | Request, channel: Channel): Promise<{ id: string; body: Buffer } | null> {
-  const token = process.env["CHEST_TOKEN"];
-  const tool = process.env["CHEST_TOOL"];
-  if (!token || !/^[A-Za-z0-9_-]{43,512}$/u.test(token) || !tool || request.method !== "POST") return null;
-  const signature = headerOf(request, channel.header.toLowerCase());
-  const parts = signature === null ? null : compact.exec(signature);
-  if (!parts) return null;
-  const [, encodedHeader = "", encodedPayload = "", encodedSignature = ""] = parts;
-  const header = object(json(Buffer.from(encodedHeader, "base64url").toString("utf8")));
-  if (!header || Object.keys(header).length !== 2 || header["alg"] !== "HS256" || header["typ"] !== "JWT") return null;
-  const key = createHmac("sha256", Buffer.from(token, "utf8")).update(channel.label).digest();
-  const expected = createHmac("sha256", key).update(encodedHeader + "." + encodedPayload).digest();
-  const given = Buffer.from(encodedSignature, "base64url");
-  if (given.length !== expected.length || !timingSafeEqual(given, expected)) return null;
-  const payload = object(json(Buffer.from(encodedPayload, "base64url").toString("utf8")));
+  if (request.method !== "POST") return null;
+  const payload = signedClaims(headerValue(request, channel.header.toLowerCase(), maxSignature), channel.label);
   if (!payload || Object.keys(payload).length !== claims.length || !claims.every(name => Object.hasOwn(payload, name))) return null;
-  const { aud, iat, exp, jti, digest } = payload;
-  if (aud !== tool || typeof jti !== "string" || !channel.id.test(jti) || typeof digest !== "string") return null;
-  if (typeof iat !== "number" || !Number.isSafeInteger(iat) || typeof exp !== "number" || !Number.isSafeInteger(exp) || exp <= iat) return null;
-  const now = Math.floor(Date.now() / 1000);
-  if (iat > now + skew || exp <= now - skew) return null;
+  const { jti, digest } = payload;
+  if (typeof jti !== "string" || !channel.id.test(jti) || typeof digest !== "string") return null;
   const body = await bodyOf(request, channel.maxBody);
   if (body === null) return null;
   const sum = createHash("sha256").update(body).digest();
@@ -108,11 +133,8 @@ export async function delivery(request: IncomingMessage | Request, channel: Chan
 // sign is the value of a channel's header the Chest would send with that
 // body: for the fake Chest of a tool's tests (testing).
 export function sign(channel: Channel, id: string, body: string, options: { token: string; tool: string }): string {
-  const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString("base64url");
   const iat = Math.floor(Date.now() / 1000);
-  const signed = encode({ alg: "HS256", typ: "JWT" }) + "." + encode({ aud: options.tool, iat, exp: iat + 60, jti: id, digest: createHash("sha256").update(body).digest("base64url") });
-  const key = createHmac("sha256", Buffer.from(options.token, "utf8")).update(channel.label).digest();
-  return signed + "." + createHmac("sha256", key).update(signed).digest("base64url");
+  return signClaims(channel.label, { aud: options.tool, iat, exp: iat + 60, jti: id, digest: createHash("sha256").update(body).digest("base64url") }, options.token);
 }
 
 // Where a handler remembers the identifiers of the deliveries already

@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Alias, Provider } from "./ai.js";
@@ -6,7 +6,7 @@ import type { AiUnavailableReason } from "./errors.js";
 import type { ChestEvent } from "./events.js";
 import { groupIdPattern, memberIdPattern, type Member } from "./member.js";
 import { forget } from "./members.js";
-import { eventChannel, scheduleChannel, sign, type Channel } from "./signed.js";
+import { eventChannel, scheduleChannel, sign, signClaims, type Channel } from "./signed.js";
 
 // For a tool's own tests, never imported by its production code: a member's
 // assertion signed as the Chest signs it, and a Chest's API in the test's
@@ -107,8 +107,6 @@ export type FakeChest = {
   close(): Promise<void>;
 };
 
-const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString("base64url");
-
 // What an assertion is signed with and says besides the member: the token
 // (CHEST_TOKEN by default) and the tool (CHEST_TOOL by default) it is for,
 // and when it is issued (now by default). The member is signed as given: a
@@ -125,16 +123,14 @@ export function signAssertion(member: Member, options: AssertionOptions = {}): s
   if (!token || !tool) throw new Error("signAssertion needs a token and a tool: start a fakeChest, or name them");
   if (!memberIdPattern.test(member.id) || !member.groups.every(g => groupIdPattern.test(g))) throw new Error("signAssertion needs identifiers of the Chest's shape (mbr_…, grp_…)");
   const iat = Math.floor((options.now ?? new Date()).getTime() / 1000);
-  const body = encode({ alg: "HS256", typ: "JWT" }) + "." + encode({
+  // Under the label of the assertion's shape, as the Chest signs it and
+  // member() reads it.
+  return signClaims("Chest-Member v2", {
     iss: `https://${tool}-chest.chest.test`, aud: tool, iat, exp: iat + 60, sub: member.id,
     given_name: member.firstName, family_name: member.lastName, name: member.name, picture: member.photo ?? "", role: member.role ?? "",
     admin: member.isAdmin, builder: member.isBuilder, groups: member.groups, time_zone: member.timeZone, ...(member.email === undefined ? {} : { email: member.email }),
     language: member.language,
-  });
-  // The key as the Chest derives it, and member() reads it: HMAC-SHA256 of
-  // the label of the assertion's shape under the text of the token.
-  const key = createHmac("sha256", Buffer.from(token, "utf8")).update("Chest-Member v2").digest();
-  return body + "." + createHmac("sha256", key).update(body).digest("base64url");
+  }, token);
 }
 
 
