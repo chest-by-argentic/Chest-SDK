@@ -6,14 +6,16 @@ is the short path and the mistakes to avoid.
 
 ## What it is
 
-A Chest server tool (tool contract v2) is an ordinary web server that runs in
+A Chest server tool (tool contract 0.4) is an ordinary web server that runs in
 a container without network, started by its Chest. The SDK gives it, all
 server-side:
 
 | Need | Import | Requires |
 |---|---|---|
 | Who is signed in on this request, the language to speak to them | `member(request)` from `@argentic/chest-sdk/member` | nothing (the Chest sets `CHEST_TOKEN`, `CHEST_TOOL`) |
-| The Chest itself: its organization's name, its time zone and today's date there, its language — on a request or not | `chest` from `@argentic/chest-sdk/chest` | nothing (the Chest sets `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`) |
+| The Chest itself: its organization's name, its time zone and today's date there, its language, its currency — on a request or not | `chest` from `@argentic/chest-sdk/chest` | nothing (the Chest sets `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_CURRENCY`) |
+| The tool's own addresses, for links in an email or a feed | `chest.tool.teamUrl`, `chest.tool.publicUrl` from `@argentic/chest-sdk/chest` | nothing (`CHEST_TEAM_URL`, `CHEST_PUBLIC_URL` with `"public": true`) |
+| Will the Chest take this repository? | `npx chest check` (`--json`) | a Git repository |
 | The tool's own PostgreSQL database | `databaseUrl()` from `@argentic/chest-sdk/database` | `"capabilities": ["database"]` in `chest.json` |
 | The tool's private files | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` (and `"files": {"quota", "maxObject"}` beyond 1 GiB, 32 MiB per object) |
 | Who else has the tool | `list`, `get`, `lookup`, `groups.list` from `@argentic/chest-sdk/members` | `"capabilities": ["members"]` (`"members.email"` too for addresses) |
@@ -21,7 +23,7 @@ server-side:
 | Tell members what needs their attention | `notify`, `withdraw`, `badge.set`, `badge.setMany` from `@argentic/chest-sdk/notifications` | `"capabilities": ["notifications"]` |
 | Call AI models (chat, streamed or not, tools, embeddings) | `chat`, `embed`, `models`, `usage` from `@argentic/chest-sdk/ai` | `"capabilities": ["ai"]` and `"ai": {"monthly", "models", "purpose"}` |
 | Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `Unavailable`, `AiCapReached`, `AiUnavailable`, `AiModelNotAllowed`, `AiRefused` from `@argentic/chest-sdk/errors` | — |
-| Tests without a Chest | `fakeChest` (and its `emit`, and `chest: {organization, timeZone, language}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
+| Tests without a Chest | `fakeChest` (its `emit`, its links and uploads, `chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
 
 ## Install
 
@@ -35,8 +37,17 @@ Node 22 or later, ESM only, no runtime dependency. TypeScript projects need
 ## Minimal tool
 
 ```jsonc
-// chest.json (repository root)
-{ "capabilities": ["database", "files"] }
+// chest.json (repository root): every key and its rule in contract/README.md
+{
+  "chest": "0.4",
+  "name": "tasks",
+  "capabilities": ["database", "files"],
+  "build": { "runtime": "node", "install": "npm ci", "command": "npm run build", "start": "npm start", "port": 3000 }
+}
+```
+
+```sh
+npx chest check   # before every push: the Chest's own verdict on the repository
 ```
 
 ```ts
@@ -242,10 +253,18 @@ at install and at every update.
 - **Store member ids, never names or addresses.** `member.id` (`mbr_…`) is
   stable and the same in every tool of the Chest; names and addresses change.
   Resolve them when rendering with `members.lookup`; a `former` answer is
-  someone who left (“Camille Martin (former member)”).
-- **A member without access does not exist for the tool.** `members.get`
-  answers `null` and `lookup` puts the id in `unknown`, exactly as for an id
-  that was never a member.
+  someone the tool no longer has: `no_access` (“Léa Dubois (no access)”),
+  `former` (“Camille Martin (former member)”) or `erased` (“Former member”).
+- **A member without access is not the tool's to list.** `members.list`
+  and `members.get` see only those who have the tool; `lookup` keeps the
+  name of someone the tool had (`no_access`) so their records keep an
+  author, and answers `unknown` for anyone the tool never had.
+- **Links in an email or a feed come from `chest.tool`.** Where no request
+  tells the host (a scheduled job, a digest), write `new URL(path,
+  chest.tool.teamUrl)` for members, `chest.tool.publicUrl` for visitors; never
+  a host read from a header, never an address stored in the database.
+- **Amounts are in `chest.currency`.** Never ask your own admin for the
+  company's currency.
 - **The public host has no member.** The Chest never sends an assertion there;
   public pages must work for anonymous visitors.
 - **Business rules are yours.** The SDK is not a security boundary: the Chest
@@ -269,8 +288,8 @@ at install and at every update.
   it serves once, within its `expiresIn`.
 - **Record an uploaded file after `stat` confirms it.** The browser may never
   send it, or the Chest may refuse it: write the name in your database only
-  once `files.stat(name)` returns it (its type and size as the Chest kept
-  them).
+  once `files.stat(name)` returns it (its type, size and `sha256` as the
+  Chest kept them: the digest detects a file sent twice without reading it).
 - **Write to each member in their language.** A notification or an email to
   another member is in `members.get(id).language` (or `lookup`), not the
   sender's; their times in their `timeZone`.
@@ -297,6 +316,9 @@ at install and at every update.
 | `ChestError` with `invalid_name` | A file name outside the allowed shape (up to 8 segments of `[A-Za-z0-9._-]`, none starting with `.` or `-`). |
 | `member.email` is always undefined | The tool does not hold `members.email`: addresses are a permission of their own. |
 | `ChestError` with `invalid_title` | The title is empty (once control characters are removed) or longer than 80 characters. |
+| The Chest refuses the repository: `newer_chest` | `chest.json` names a later contract than the Chest serves (`"chest"`): the Chest must be updated first. |
+| The Chest refuses the repository: `manifest` | A key the contract does not have (a typo, or a key of a later contract), a missing `"chest"`, or a value outside its rule: `npx chest check` says which. |
+| The Chest refuses the repository: `migrations` | A file of `migrations/` not named `NNNN_name.sql`, not SQL text, or migrations without the capability `database`. |
 | `ChestError` with `invalid_path` | `path` is not `/chest` or under it (a full URL, `//`, `..`, a space or non-ASCII character). |
 | `QuotaExceeded` from `notifications` | Beyond 1,000 recipients an hour, 100 items per member a day or 600 badge writes a minute; the call changed nothing. |
 | `events.handle` always answers 401 | The body was read before `handle` (a body parser), or the environment is not the Chest's (`CHEST_TOKEN`, `CHEST_TOOL`; in a test, deliver with `fakeChest().emit`). |

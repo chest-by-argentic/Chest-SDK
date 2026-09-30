@@ -90,6 +90,14 @@ test("lookup asks 200 identifiers at a time, each once, and keeps the answers a 
   members.forget();
   reply = () => ({ status: 200, value: { members: [], former: [], unknown: [] } });
   await assert.rejects(members.lookup([camille.id]), Unavailable);
+  // Someone who lost access keeps their name; without one, it is not the Chest's.
+  reply = () => ({ status: 200, value: { members: [], former: [{ id: id("rose"), name: "Rose Lemaire", status: "no_access" }], unknown: [] } });
+  assert.deepEqual((await members.lookup([id("rose")])).former, [{ id: id("rose"), name: "Rose Lemaire", status: "no_access" }]);
+  members.forget();
+  for (const former of [{ id: id("rose"), status: "no_access" }, { id: id("rose"), name: "Rose", status: "left" }, { id: id("rose"), name: "Rose", status: "erased" }]) {
+    reply = () => ({ status: 200, value: { members: [], former: [former], unknown: [] } });
+    await assert.rejects(members.lookup([id("rose")]), Unavailable, JSON.stringify(former));
+  }
 });
 
 test("groups are those that give the tool", async () => {

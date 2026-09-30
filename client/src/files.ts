@@ -1,4 +1,4 @@
-import { json, read, ask as chest, refusal as refused } from "./api.js";
+import { chestLink, json, read, ask as chest, refusal as refused } from "./api.js";
 import { ChestError, TooLarge, Unavailable } from "./errors.js";
 
 // The private files of a server tool whose chest.json declares
@@ -18,8 +18,9 @@ import { ChestError, TooLarge, Unavailable } from "./errors.js";
 // not reached), ChestError otherwise (invalid_name, invalid_type,
 // no_thumbnail 400, not_found 404…).
 
-// width and height: of a JPEG, PNG, GIF or WebP image the Chest measured.
-export type FileObject = { name: string; type: string; size: number; updated: string; width?: number; height?: number };
+// sha256: the digest of the content, in hex, as the Chest took it; width and
+// height: of a JPEG, PNG, GIF or WebP image the Chest measured.
+export type FileObject = { name: string; type: string; size: number; sha256: string; updated: string; width?: number; height?: number };
 export type FileData = { data: Uint8Array; type: string; size: number };
 export type FilePage = { files: FileObject[]; next: string | null };
 
@@ -31,8 +32,7 @@ const namePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(\/[A-Za-z0-9][A-Za-z0-9._-
 // family (RFC 6838 names).
 const typePattern = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,62}\/(\*|[a-z0-9][a-z0-9!#$&^_.+-]{0,62})$/u;
 // Where the team host serves a link, and where it takes an upload.
-const linkPattern = /^https:\/\/[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?\/_chest\/files\/([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/u;
-const uploadPattern = /^https:\/\/[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?\/_chest\/files\/upload\/([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/u;
+const linkPath = "/_chest/files/", uploadPath = "/_chest/files/upload/";
 // The longest an upload may wait, in seconds.
 const uploadLife = 900;
 
@@ -47,7 +47,7 @@ const refusal = (response: Response) => refused(response, "files");
 function isObject(value: unknown): value is FileObject {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const o = value as Record<string, unknown>;
-  return typeof o["name"] === "string" && namePattern.test(o["name"]) && typeof o["type"] === "string" && o["type"].length <= 200 && typeof o["size"] === "number" && Number.isSafeInteger(o["size"]) && o["size"] >= 0 && typeof o["updated"] === "string" && isSide(o["width"]) && isSide(o["height"]) && (o["width"] === undefined) === (o["height"] === undefined);
+  return typeof o["name"] === "string" && namePattern.test(o["name"]) && typeof o["type"] === "string" && o["type"].length <= 200 && typeof o["size"] === "number" && Number.isSafeInteger(o["size"]) && o["size"] >= 0 && typeof o["sha256"] === "string" && /^[a-f0-9]{64}$/u.test(o["sha256"]) && typeof o["updated"] === "string" && isSide(o["width"]) && isSide(o["height"]) && (o["width"] === undefined) === (o["height"] === undefined);
 }
 // isSide accepts a side of an image the Chest measured, or none.
 function isSide(value: unknown): boolean {
@@ -55,7 +55,7 @@ function isSide(value: unknown): boolean {
 }
 function object(value: unknown): FileObject {
   if (!isObject(value)) throw new Unavailable();
-  return { name: value.name, type: value.type, size: value.size, updated: value.updated, ...(value.width !== undefined ? { width: value.width, height: value.height! } : {}) };
+  return { name: value.name, type: value.type, size: value.size, sha256: value.sha256, updated: value.updated, ...(value.width !== undefined ? { width: value.width, height: value.height! } : {}) };
 }
 
 // put keeps data as the file name, of type type (application/octet-stream
@@ -157,7 +157,7 @@ export async function url(name: string, options: { thumbnail?: 256 | 1024; downl
   const response = await ask("POST", "/files/url", { body: JSON.stringify(command), type: "application/json" });
   if (response.status !== 200) throw await refusal(response);
   const body = (await json(response)) as { url?: unknown; expires_in?: unknown } | null;
-  const token = body && typeof body.url === "string" ? linkPattern.exec(body.url)?.[2] : undefined;
+  const token = body ? chestLink(body.url, linkPath) : undefined;
   if (!body || token === undefined || token.length > 1536 || typeof body.expires_in !== "number" || !Number.isInteger(body.expires_in) || body.expires_in <= 0) throw new Unavailable();
   return { url: body.url as string, expiresIn: body.expires_in };
 }
@@ -181,7 +181,7 @@ export async function uploadUrl(name: string, options: { maxSize?: number; types
   const response = await ask("POST", "/files/upload-url", { body: JSON.stringify(command), type: "application/json" });
   if (response.status !== 200) throw await refusal(response);
   const body = (await json(response)) as { url?: unknown; method?: unknown; expires_in?: unknown } | null;
-  const token = body && typeof body.url === "string" ? uploadPattern.exec(body.url)?.[2] : undefined;
+  const token = body ? chestLink(body.url, uploadPath) : undefined;
   if (!body || token === undefined || token.length > 2048 || body.method !== "PUT" || typeof body.expires_in !== "number" || !Number.isInteger(body.expires_in) || body.expires_in < 1 || body.expires_in > uploadLife) throw new Unavailable();
   return { url: body.url as string, method: "PUT", expiresIn: body.expires_in };
 }
