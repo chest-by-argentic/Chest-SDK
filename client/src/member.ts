@@ -1,5 +1,5 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import { headerValue, signedClaims } from "./signed.js";
 
 // A member of the Chest, as the tool sees them: on a request of its team host
 // (member), and in its members (members.ts).
@@ -55,15 +55,34 @@ export const timeZonePattern = /^(?:UTC|[A-Z][A-Za-z_]{1,31}(?:\/[A-Za-z0-9_+-]{
 // CHEST_TOKEN, exactly as the Chest derives it (chest/toolfront). Its version
 // changes when a claim changes meaning or goes, so that an assertion of
 // another shape is refused rather than misread; a claim added keeps it, as a
-// reader of the former claims still reads them. The signature, the
-// audience and the time window are read as for everything the Chest signs
-// (signed.ts).
+// reader of the former claims still reads them. This module stands alone
+// (node:* only), so that it can be copied by itself.
 const label = "Chest-Member v2";
 // The claims every assertion carries; email only for a tool that holds
 // members.email.
 const claims = ["iss", "aud", "iat", "exp", "sub", "given_name", "family_name", "name", "picture", "role", "admin", "builder", "groups", "language", "time_zone"] as const;
+// Clocks of the Chest and of the container may differ by this much, in seconds.
+const skew = 5;
 // An assertion is a few hundred bytes; anything longer is not one.
 const maxLength = 8192;
+const compact = /^([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)\.([A-Za-z0-9_-]+)$/u;
+
+function assertionOf(request: IncomingMessage | Request): string | null {
+  const headers = request.headers as Headers | IncomingMessage["headers"];
+  // A Web Request joins repeated headers with ", ", which no assertion
+  // contains; a Node request keeps them as an array: both are refused.
+  const value = typeof (headers as Headers).get === "function" ? (headers as Headers).get("chest-member") : (headers as IncomingMessage["headers"])["chest-member"];
+  return typeof value === "string" && value.length <= maxLength ? value : null;
+}
+
+function json(part: string): Record<string, unknown> | null {
+  try {
+    const value = JSON.parse(Buffer.from(part, "base64url").toString("utf8")) as unknown;
+    return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
 
 // member returns who the Chest says is making this request, or null when the
 // request carries no valid assertion — absent, malformed, signed with another
@@ -73,10 +92,26 @@ const maxLength = 8192;
 // second defence, and the tool still decides what a member may do with its
 // own rules.
 export function member(request: IncomingMessage | Request): Member | null {
-  const payload = signedClaims(headerValue(request, "chest-member", maxLength), label);
+  const token = process.env["CHEST_TOKEN"];
+  const tool = process.env["CHEST_TOOL"];
+  if (!token || !/^[A-Za-z0-9_-]{43,512}$/u.test(token) || !tool) return null;
+  const assertion = assertionOf(request);
+  const parts = assertion === null ? null : compact.exec(assertion);
+  if (!parts) return null;
+  const [, encodedHeader = "", encodedPayload = "", encodedSignature = ""] = parts;
+  const header = json(encodedHeader);
+  if (!header || Object.keys(header).length !== 2 || header["alg"] !== "HS256" || header["typ"] !== "JWT") return null;
+  const key = createHmac("sha256", Buffer.from(token, "utf8")).update(label).digest();
+  const expected = createHmac("sha256", key).update(encodedHeader + "." + encodedPayload).digest();
+  const signature = Buffer.from(encodedSignature, "base64url");
+  if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) return null;
+  const payload = json(encodedPayload);
   if (!payload || !claims.every(name => Object.hasOwn(payload, name))) return null;
-  const { iss, sub, given_name, family_name, name, email, picture, role, admin, builder, groups, language, time_zone } = payload;
-  if (typeof iss !== "string" || iss === "" || typeof sub !== "string" || !memberIdPattern.test(sub)) return null;
+  const { iss, aud, iat, exp, sub, given_name, family_name, name, email, picture, role, admin, builder, groups, language, time_zone } = payload;
+  if (typeof iss !== "string" || iss === "" || aud !== tool || typeof sub !== "string" || !memberIdPattern.test(sub)) return null;
+  if (typeof iat !== "number" || !Number.isSafeInteger(iat) || typeof exp !== "number" || !Number.isSafeInteger(exp) || exp <= iat) return null;
+  const now = Math.floor(Date.now() / 1000);
+  if (iat > now + skew || exp <= now - skew) return null;
   if (typeof given_name !== "string" || typeof family_name !== "string" || typeof name !== "string" || typeof picture !== "string" || typeof role !== "string" || typeof admin !== "boolean" || typeof builder !== "boolean") return null;
   if (!Array.isArray(groups) || groups.length > 16 || !groups.every(g => typeof g === "string" && groupIdPattern.test(g)) || (email !== undefined && typeof email !== "string")) return null;
   if (typeof language !== "string" || !languagePattern.test(language) || typeof time_zone !== "string" || !timeZonePattern.test(time_zone)) return null;

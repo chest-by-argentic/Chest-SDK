@@ -1,12 +1,14 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 
-// What the Chest signs for a server tool — the member of a request
-// (member), the events of its members (events), the runs of its schedules
-// (schedules), the last two posted through its launcher only (never from the
-// Internet), each on a route of its own —: one mechanism, shared by the
-// modules that read it and by testing, which signs as the Chest. Not a
-// published module.
+// What the Chest signs for a server tool — the events of its members
+// (events), the runs of its schedules (schedules), posted through its
+// launcher only (never from the Internet), each on a route of its own —: one
+// mechanism, shared by the modules that read it and by testing, which signs
+// as the Chest. Not a published module. member.ts reads the Chest-Member
+// assertion with the same steps in its own words: it imports nothing but
+// node:*, so that a tool may vendor it alone (Forms does, and webpack does
+// not resolve a relative ./x.js import to ./x.ts).
 //
 // The signature is a compact JWS, HS256, typ JWT, in the channel's header,
 // under HMAC-SHA256 of the channel's label keyed by the text of CHEST_TOKEN,
