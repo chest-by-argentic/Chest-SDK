@@ -1,11 +1,12 @@
-# Publishing `@argentic/chest-sdk` and `@argentic/chest-check`
+# Publishing `@argentic/chest-sdk`
 
-This repository publishes two packages of one version: the runtime client
-`@argentic/chest-sdk` (the root) and the development tool
-`@argentic/chest-check` (`check/`, an npm workspace: `chest check`, the
+This repository holds two packages of one version: the runtime client
+`@argentic/chest-sdk` (the root), published by a tag, and the development
+tool `@argentic/chest-check` (`check/`, an npm workspace: `chest check`, the
 Chest's validator in WebAssembly, kept out of the runtime client so that a
-tool's image stays small). One tag publishes both; both `package.json`
-carry the same version.
+tool's image stays small). The checker is **not published yet**: it is
+`"private": true` and used from a clone of this repository (README, “Check a
+tool”). Both `package.json` carry the same version all the same.
 
 For maintainers. Releases are published to npm by GitHub Actions through npm
 **trusted publishing** (OIDC): no npm token exists anywhere, and every version
@@ -72,9 +73,15 @@ npm trust github @argentic/chest-sdk --file publish.yml --repo chest-by-argentic
 
 Trusted publishing can only be configured on a package that already exists;
 the first version was published once by hand, with `--provenance=false`
-(provenance can only be generated in CI). The same holds for
-`@argentic/chest-check`: its first version (0.4.0) is published once by hand
-(`npm publish -w check --provenance=false`), then its trusted publisher is
-set to the same repository and workflow (`npm trust github
-@argentic/chest-check --file publish.yml --repo chest-by-argentic/Chest-SDK
---allow-publish`).
+(provenance can only be generated in CI).
+
+## When `@argentic/chest-check` is published
+
+Not decided yet. The day it is: remove `"private": true` from
+`check/package.json` and give it `"publishConfig": {"access": "public",
+"provenance": true}`; publish its first version once by hand (`npm publish -w
+check --provenance=false`); set its trusted publisher to this repository and
+`publish.yml` (`npm trust github @argentic/chest-check --file publish.yml
+--repo chest-by-argentic/Chest-SDK --allow-publish`); then have
+`publish.yml` check `check/package.json`'s version against the tag too and
+run `npm publish -w check` after the SDK.
