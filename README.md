@@ -726,12 +726,12 @@ Every file the Chest answers (`put`, `stat`, `list`, `move`) carries
 it, or detect a duplicate receipt, without reading the file again.
 
 The SDK takes a link or an upload address from the Chest only in `https`
-on the team host. The one exception is a fake Chest of the same process
-(`@argentic/chest-sdk/testing`): while it runs, the links and uploads it
-signs on its own origin, `http://127.0.0.1:<port>`, are taken too. Only the
-testing module opens that exception, for that origin alone, until
-`close()`; nothing in the environment does, so production code that never
-imports the testing module never takes a local link.
+on the team host, or on the origin of the Chest's API itself (`CHEST_API`,
+`http://127.0.0.1:<port>`): the address the tool already sends every call
+to, where only a fake Chest (`@argentic/chest-sdk/testing`) serves its
+links. A real Chest never answers one there, and no other local address is
+ever taken — so a tool a test starts in its own process (`next start` with
+the fake's environment) takes the fake's links as the test itself does.
 
 Errors: `CapabilityNotGranted` (a version without the capability, or no
 `CHEST_API`), `TooLarge` (413), `QuotaExceeded` (429), `Unavailable` (the

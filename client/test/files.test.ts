@@ -3,7 +3,6 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
 import { after, afterEach, before, test } from "node:test";
-import { fakeOrigins } from "../src/api.js";
 import { CapabilityNotGranted, ChestError, QuotaExceeded, TooLarge, Unavailable } from "../src/errors.js";
 import * as files from "../src/files.js";
 
@@ -203,20 +202,14 @@ test("an answer that is not the Chest's is Unavailable", async () => {
   }
 });
 
-test("a local link is taken only from the origin of a fake Chest while it runs", async () => {
-  const local = "http://127.0.0.1:3000";
-  forged = { value: { url: local + "/_chest/files/a.b", expires_in: 900 } };
-  await assert.rejects(files.url("a"), Unavailable);
-  fakeOrigins.add(local);
-  try {
-    assert.deepEqual(await files.url("a"), { url: local + "/_chest/files/a.b", expiresIn: 900 });
-    forged = { value: { url: "http://127.0.0.1:3001/_chest/files/a.b", expires_in: 900 } };
-    await assert.rejects(files.url("a"), Unavailable);
-  } finally {
-    fakeOrigins.delete(local);
+test("a local link is taken only on the origin of the Chest's API", async () => {
+  const api = process.env["CHEST_API"]!;
+  forged = { value: { url: api + "/_chest/files/a.b", expires_in: 900 } };
+  assert.deepEqual(await files.url("a"), { url: api + "/_chest/files/a.b", expiresIn: 900 });
+  for (const other of ["http://127.0.0.1:1", "http://localhost" + api.slice("http://127.0.0.1".length)]) {
+    forged = { value: { url: other + "/_chest/files/a.b", expires_in: 900 } };
+    await assert.rejects(files.url("a"), Unavailable, other);
   }
-  forged = { value: { url: local + "/_chest/files/a.b", expires_in: 900 } };
-  await assert.rejects(files.url("a"), Unavailable);
 });
 
 test("names outside the grammar and objects beyond 512 MiB never leave the tool", async () => {

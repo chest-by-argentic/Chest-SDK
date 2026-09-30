@@ -6,7 +6,6 @@ import type { AiUnavailableReason } from "./errors.js";
 import type { ChestEvent } from "./events.js";
 import { groupIdPattern, memberIdPattern, type Member } from "./member.js";
 import { forget } from "./members.js";
-import { fakeOrigins } from "./api.js";
 import { eventChannel, scheduleChannel, sign, signClaims, type Channel } from "./signed.js";
 
 // For a tool's own tests, never imported by its production code: a member's
@@ -600,9 +599,9 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const saved = Object.fromEntries(["CHEST_API", "CHEST_TOKEN", "CHEST_TOOL", "CHEST_ORGANIZATION", "CHEST_TIME_ZONE", "CHEST_LANGUAGE", "CHEST_CURRENCY", "CHEST_TEAM_URL", "CHEST_PUBLIC_URL"].map(name => [name, process.env[name]]));
   chest.api = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
-  // Its links are taken by the files module of this process, for as long as
-  // it runs (api.ts, fakeOrigins).
-  fakeOrigins.add(chest.api);
+  // Its links are on its own origin, the CHEST_API it sets: the files
+  // module takes them there (api.ts, chestLink), in this process or in a
+  // tool it starts with this environment.
   const publicUrl = options.chest?.publicUrl === undefined ? `https://${tool}.chest.test` : options.chest.publicUrl;
   Object.assign(process.env, { CHEST_API: chest.api, CHEST_TOKEN: token, CHEST_TOOL: tool, CHEST_ORGANIZATION: options.chest?.organization ?? "Test organization", CHEST_TIME_ZONE: options.chest?.timeZone ?? "UTC", CHEST_LANGUAGE: options.chest?.language ?? "en", CHEST_CURRENCY: options.chest?.currency ?? "EUR", CHEST_TEAM_URL: options.chest?.teamUrl ?? `https://${tool}-chest.chest.test` });
   if (publicUrl === null) delete process.env["CHEST_PUBLIC_URL"];
@@ -629,7 +628,6 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     return post("/chest-schedules", scheduleChannel, id, body, to);
   };
   chest.close = async () => {
-    fakeOrigins.delete(chest.api);
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     for (const [name, value] of Object.entries(saved)) {
