@@ -20,10 +20,11 @@ server-side:
 | The tool's private files | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` (and `"files": {"quota", "maxObject"}` beyond 1 GiB, 32 MiB per object) |
 | Who else has the tool | `list`, `get`, `lookup`, `groups.list` from `@argentic/chest-sdk/members` | `"capabilities": ["members"]` (`"members.email"` too for addresses) |
 | Be told when members change, lose access, leave or ask to be erased | `handle`, `verify`, `acknowledgeErasure` from `@argentic/chest-sdk/events` | `"capabilities": ["members"]` and `"receives": ["member.*"]` |
+| Do work by itself at set times (digests, reminders, purges) | `handle`, `verify` from `@argentic/chest-sdk/schedules` | `"schedules": [{"name", "cron"}]` in `chest.json` |
 | Tell members what needs their attention | `notify`, `withdraw`, `badge.set`, `badge.setMany` from `@argentic/chest-sdk/notifications` | `"capabilities": ["notifications"]` |
 | Call AI models (chat, streamed or not, tools, embeddings) | `chat`, `embed`, `models`, `usage` from `@argentic/chest-sdk/ai` | `"capabilities": ["ai"]` and `"ai": {"monthly", "models", "purpose"}` |
 | Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `Unavailable`, `AiCapReached`, `AiUnavailable`, `AiModelNotAllowed`, `AiRefused` from `@argentic/chest-sdk/errors` | — |
-| Tests without a Chest | `fakeChest` (its `emit`, its links and uploads, `chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
+| Tests without a Chest | `fakeChest` (its `emit`, `run`, its links and uploads, `chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
 
 ## Install
 
@@ -151,6 +152,40 @@ export async function POST(request: Request) {
   then `acknowledgeErasure(erasure)`: the owner sees it done per tool.
 - Never put the route behind your own session or under `/chest`, and never
   read the body before `handle` (it verifies the signature over it).
+
+## Do work at set times
+
+Nothing runs in the tool between requests (an unused tool sleeps): the
+Chest calls it. Declare each schedule; the line is read on the Chest's
+clock (`chest.timeZone`).
+
+```jsonc
+// chest.json
+{ "schedules": [{ "name": "morning", "cron": "30 7 * * 1-5" }] }
+```
+
+```ts
+// app/chest-schedules/route.ts — outside /chest, never behind a session
+import * as schedules from "@argentic/chest-sdk/schedules";
+
+export async function POST(request: Request) {
+  return new Response(null, { status: await schedules.handle(request, {
+    morning: async () => { await remindDueToday(); },
+  }, { seen }) }); // seen: the same {has, add} store as events
+}
+```
+
+- Five fields, numbers, `*`, ranges, lists and steps; 8 schedules at most,
+  each 15 minutes apart at least; no `@daily`, no day names.
+- Answer when the work is done, within 5 minutes. A throw → 500 → the same
+  run (same `run.id`) again after 1, 5, 15 minutes; keep handlers
+  idempotent. A long job: a batch per run, its place kept in the database.
+- A missed time (server stopped) runs once, late; runs never overlap.
+- Per-member hours ("8:00 for each member"): run hourly and select the
+  members whose `timeZone` makes it 8:00.
+- Never put the route behind your own session or under `/chest`, and never
+  read the body before `handle`.
+- Test with `fakeChest().run("morning", request => app(request))`.
 
 ## Use AI models
 
@@ -323,6 +358,8 @@ at install and at every update.
 | `ChestError` with `invalid_path` | `path` is not `/chest` or under it (a full URL, `//`, `..`, a space or non-ASCII character). |
 | `QuotaExceeded` from `notifications` | Beyond 1,000 recipients an hour, 100 items per member a day or 600 badge writes a minute; the call changed nothing. |
 | `events.handle` always answers 401 | The body was read before `handle` (a body parser), or the environment is not the Chest's (`CHEST_TOKEN`, `CHEST_TOOL`; in a test, deliver with `fakeChest().emit`). |
+| `schedules.handle` always answers 401 | The body was read before `handle`, or the environment is not the Chest's (in a test, deliver with `fakeChest().run`). |
+| A schedule never runs | The route is not `POST /chest-schedules` at the root, the version was not approved, or its handler is missing (the tool's page says “the tool has no handler for this schedule (404)”). |
 | No event ever comes | `chest.json` does not declare `"receives": ["member.*"]` (with `members`), the version was not approved, or the route is not `POST /chest-events` at the root. |
 | `ChestError` `erasure_not_found` from `acknowledgeErasure` | The erasure was not sent to this tool: acknowledge the `erasure` of the `member.erased` event you received. |
 | `RateLimited` from `members` | More than 600 calls a minute: use `lookup` (200 ids a call, kept a minute) instead of one `get` per row. |

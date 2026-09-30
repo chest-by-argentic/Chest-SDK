@@ -106,6 +106,16 @@
         ]
       },
       {
+        "key": "schedules",
+        "rule": "Work the tool does by itself at set times, 1 to 8: each {\"name\", \"cron\"} — a name of its own (^[a-z][a-z0-9-]{0,31}$) and a five-field cron line (minute hour day month weekday: numbers, *, ranges, lists and steps, one space apart, Sunday 0 or 7, no names nor macros) read on the wall clock of the Chest's time zone, its runs 15 minutes apart at least. Each run is posted, signed, to POST /chest-schedules, the tool woken if it sleeps, and answered within 5 minutes. Each schedule approved as a permission; running by itself is what is approved.",
+        "example": [
+          {
+            "name": "morning",
+            "cron": "30 7 * * 1-5"
+          }
+        ]
+      },
+      {
         "key": "network",
         "rule": "The hosts the server reaches on the Internet, 1 to 32, none covered by another: a host name, *.domain for every name under it, or * alone for any host. Each approved as a permission. Without it, the tool reaches nothing.",
         "example": [
@@ -168,7 +178,7 @@
       },
       {
         "key": "build.static",
-        "rule": "The path prefixes of built files, served as they are on both hosts: up to 4, each \"/…/\" (/_next/static/ without it); never /chest/, /_chest/ or /chest-events/.",
+        "rule": "The path prefixes of built files, served as they are on both hosts: up to 4, each \"/…/\" (/_next/static/ without it); never /chest/, /_chest/, /chest-events/ or /chest-schedules/.",
         "example": [
           "/_next/static/"
         ]

@@ -83,6 +83,7 @@ could be a permission nobody approved.
 | `files` |  | With the capability files: "quota" and "maxObject", sizes such as "5 GiB" or "100 MiB" — the quota from 100 MiB to 100 GiB (1 GiB without it), the largest object from 1 MiB to 512 MiB (32 MiB without it). | `{"quota":"5 GiB","maxObject":"100 MiB"}` |
 | `ai` |  | Required with the capability ai: "monthly", the whole euros a month the tool suggests, 1 to 1000 (5 without it; the owner's cap decides); "models", the aliases it calls among default, fast, smart, embedding, each once (default without it); "purpose", what it does with AI, 1 to 120 printable characters. | `{"monthly":5,"models":["default","embedding"],"purpose":"Summarises the tasks of a project"}` |
 | `receives` |  | ["member.*"]: the members' lifecycle events, posted to POST /chest-events. Requires the capability members; approved as a permission. | `["member.*"]` |
+| `schedules` |  | Work the tool does by itself at set times, 1 to 8: each {"name", "cron"} — a name of its own (^[a-z][a-z0-9-]{0,31}$) and a five-field cron line (minute hour day month weekday: numbers, *, ranges, lists and steps, one space apart, Sunday 0 or 7, no names nor macros) read on the wall clock of the Chest's time zone, its runs 15 minutes apart at least. Each run is posted, signed, to POST /chest-schedules, the tool woken if it sleeps, and answered within 5 minutes. Each schedule approved as a permission; running by itself is what is approved. | `[{"name":"morning","cron":"30 7 * * 1-5"}]` |
 | `network` |  | The hosts the server reaches on the Internet, 1 to 32, none covered by another: a host name, *.domain for every name under it, or * alone for any host. Each approved as a permission. Without it, the tool reaches nothing. | `["api.example.com","*.example.org"]` |
 | `env` |  | The names of the variables the tool expects, 1 to 32 distinct: never PORT, HOME, PATH, HTTP_PROXY, HTTPS_PROXY, ALL_PROXY, NO_PROXY, nor a name starting with CHEST_, NODE_, NPM_. Whoever runs the tool sets their values in the Chest, never in the code. Grammar: `^[A-Z_][A-Z0-9_]{0,63}$`. | `["TASKS_MAIL_FROM"]` |
 | `build` | required | How the Chest builds and starts the tool: fixed commands run as argument vectors, never through a shell. | `{"runtime":"node","install":"npm ci","command":"npm run build","start":"npm start","port":3000,"static":["/_next/static/"]}` |
@@ -91,7 +92,7 @@ could be a permission nobody approved.
 | `build.command` |  | The build, "npm run <script>"; none without it. Grammar: `^[a-z0-9][a-z0-9:_-]{0,63}$`. | `"npm run build"` |
 | `build.start` |  | "npm start" or "npm run <script>". Grammar: `^[a-z0-9][a-z0-9:_-]{0,63}$`. | `"npm start"` |
 | `build.port` | required | The port the server listens on, 1024 to 65535; the Chest sets PORT to it. | `3000` |
-| `build.static` |  | The path prefixes of built files, served as they are on both hosts: up to 4, each "/…/" (/_next/static/ without it); never /chest/, /_chest/ or /chest-events/. | `["/_next/static/"]` |
+| `build.static` |  | The path prefixes of built files, served as they are on both hosts: up to 4, each "/…/" (/_next/static/ without it); never /chest/, /_chest/, /chest-events/ or /chest-schedules/. | `["/_next/static/"]` |
 <!-- /contract:keys -->
 
 Every permission — `public`, `csp`, each capability, `files` beyond the

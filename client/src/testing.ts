@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Alias, Provider } from "./ai.js";
@@ -7,6 +7,7 @@ import type { ChestEvent } from "./events.js";
 import { groupIdPattern, memberIdPattern, type Member } from "./member.js";
 import { forget } from "./members.js";
 import { fakeOrigins } from "./api.js";
+import { eventChannel, scheduleChannel, sign, signClaims, type Channel } from "./signed.js";
 
 // For a tool's own tests, never imported by its production code: a member's
 // assertion signed as the Chest signs it, and a Chest's API in the test's
@@ -15,14 +16,15 @@ import { fakeOrigins } from "./api.js";
 // own origin), badges, notifications, AI (chat,
 // streamed or not, embeddings, models, usage: deterministic answers, no
 // provider) and the acknowledgment of an erasure with the Chest's bounds,
-// quotas and errors; and that delivers an event to the tool, signed as the
-// Chest signs it.
+// quotas and errors; and that delivers an event or a run of a schedule to
+// the tool, signed as the Chest signs them.
 //
 //   import { fakeChest, withMember } from "@argentic/chest-sdk/testing";
 //   const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications"] });
 //   const response = await app(withMember(new Request("http://tool/chest"), camille));
 //   assert.equal(chest.notifications[0]?.member, camille.id);
 //   assert.equal(await chest.emit({ type: "access.revoked", data: { id: camille.id } }, request => app(request)), 204);
+//   assert.equal(await chest.run("morning", request => app(request)), 204);
 //   await chest.close();
 
 // A group as a fake Chest keeps it: its identifier, its name, and the
@@ -82,6 +84,11 @@ export type FakeChestOptions = {
 // twice.
 export type FakeEvent = { [K in ChestEvent["type"]]: { type: K; data: Extract<ChestEvent, { type: K }>["data"]; id?: string; occurredAt?: string } }[ChestEvent["type"]];
 
+// A run for run: its id (a new run_… by default: name it to deliver the same
+// run twice), the time it stands for (now by default) and its attempt (1 by
+// default).
+export type FakeRun = { id?: string; scheduledAt?: string; attempt?: number };
+
 // A fake Chest in the test's process: its address — its API, and the origin
 // where it serves the links and takes the uploads it signs —, the token and
 // the tool it set in the environment, what it keeps (members, groups and files a test
@@ -89,7 +96,8 @@ export type FakeEvent = { [K in ChestEvent["type"]]: { type: K; data: Extract<Ch
 // replaced one last; each member's badge; the erasures the tool
 // acknowledged; its calls to AI, in order), emit, which delivers an event to the tool — POST
 // /chest-events of its address, or a handler of Web Requests — and says the
-// status it answered, and close, which stops it and restores the
+// status it answered, run, which delivers a run of a schedule the same way
+// on /chest-schedules, and close, which stops it and restores the
 // environment. Its members are those who have the tool: the others are
 // skipped.
 export type FakeChest = {
@@ -104,10 +112,9 @@ export type FakeChest = {
   acknowledged: string[];
   ai: FakeAiCall[];
   emit(event: FakeEvent, to: string | ((request: Request) => Response | Promise<Response>)): Promise<number>;
+  run(name: string, to: string | ((request: Request) => Response | Promise<Response>), run?: FakeRun): Promise<number>;
   close(): Promise<void>;
 };
-
-const encode = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString("base64url");
 
 // What an assertion is signed with and says besides the member: the token
 // (CHEST_TOKEN by default) and the tool (CHEST_TOOL by default) it is for,
@@ -125,27 +132,16 @@ export function signAssertion(member: Member, options: AssertionOptions = {}): s
   if (!token || !tool) throw new Error("signAssertion needs a token and a tool: start a fakeChest, or name them");
   if (!memberIdPattern.test(member.id) || !member.groups.every(g => groupIdPattern.test(g))) throw new Error("signAssertion needs identifiers of the Chest's shape (mbr_…, grp_…)");
   const iat = Math.floor((options.now ?? new Date()).getTime() / 1000);
-  const body = encode({ alg: "HS256", typ: "JWT" }) + "." + encode({
+  // Under the label of the assertion's shape, as the Chest signs it and
+  // member() reads it.
+  return signClaims("Chest-Member v2", {
     iss: `https://${tool}-chest.chest.test`, aud: tool, iat, exp: iat + 60, sub: member.id,
     given_name: member.firstName, family_name: member.lastName, name: member.name, picture: member.photo ?? "", role: member.role ?? "",
     admin: member.isAdmin, builder: member.isBuilder, groups: member.groups, time_zone: member.timeZone, ...(member.email === undefined ? {} : { email: member.email }),
     language: member.language,
-  });
-  // The key as the Chest derives it, and member() reads it: HMAC-SHA256 of
-  // the label of the assertion's shape under the text of the token.
-  const key = createHmac("sha256", Buffer.from(token, "utf8")).update("Chest-Member v2").digest();
-  return body + "." + createHmac("sha256", key).update(body).digest("base64url");
+  }, token);
 }
 
-// signEvent is the Chest-Event value the Chest would send with that body:
-// HS256 under the key the token derives for events, for the tool, naming the
-// event and the digest of the body, valid 60 seconds.
-function signEvent(id: string, body: string, options: { token: string; tool: string }): string {
-  const iat = Math.floor(Date.now() / 1000);
-  const signed = encode({ alg: "HS256", typ: "JWT" }) + "." + encode({ aud: options.tool, iat, exp: iat + 60, jti: id, digest: createHash("sha256").update(body).digest("base64url") });
-  const key = createHmac("sha256", Buffer.from(options.token, "utf8")).update("Chest-Event v1").digest();
-  return signed + "." + createHmac("sha256", key).update(signed).digest("base64url");
-}
 
 // withMember is the request carrying that member's assertion, signed with
 // the options of signAssertion: a new Web Request, or the same Node request
@@ -238,7 +234,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   const receives = options.receives ?? ["member.*"];
   // The erasures the tool was told of, by emit: those it may acknowledge.
   const erasures = new Set<string>();
-  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], ai: [], emit: async () => 0, close: async () => {} };
+  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], ai: [], emit: async () => 0, run: async () => 0, close: async () => {} };
   const former = [...(options.former ?? [])];
   let window = 0, calls = 0;
   const shown = (m: Member) => ({ id: m.id, first_name: m.firstName, last_name: m.lastName, name: m.name, photo: m.photo, role: m.role, admin: m.isAdmin, builder: m.isBuilder, groups: m.groups, language: m.language, time_zone: m.timeZone, ...(email && m.email !== undefined ? { email: m.email } : {}) });
@@ -612,14 +608,25 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   if (publicUrl === null) delete process.env["CHEST_PUBLIC_URL"];
   else process.env["CHEST_PUBLIC_URL"] = publicUrl;
   forget();
-  chest.emit = async (event, to) => {
-    const id = event.id ?? "evt_" + Array.from(randomBytes(26), b => "abcdefghijklmnopqrstuvwxyz234567"[b & 31]).join("");
-    const body = JSON.stringify({ id, type: event.type, occurredAt: event.occurredAt ?? new Date().toISOString(), data: event.data });
-    if (event.type === "member.erased") erasures.add(event.data.erasure);
-    const request = new Request(typeof to === "string" ? to.replace(/\/$/u, "") + "/chest-events" : "http://tool.test/chest-events", { method: "POST", headers: { "Content-Type": "application/json", "Chest-Event": signEvent(id, body, { token, tool }) }, body });
+  // post delivers what the Chest posts to the tool on a channel — at its
+  // address, or to a handler — and says the status it answered.
+  const post = async (path: string, channel: Channel, id: string, body: string, to: string | ((request: Request) => Response | Promise<Response>)): Promise<number> => {
+    const request = new Request((typeof to === "string" ? to.replace(/\/$/u, "") : "http://tool.test") + path, { method: "POST", headers: { "Content-Type": "application/json", [channel.header]: sign(channel, id, body, { token, tool }) }, body });
     const answer = typeof to === "string" ? await fetch(request, { redirect: "manual" }) : await to(request);
     await answer.body?.cancel();
     return answer.status;
+  };
+  const newId = (prefix: string): string => prefix + Array.from(randomBytes(26), b => "abcdefghijklmnopqrstuvwxyz234567"[b & 31]).join("");
+  chest.emit = async (event, to) => {
+    const id = event.id ?? newId("evt_");
+    const body = JSON.stringify({ id, type: event.type, occurredAt: event.occurredAt ?? new Date().toISOString(), data: event.data });
+    if (event.type === "member.erased") erasures.add(event.data.erasure);
+    return post("/chest-events", eventChannel, id, body, to);
+  };
+  chest.run = async (name, to, run = {}) => {
+    const id = run.id ?? newId("run_");
+    const body = JSON.stringify({ id, name, scheduledAt: run.scheduledAt ?? new Date().toISOString(), attempt: run.attempt ?? 1 });
+    return post("/chest-schedules", scheduleChannel, id, body, to);
   };
   chest.close = async () => {
     fakeOrigins.delete(chest.api);
