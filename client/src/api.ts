@@ -9,21 +9,15 @@ import { CapabilityNotGranted, ChestError, QuotaExceeded, RateLimited, TooLarge,
 const maxAnswer = 4 << 20;
 const deadline = 120000;
 
-// fakeOrigins are the origins of the fake Chests a test started in this
-// process (testing.ts, fakeChest), each http://127.0.0.1:<port>: links and
-// uploads a fake gives on them are taken as the Chest's https ones are. Only
-// the testing module adds to it — the one module no production code
-// imports —, and only for as long as its fake runs; an origin is never read
-// from the environment, so nothing set around a tool widens what it accepts.
-export const fakeOrigins = new Set<string>();
-
 // chestLink reads a link to the team host the Chest answered, at path (its
 // links, its uploads): the token it carries, or undefined for an address
-// that is not one — https, or the origin of a fake Chest of this process.
+// that is not one — https, or the origin of the Chest's API itself
+// (CHEST_API), where only a fake Chest of a tool's tests serves its links:
+// the address the tool already trusts for every call, never another.
 export function chestLink(url: unknown, path: string): string | undefined {
   if (typeof url !== "string") return undefined;
   const found = /^(https:\/\/[A-Za-z0-9.-]{1,253}(?::[0-9]{1,5})?|http:\/\/127\.0\.0\.1:[0-9]{1,5})(\/_chest\/[a-z/]+\/)([A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/u.exec(url);
-  if (!found || found[2] !== path || (found[1]!.startsWith("http:") && !fakeOrigins.has(found[1]!))) return undefined;
+  if (!found || found[2] !== path || (found[1]!.startsWith("http:") && found[1] !== process.env["CHEST_API"])) return undefined;
   return found[3];
 }
 
