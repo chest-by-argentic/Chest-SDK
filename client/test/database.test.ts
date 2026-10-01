@@ -16,6 +16,12 @@ test("the database the Chest gives is read as it is", () => {
   assert.equal(databaseUrl(), given);
 });
 
+test("the preview database of a draft is read as it is", () => {
+  const draft = "postgres://pb_tdtx3eyveznxmduyjmayeae5al:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8@127.0.0.1:41234/pb_tdtx3eyveznxmduyjmayeae5al?sslmode=disable";
+  process.env["DATABASE_URL"] = draft;
+  assert.equal(databaseUrl(), draft);
+});
+
 test("without the capability, CapabilityNotGranted: its code, status 403, no value in its message", () => {
   delete process.env["DATABASE_URL"];
   assert.throws(() => databaseUrl(), (error: unknown) => error instanceof CapabilityNotGranted && error instanceof ChestError && error.code === "capability_not_granted" && error.status === 403 && error.name === "CapabilityNotGranted");
@@ -28,6 +34,8 @@ test("without the capability, CapabilityNotGranted: its code, status 403, no val
     "postgres://t_web:@127.0.0.1:41234/t_web?sslmode=disable",
     "postgres://t_web:s3cret@127.0.0.1:41234/t_web",
     "postgres://t_web:s3cret@127.0.0.1/t_web?sslmode=disable",
+    "postgres://pb_short:s3cret@127.0.0.1:41234/pb_short?sslmode=disable",
+    "postgres://pb_TDTX3EYVEZNXMDUYJMAYEAE5AL:s3cret@127.0.0.1:41234/pb_TDTX3EYVEZNXMDUYJMAYEAE5AL?sslmode=disable",
     "not a url",
     "",
   ]) {

@@ -599,7 +599,8 @@ like a permission, in the approval screen). The container has no network: its
 launcher listens on `127.0.0.1` and relays each connection to the Chest. The
 launcher sets `DATABASE_URL` —
 `postgres://<user>:<password>@127.0.0.1:<port>/<database>?sslmode=disable`,
-the user and the database both named `t_<tool>` — and `PGHOST`, `PGPORT`,
+the user and the database both named `t_<tool>`, or `pb_<project>` in the
+preview of a draft Perseus Code builds — and `PGHOST`, `PGPORT`,
 `PGUSER`, `PGPASSWORD`, `PGDATABASE`, which take precedence over a variable of
 the tool with the same name. `databaseUrl()` returns `DATABASE_URL` when it has
 exactly this shape, and throws `CapabilityNotGranted` otherwise (a version
