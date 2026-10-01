@@ -8,9 +8,14 @@ import { CapabilityNotGranted } from "./errors.js";
 // postgres (porsager) or pg; the SDK carries none. PGHOST, PGPORT, PGUSER,
 // PGPASSWORD and PGDATABASE say the same for a client that reads them.
 //
+// Its user is the tool's role (t_<tool>), or, in the preview of a draft
+// Perseus Code builds, the draft's (pb_<project>: its own empty database).
+//
 // Throws CapabilityNotGranted when the Chest gave no database: the version
 // does not declare it, or a DATABASE_URL of the tool's own is not the
 // Chest's. The value is a secret: never log it, never send it to a browser.
+const role = /^(t_[a-z][a-z0-9_]{0,47}|pb_[a-z2-7]{26})$/u;
+
 export function databaseUrl(): string {
   const value = process.env["DATABASE_URL"];
   if (typeof value !== "string" || value.length > 1024) throw new CapabilityNotGranted("database");
@@ -21,7 +26,7 @@ export function databaseUrl(): string {
     throw new CapabilityNotGranted("database");
   }
   const port = Number(url.port);
-  if (url.protocol !== "postgres:" || url.hostname !== "127.0.0.1" || !Number.isInteger(port) || port < 1 || port > 65535 || !/^t_[a-z][a-z0-9_]{0,47}$/u.test(url.username) || url.pathname !== "/" + url.username || url.password === "" || url.search !== "?sslmode=disable" || url.hash !== "") {
+  if (url.protocol !== "postgres:" || url.hostname !== "127.0.0.1" || !Number.isInteger(port) || port < 1 || port > 65535 || !role.test(url.username) || url.pathname !== "/" + url.username || url.password === "" || url.search !== "?sslmode=disable" || url.hash !== "") {
     throw new CapabilityNotGranted("database");
   }
   return value;
