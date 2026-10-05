@@ -326,9 +326,14 @@ at install and at every update.
   send it, or the Chest may refuse it: write the name in your database only
   once `files.stat(name)` returns it (its type, size and `sha256` as the
   Chest kept them: the digest detects a file sent twice without reading it).
-- **Write to each member in their language.** A notification or an email to
-  another member is in `members.get(id).language` (or `lookup`), not the
-  sender's; their times in their `timeZone`.
+- **Write to each member in their language.** A notification to another
+  member is in `members.get(id).language` (or `lookup`), not the sender's;
+  their times in their `timeZone`.
+- **Reach members by notifications, never by mail.** A reminder or an
+  approval to give is a `notify` with a `key`. Members may get mails of
+  their notifications, by their own choice: the Chest sends them, the tool
+  does nothing — it keeps no email preference and sends no reminder mail of
+  its own.
 - **Notify members, never others.** Only members with access receive
   anything; send member ids from your data, never addresses.
 - **Mind the quotas.** 1,000 recipients an hour, 100 items per member a day,
