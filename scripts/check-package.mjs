@@ -25,7 +25,7 @@ const expected = {
   database: ["databaseUrl"],
   files: ["delete", "get", "list", "move", "put", "stat", "uploadUrl", "url"],
   members: ["forget", "get", "groups", "list", "lookup"],
-  notifications: ["badge", "notify", "withdraw"],
+  notifications: ["badge", "broadcast", "notify", "withdraw"],
   events: ["acknowledgeErasure", "erasureIdPattern", "handle", "memorySeen", "verify"],
   schedules: ["handle", "verify"],
   ai: ["chat", "embed", "models", "usage"],

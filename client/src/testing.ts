@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import type { Alias, Provider } from "./ai.js";
 import type { AiUnavailableReason } from "./errors.js";
 import type { ChestEvent } from "./events.js";
-import { groupIdPattern, memberIdPattern, type Member } from "./member.js";
+import { groupIdPattern, languagePattern, memberIdPattern, type Member } from "./member.js";
 import { forget } from "./members.js";
 import { eventChannel, scheduleChannel, sign, signClaims, type Channel } from "./signed.js";
 
@@ -12,7 +12,7 @@ import { eventChannel, scheduleChannel, sign, signClaims, type Channel } from ".
 // assertion signed as the Chest signs it, and a Chest's API in the test's
 // process that answers members, groups, files (stat, move, links and
 // uploads, which it serves and takes itself as the team host would, on its
-// own origin), badges, notifications, AI (chat,
+// own origin), badges, notifications and broadcasts, AI (chat,
 // streamed or not, embeddings, models, usage: deterministic answers, no
 // provider) and the acknowledgment of an erasure with the Chest's bounds,
 // quotas and errors; and that delivers an event or a run of a schedule to
@@ -26,9 +26,12 @@ import { eventChannel, scheduleChannel, sign, signClaims, type Channel } from ".
 //   assert.equal(await chest.run("morning", request => app(request)), 204);
 //   await chest.close();
 
-// A group as a fake Chest keeps it: its identifier, its name, and the
-// identifiers of the members it gives the tool to.
-export type FakeGroup = { id: string; name: string; members: string[] };
+// A group as a fake Chest keeps it: its identifier, its name, the
+// identifiers of its members, and whether it gives the tool (true by
+// default). One that does not is seen — in groups and in each member's
+// groups — only with the capability members.groups; a group's members are
+// told among those who have the tool.
+export type FakeGroup = { id: string; name: string; members: string[]; grants?: boolean };
 // A file as a fake Chest keeps it.
 export type FakeFile = { data: Uint8Array; type: string; updated: string };
 // Someone the tool had who no longer has it: a member of the Chest without
@@ -36,8 +39,9 @@ export type FakeFile = { data: Uint8Array; type: string; updated: string };
 // was erased (their name gone).
 export type FakeFormer = { id: string; name?: string; status?: "no_access" | "former" | "erased" };
 // A notification as a fake Chest keeps it: the member it went to, its text
-// cleaned as the Chest cleans it, its path (/chest when not said) and its
-// key.
+// in that member's language — the translation of theirs, the tool's own
+// otherwise — cleaned as the Chest cleans it, its path (/chest when not
+// said) and its key. A broadcast keeps one for each member it reached.
 export type FakeNotification = { member: string; title: string; body?: string; path: string; key?: string };
 // An alias a fake Chest maps: the model behind it, its provider (openrouter
 // by default) and its prices in US dollars per million tokens (1 and 2 by
@@ -62,7 +66,7 @@ export type FakeAiCall = { path: string; body: unknown };
 // who no longer have it (FakeFormer), its groups, the
 // capabilities its version holds (a capability left out answers 403;
 // members, files, notifications and ai by default, members.email to read the
-// addresses), the events it receives (["member.*"] by default, [] to answer
+// addresses, members.groups to see every group), the events it receives (["member.*"] by default, [] to answer
 // an acknowledgment 403), the files it keeps, its AI, and what the Chest is
 // (the chest module: "Test organization", UTC, English and euros by default;
 // the tool at https://<tool>-chest.chest.test, its public part at
@@ -176,7 +180,8 @@ const newToken = (): string => randomBytes(18).toString("base64url") + "." + ran
 // Its notifications: recipients and badges a call, text, quotas.
 const maxRecipients = 500, maxTitle = 80, maxText = 280, maxPath = 512, maxCount = 9999;
 const recipientsPerHour = 1000, itemsPerDay = 100, badgesPerMinute = 600;
-const keyPattern = /^[a-z0-9._:-]{1,64}$/u;
+const maxMembers = 128, maxGroups = 16, maxRoles = 16;
+const keyPattern = /^[a-z0-9._:-]{1,64}$/u, rolePattern = /^[a-z][a-z0-9-]{0,47}$/u;
 const reordering = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 const cleanTitle = (s: string): string => s.replace(/[\t\r\n]/gu, " ").replace(/\p{Cc}/gu, "").replace(reordering, "").trim();
 const cleanText = (s: string): string => s.replace(/\r\n?/gu, "\n").replace(/\t/gu, " ").replace(/[^\P{Cc}\n]/gu, "").replace(reordering, "").trim();
@@ -223,7 +228,7 @@ async function body(request: IncomingMessage, limit: number): Promise<Buffer | n
 // chest and the modules of the SDK read is then this Chest's.
 export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChest> {
   const capabilities = new Set(options.capabilities ?? ["members", "files", "notifications", "ai"]);
-  const email = capabilities.has("members.email");
+  const email = capabilities.has("members.email"), everyGroup = capabilities.has("members.groups");
   const tool = process.env["CHEST_TOOL"] || "tool";
   const token = randomBytes(32).toString("base64url");
   const files = new Map<string, FakeFile>();
@@ -236,7 +241,11 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], ai: [], emit: async () => 0, run: async () => 0, close: async () => {} };
   const former = [...(options.former ?? [])];
   let window = 0, calls = 0;
-  const shown = (m: Member) => ({ id: m.id, first_name: m.firstName, last_name: m.lastName, name: m.name, photo: m.photo, role: m.role, admin: m.isAdmin, builder: m.isBuilder, groups: m.groups, language: m.language, time_zone: m.timeZone, ...(email && m.email !== undefined ? { email: m.email } : {}) });
+  // The groups the tool sees: those that give it, or all with members.groups;
+  // a member's groups among them (an identifier it was not given stays).
+  const unseen = () => new Set(everyGroup ? [] : chest.groups.filter(g => g.grants === false).map(g => g.id));
+  const groupsOf = (m: Member) => m.groups.filter(g => !unseen().has(g));
+  const shown = (m: Member) => ({ id: m.id, first_name: m.firstName, last_name: m.lastName, name: m.name, photo: m.photo, role: m.role, admin: m.isAdmin, builder: m.isBuilder, groups: groupsOf(m), language: m.language, time_zone: m.timeZone, ...(email && m.email !== undefined ? { email: m.email } : {}) });
   const key = (m: Member) => fold(m.name) + "\u0000" + m.id;
   const described = (name: string, f: FakeFile) => ({ name, type: f.type, size: f.data.byteLength, sha256: createHash("sha256").update(f.data).digest("hex"), updated: f.updated });
 
@@ -253,7 +262,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       const group = q.get("group"), role = q.get("role"), search = fold(q.get("q") ?? "");
       if (keys.some(k => !["after", "limit", "q", "role", "group"].includes(k) || q.getAll(k).length !== 1) || !Number.isInteger(limit) || limit < 1 || limit > maxLimit || String(limit) !== (q.get("limit") ?? String(defaultLimit)) || (group !== null && !groupIdPattern.test(group)) || search.length > 64) return send(response, 400, { error: "invalid_query" });
       const shownList = chest.members
-        .filter(m => (role === null || m.role === role) && (group === null || m.groups.includes(group)) && (search === "" || [m.firstName, m.lastName, m.name, ...(email && m.email ? [m.email] : [])].some(n => fold(n).startsWith(search))))
+        .filter(m => (role === null || m.role === role) && (group === null || groupsOf(m).includes(group)) && (search === "" || [m.firstName, m.lastName, m.name, ...(email && m.email ? [m.email] : [])].some(n => fold(n).startsWith(search))))
         .filter(m => after === "" || key(m) > after)
         .sort((a, b) => key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0);
       const page = shownList.slice(0, limit);
@@ -282,7 +291,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       const m = chest.members.find(x => x.id === id);
       return m ? send(response, 200, shown(m)) : send(response, 404, { error: "member_not_found" });
     }
-    if (request.method === "GET" && url.pathname === "/groups") return send(response, 200, { groups: chest.groups });
+    if (request.method === "GET" && url.pathname === "/groups") return send(response, 200, { groups: chest.groups.filter(g => !unseen().has(g.id)).map(g => ({ id: g.id, name: g.name, members: g.members.filter(access) })) });
     send(response, 404, { error: "not_found" });
   }
 
@@ -407,7 +416,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   async function notificationsRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     if (!capabilities.has("notifications")) return send(response, 403, { error: "capability_not_granted" });
     const badge = request.method === "PUT" && url.pathname.startsWith("/badges/");
-    if (!badge && !(request.method === "PUT" && url.pathname === "/badges") && !(request.method === "POST" && (url.pathname === "/notifications" || url.pathname === "/notifications/withdraw"))) return send(response, 404, { error: "not_found" });
+    if (!badge && !(request.method === "PUT" && url.pathname === "/badges") && !(request.method === "POST" && ["/notifications", "/notifications/broadcast", "/notifications/withdraw"].includes(url.pathname))) return send(response, 404, { error: "not_found" });
     const raw = await body(request, 64 << 10);
     let command: Record<string, unknown> | null = null;
     try {
@@ -456,26 +465,58 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       drop(n => n.key === key && (named === null || named.includes(n.member)));
       return send(response, 204);
     }
-    if (!keys("members", "title", "body", "path", "key")) return send(response, 400, { error: "invalid_body" });
-    const { title, body: text, path, key } = command!;
-    const ids = recipients(command!["members"]);
-    if (!Array.isArray(ids)) return send(response, 400, ids);
-    if (typeof title !== "string" || [...title].length < 1 || [...title].length > maxTitle || cleanTitle(title) === "") return send(response, 400, { error: "invalid_title" });
-    if (text !== undefined && (typeof text !== "string" || [...text].length > maxText)) return send(response, 400, { error: "invalid_text" });
+    const broadcast = url.pathname === "/notifications/broadcast";
+    if (!keys(broadcast ? "to" : "members", ...(broadcast ? ["except"] : []), "title", "body", "path", "key", "translations")) return send(response, 400, { error: "invalid_body" });
+    let ids: string[];
+    if (broadcast) {
+      const to = command!["to"] as Record<string, unknown> | undefined, except = command!["except"];
+      if (to !== undefined && (to === null || typeof to !== "object" || Array.isArray(to) || !Object.keys(to).every(k => k === "groups" || k === "roles"))) return send(response, 400, { error: "invalid_body" });
+      const groups = to?.["groups"] ?? [], roles = to?.["roles"] ?? [];
+      if (!Array.isArray(groups) || !Array.isArray(roles) || (to !== undefined && groups.length + roles.length === 0) || groups.length > maxGroups || roles.length > maxRoles || (except !== undefined && (!Array.isArray(except) || except.length > maxMembers))) return send(response, 400, { error: "invalid_body" });
+      if (!groups.every(g => typeof g === "string" && groupIdPattern.test(g)) || !((except ?? []) as unknown[]).every(id => typeof id === "string" && memberIdPattern.test(id))) return send(response, 400, { error: "invalid_id" });
+      if (!roles.every(r => typeof r === "string" && rolePattern.test(r))) return send(response, 400, { error: "invalid_role" });
+      ids = chest.members.filter(m => !((except ?? []) as string[]).includes(m.id) && (to === undefined || (m.role !== null && roles.includes(m.role)) || groupsOf(m).some(g => groups.includes(g)))).map(m => m.id);
+    } else {
+      const named = recipients(command!["members"]);
+      if (!Array.isArray(named)) return send(response, 400, named);
+      ids = named;
+    }
+    const { path, key, translations } = command!;
+    const words = (value: unknown): { title: string; body?: string } | { error: string } => {
+      const { title, body: text, ...rest } = (value ?? {}) as Record<string, unknown>;
+      if (value === null || typeof value !== "object" || Array.isArray(value) || Object.keys(rest).length > 0 || title === undefined) return { error: "invalid_body" };
+      if (typeof title !== "string" || [...title].length < 1 || [...title].length > maxTitle || cleanTitle(title) === "") return { error: "invalid_title" };
+      if (text !== undefined && (typeof text !== "string" || [...text].length > maxText)) return { error: "invalid_text" };
+      const cleaned = typeof text === "string" ? cleanText(text) : "";
+      return { title: cleanTitle(title), ...(cleaned ? { body: cleaned } : {}) };
+    };
+    const own = words({ title: command!["title"], ...(command!["body"] !== undefined ? { body: command!["body"] } : {}) });
+    if ("error" in own) return send(response, 400, own);
     if (path !== undefined && !isPath(path)) return send(response, 400, { error: "invalid_path" });
     if (key !== undefined && (typeof key !== "string" || !keyPattern.test(key))) return send(response, 400, { error: "invalid_key" });
+    const other = new Map<string, { title: string; body?: string }>();
+    if (translations !== undefined) {
+      if (translations === null || typeof translations !== "object" || Array.isArray(translations)) return send(response, 400, { error: "invalid_body" });
+      for (const [language, value] of Object.entries(translations)) {
+        if (!languagePattern.test(language)) return send(response, 400, { error: "invalid_language" });
+        const translated = words(value);
+        if ("error" in translated) return send(response, 400, translated);
+        other.set(language, translated);
+      }
+    }
     const kept = ids.filter(access);
     if (live(hour, 3_600_000, now) && hour.count + kept.length > recipientsPerHour) return send(response, 429, { error: "quota_exceeded" }, wait(hour, 3_600_000, now));
     const full = kept.map(id => days.get(id)).filter((w): w is Window => live(w, 86_400_000, now) && w!.count >= itemsPerDay);
     if (full.length > 0) return send(response, 429, { error: "quota_exceeded" }, wait(full.reduce((a, b) => a.start > b.start ? a : b), 86_400_000, now));
     count(hour, 3_600_000, now, kept.length);
-    const cleaned = typeof text === "string" ? cleanText(text) : "";
     for (const id of kept) {
       if (!days.has(id)) days.set(id, { start: 0, count: 0 });
       count(days.get(id)!, 86_400_000, now, 1);
       if (key !== undefined) drop(n => n.member === id && n.key === key);
-      chest.notifications.push({ member: id, title: cleanTitle(title), ...(cleaned ? { body: cleaned } : {}), path: (path as string | undefined) ?? "/chest", ...(key !== undefined ? { key: key as string } : {}) });
+      const language = chest.members.find(m => m.id === id)!.language;
+      chest.notifications.push({ member: id, ...(other.get(language) ?? own), path: (path as string | undefined) ?? "/chest", ...(key !== undefined ? { key: key as string } : {}) });
     }
+    if (broadcast) return send(response, 204);
     send(response, 200, { delivered: kept, skipped: ids.filter(id => !access(id)) });
   }
 

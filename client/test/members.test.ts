@@ -100,7 +100,7 @@ test("lookup asks 200 identifiers at a time, each once, and keeps the answers a 
   }
 });
 
-test("groups are those that give the tool", async () => {
+test("groups are those the tool sees, as the Chest answers them", async () => {
   reply = () => ({ status: 200, value: { groups: [{ id: nord, name: "Nord", members: [camille.id] }] } });
   assert.deepEqual(await members.groups.list(), [{ id: nord, name: "Nord", members: [camille.id] }]);
   assert.equal(seen.at(-1)?.url, "/groups");

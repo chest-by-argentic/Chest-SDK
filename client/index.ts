@@ -1,5 +1,5 @@
 // The package root: every published module a tool's code uses (tool contract
-// 0.4). Each one is also its own subpath (@argentic/chest-sdk/member, /chest,
+// 0.5). Each one is also its own subpath (@argentic/chest-sdk/member, /chest,
 // /database, /files, /members, /notifications, /events, /schedules, /ai, /errors), which
 // pulls in nothing else. The files, members, notifications, events, schedules and ai
 // APIs are namespaces here, as their names (get, list, stat, move, notify,

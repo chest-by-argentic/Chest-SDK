@@ -12,8 +12,9 @@ import type { IncomingMessage } from "node:http";
 // - photo is the address of their picture on the tool's team host
 //   (/_chest/members/{id}/photo?v=<rev>), role one of the roles chest.json
 //   declares: null when there is none.
-// - isBuilder says they build this tool; groups are the groups that give them
-//   this tool ("grp_…").
+// - isBuilder says they build this tool; groups are those of their groups
+//   the tool sees ("grp_…"): the groups that give them this tool, or all of
+//   their groups when the tool holds "members.groups".
 // - language is the language the Chest speaks to this member (their own,
 //   else the Chest's default): a BCP 47 primary tag the product speaks
 //   ("en", "fr"…). The tool's private part (/chest) speaks it to them; a

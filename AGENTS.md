@@ -6,7 +6,7 @@ is the short path and the mistakes to avoid.
 
 ## What it is
 
-A Chest server tool (tool contract 0.4) is an ordinary web server that runs in
+A Chest server tool (tool contract 0.5) is an ordinary web server that runs in
 a container without network, started by its Chest. The SDK gives it, all
 server-side:
 
@@ -18,10 +18,10 @@ server-side:
 | Will the Chest take this repository? | `npx chest check` (`--json`) from `@argentic/chest-check` | a clone of Chest-SDK (`check/`, not on npm yet), a Git repository |
 | The tool's own PostgreSQL database | `databaseUrl()` from `@argentic/chest-sdk/database` | `"capabilities": ["database"]` in `chest.json` |
 | The tool's private files | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` (and `"files": {"quota", "maxObject"}` beyond 1 GiB, 32 MiB per object) |
-| Who else has the tool | `list`, `get`, `lookup`, `groups.list` from `@argentic/chest-sdk/members` | `"capabilities": ["members"]` (`"members.email"` too for addresses) |
+| Who else has the tool | `list`, `get`, `lookup`, `groups.list` from `@argentic/chest-sdk/members` | `"capabilities": ["members"]` (`"members.email"` too for addresses, `"members.groups"` for every group of the Chest — a tool open to everyone that offers “the Sales team”) |
 | Be told when members change, lose access, leave or ask to be erased | `handle`, `verify`, `acknowledgeErasure` from `@argentic/chest-sdk/events` | `"capabilities": ["members"]` and `"receives": ["member.*"]` |
 | Do work by itself at set times (digests, reminders, purges) | `handle`, `verify` from `@argentic/chest-sdk/schedules` | `"schedules": [{"name", "cron"}]` in `chest.json` |
-| Tell members what needs their attention | `notify`, `withdraw`, `badge.set`, `badge.setMany` from `@argentic/chest-sdk/notifications` | `"capabilities": ["notifications"]` |
+| Tell members what needs their attention — some, or everyone who has the tool, or some groups or roles | `notify`, `broadcast`, `withdraw`, `badge.set`, `badge.setMany` from `@argentic/chest-sdk/notifications` | `"capabilities": ["notifications"]` |
 | Call AI models (chat, streamed or not, tools, embeddings) | `chat`, `embed`, `models`, `usage` from `@argentic/chest-sdk/ai` | `"capabilities": ["ai"]` and `"ai": {"monthly", "models", "purpose"}` |
 | Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `Unavailable`, `AiCapReached`, `AiUnavailable`, `AiModelNotAllowed`, `AiRefused` from `@argentic/chest-sdk/errors` | — |
 | Tests without a Chest | `fakeChest` (its `emit`, `run`, its links and uploads, `chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
@@ -40,7 +40,7 @@ Node 22 or later, ESM only, no runtime dependency. TypeScript projects need
 ```jsonc
 // chest.json (repository root): every key and its rule in contract/README.md
 {
-  "chest": "0.4",
+  "chest": "0.5",
   "name": "tasks",
   "capabilities": ["database", "files"],
   "build": { "runtime": "node", "install": "npm ci", "command": "npm run build", "start": "npm start", "port": 3000 }
@@ -326,19 +326,25 @@ at install and at every update.
   send it, or the Chest may refuse it: write the name in your database only
   once `files.stat(name)` returns it (its type, size and `sha256` as the
   Chest kept them: the digest detects a file sent twice without reading it).
-- **Write to each member in their language.** A notification to another
-  member is in `members.get(id).language` (or `lookup`), not the sender's;
-  their times in their `timeZone`.
+- **Write to each member in their language.** Give a notification's words in
+  every language you speak (`translations: {fr: {title, body}}`): the Chest
+  gives each member theirs, your own words otherwise. Show a member's times
+  in their `timeZone` (`members.get(id)` or `lookup` for another member).
 - **Reach members by notifications, never by mail.** A reminder or an
   approval to give is a `notify` with a `key`. Members may get mails of
   their notifications, by their own choice: the Chest sends them, the tool
   does nothing — it keeps no email preference and sends no reminder mail of
   its own.
+- **Tell a group or everyone with `broadcast`**, never by listing members
+  and notifying them in batches: the Chest resolves who has the tool now,
+  in which group or role, and leaves out `except` (the author). It answers
+  nothing; decide in your code who may trigger it (a role).
 - **Notify members, never others.** Only members with access receive
   anything; send member ids from your data, never addresses.
-- **Mind the quotas.** 1,000 recipients an hour, 100 items per member a day,
-  600 badge writes a minute: notify the people concerned, not everyone, and
-  on `QuotaExceeded` wait (a refused call changed nothing).
+- **Mind the quotas.** 1,000 recipients an hour (a broadcast counts each
+  recipient), 100 items per member a day, 600 badge writes a minute: notify
+  the people concerned, and on `QuotaExceeded` wait (a refused call changed
+  nothing).
 - **Large files go through `uploadUrl`, not `put`.** `put` and `get` carry the
   bytes through the tool's memory (256 MiB by default).
 

@@ -3,7 +3,8 @@ import { ChestError, Unavailable } from "./errors.js";
 import { groupIdPattern, languagePattern, memberIdPattern, timeZonePattern, type Member } from "./member.js";
 
 // Who has the tool, for a server tool whose chest.json declares
-// "capabilities": ["members"] (and "members.email" for their addresses):
+// "capabilities": ["members"] (and "members.email" for their addresses,
+// "members.groups" for every group of the Chest):
 // exactly the members who have access to it at the time of the call — by a
 // grant, a group, open to all, or because they run it. list and get see
 // only them; lookup also names those the tool had who no longer have it
@@ -13,7 +14,7 @@ import { groupIdPattern, languagePattern, memberIdPattern, timeZonePattern, type
 //   const { members: page, next } = await members.list({ q: "cam" });
 //   const one = await members.get("mbr_…");            // null: no such member here
 //   const { members: found, former, unknown } = await members.lookup(ids);
-//   const all = await members.groups.list();          // groups that give the tool
+//   const all = await members.groups.list();          // the groups the tool sees
 //
 // Store member identifiers in your data, never names or addresses: resolve
 // them when rendering, with lookup. Errors: CapabilityNotGranted (403),
@@ -32,7 +33,8 @@ export type FormerMember = { id: string; name: string | null; status: "no_access
 // longer have it, and identifiers the tool does not know — never had, or
 // forgotten.
 export type Lookup = { members: Member[]; former: FormerMember[]; unknown: string[] };
-// A group that gives the tool, with the identifiers of its members.
+// A group the tool sees, with the identifiers of those of its members who
+// have the tool.
 export type Group = { id: string; name: string; members: string[] };
 
 const maxLimit = 500;
@@ -155,8 +157,13 @@ export async function lookup(ids: Iterable<string>): Promise<Lookup> {
   return result;
 }
 
-// groups are the groups of the Chest that give the tool, each with the
-// identifiers of its members; nothing of the others.
+// groups are the groups of the Chest the tool sees, each with the
+// identifiers of those of its members who have the tool: the groups that
+// give it — or, with "members.groups", every group of the Chest, so that a
+// tool open to everyone can offer "the Sales team". A Chest holds 16 groups
+// of 128 members at most: one call answers them all. Store group
+// identifiers and resolve names when rendering, as for members; who joins
+// or leaves one is member.updated naming "groups".
 export const groups = {
   async list(): Promise<Group[]> {
     const response = await ask("members", "GET", "/groups");

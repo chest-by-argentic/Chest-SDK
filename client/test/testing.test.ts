@@ -89,6 +89,47 @@ test("its members answer as a Chest's: order, pages, search, lookup, groups, add
   }
 });
 
+test("its groups that give nothing are seen only with members.groups, their members among those who have the tool", async () => {
+  const sud = "grp_sudaaaaaaaaaaaaaaaaaaaaaaa";
+  const inSud = { ...emile, groups: [sud] };
+  const groups = [{ id: nord, name: "Nord", members: [camille.id] }, { id: sud, name: "Sud", members: [emile.id, id("mallory")], grants: false }];
+  const narrow = await fakeChest({ members: [camille, inSud], groups, capabilities: ["members"] });
+  try {
+    assert.deepEqual(await members.groups.list(), [{ id: nord, name: "Nord", members: [camille.id] }]);
+    assert.deepEqual((await members.get(emile.id))?.groups, []);
+    assert.deepEqual((await members.list({ group: sud })).members, []);
+  } finally {
+    await narrow.close();
+  }
+  const every = await fakeChest({ members: [camille, inSud], groups, capabilities: ["members", "members.groups", "notifications"] });
+  try {
+    assert.deepEqual(await members.groups.list(), [{ id: nord, name: "Nord", members: [camille.id] }, { id: sud, name: "Sud", members: [emile.id] }]);
+    assert.deepEqual((await members.get(emile.id))?.groups, [sud]);
+    assert.deepEqual((await members.list({ group: sud })).members.map(m => m.id), [emile.id]);
+  } finally {
+    await every.close();
+  }
+});
+
+test("its broadcast reaches whom a Chest's would, each in their language, and says nothing back", async () => {
+  const sud = "grp_sudaaaaaaaaaaaaaaaaaaaaaaa";
+  const chest = await fakeChest({ members: [camille, { ...emile, groups: [sud] }, zoe], groups: [{ id: sud, name: "Sud", members: [emile.id], grants: false }], capabilities: ["members", "members.groups", "notifications"] });
+  const sent = chest.notifications;
+  try {
+    await notifications.broadcast({ title: "Office closed", key: "news:1", translations: { fr: { title: "Bureau fermé" } } }, { except: [zoe.id] });
+    assert.deepEqual(sent, [{ member: camille.id, title: "Office closed", path: "/chest", key: "news:1" }, { member: emile.id, title: "Bureau fermé", path: "/chest", key: "news:1" }]);
+    await notifications.broadcast({ title: "Sud" }, { to: { groups: [sud] } });
+    await notifications.broadcast({ title: "Readers" }, { to: { roles: ["reader"] } });
+    await notifications.broadcast({ title: "Nobody" }, { to: { groups: ["grp_" + "b".repeat(26)] } });
+    assert.deepEqual(sent.slice(2).map(n => [n.member, n.title]), [[emile.id, "Sud"], [emile.id, "Readers"], [zoe.id, "Readers"]]);
+    await notifications.withdraw("news:1");
+    assert.equal(sent.length, 3);
+    await assert.rejects(notifications.broadcast({ title: "a" }, { to: { roles: ["Reader"] } }), (e: unknown) => e instanceof ChestError && e.code === "invalid_role");
+  } finally {
+    await chest.close();
+  }
+});
+
 test("its bounds and refusals are a Chest's", async () => {
   const chest = await fakeChest({ members: [camille], capabilities: ["files"], files: { "hello.txt": { data: "hello", type: "text/plain" } } });
   try {

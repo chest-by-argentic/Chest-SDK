@@ -87,6 +87,48 @@ test("notify refuses what the Chest would refuse, before sending anything", asyn
   assert.equal(seen.length, 3);
 });
 
+test("a notice in other languages sends each translation as given", async () => {
+  reply = () => ({ status: 200, value: { delivered: [camille], skipped: [] } });
+  await notifications.notify([camille], { title: "New poll", body: "Vote", translations: { fr: { title: "Nouveau sondage", body: "" }, de: { title: "Neue Umfrage" } } });
+  assert.deepEqual(seen.at(-1)?.body, { members: [camille], title: "New poll", body: "Vote", translations: { fr: { title: "Nouveau sondage" }, de: { title: "Neue Umfrage" } } });
+  for (const [translations, expected] of [[{ FR: { title: "a" } }, "invalid_language"], [{ french: { title: "a" } }, "invalid_language"], [{ fr: { title: "" } }, "invalid_title"], [{ fr: { title: "a", body: "x".repeat(281) } }, "invalid_text"]] as const) {
+    await assert.rejects(notifications.notify([camille], { title: "a", translations: translations as Record<string, notifications.Words> }), code(expected), JSON.stringify(translations));
+  }
+  assert.equal(seen.length, 1);
+});
+
+test("broadcast sends the notice and whom it is for, and says nothing back", async () => {
+  const sales = "grp_sales" + "a".repeat(21);
+  reply = () => ({ status: 204 });
+  assert.equal(await notifications.broadcast({ title: "Office closed", path: "/chest/news/3", key: "news:3", translations: { fr: { title: "Bureau fermé" } } }), undefined);
+  await notifications.broadcast({ title: "Poll" }, { to: { groups: [sales], roles: ["editor"] }, except: new Set([camille]) });
+  await notifications.broadcast({ title: "Poll" }, { to: { roles: ["editor"], groups: [] }, except: [] });
+  assert.deepEqual(seen.map(s => [s.method, s.url, s.body]), [
+    ["POST", "/notifications/broadcast", { title: "Office closed", path: "/chest/news/3", key: "news:3", translations: { fr: { title: "Bureau fermé" } } }],
+    ["POST", "/notifications/broadcast", { title: "Poll", to: { groups: [sales], roles: ["editor"] }, except: [camille] }],
+    ["POST", "/notifications/broadcast", { title: "Poll", to: { roles: ["editor"] } }],
+  ]);
+  seen = [];
+  const bad: [notifications.Notice, notifications.Audience, string][] = [
+    [{ title: "" }, {}, "invalid_title"],
+    [{ title: "a" }, { to: {} }, "invalid_body"],
+    [{ title: "a" }, { to: { groups: [], roles: [] } }, "invalid_body"],
+    [{ title: "a" }, { to: { groups: ["sales"] } }, "invalid_id"],
+    [{ title: "a" }, { to: { roles: ["Editor"] } }, "invalid_role"],
+    [{ title: "a" }, { to: { roles: Array.from({ length: 17 }, (_, i) => "r" + i) } }, "invalid_body"],
+    [{ title: "a" }, { except: ["alice"] }, "invalid_id"],
+    [{ title: "a" }, { except: Array.from({ length: 129 }, () => camille) }, "invalid_body"],
+    [{ title: "a", path: "/public" }, {}, "invalid_path"],
+  ];
+  for (const [notice, audience, expected] of bad) await assert.rejects(notifications.broadcast(notice, audience), code(expected), JSON.stringify([notice, audience]));
+  assert.equal(seen.length, 0);
+  // A 200 is not what the Chest answers; a quota is the tool's to wait.
+  reply = () => ({ status: 200, value: { delivered: 3 } });
+  await assert.rejects(notifications.broadcast({ title: "a" }), Unavailable);
+  reply = () => ({ status: 429, value: { error: "quota_exceeded" } });
+  await assert.rejects(notifications.broadcast({ title: "a" }), QuotaExceeded);
+});
+
 test("withdraw names the key, and the members when given; it says nothing of what existed", async () => {
   reply = () => ({ status: 204 });
   assert.equal(await notifications.withdraw("task:42"), undefined);
