@@ -6,7 +6,7 @@ Content-Security-Policy it adds. The SDK (`../README.md`) is the other half:
 what a running tool calls.
 
 <!-- contract:version -->
-Version **0.4** — `"chest": "0.4"`, the SDK 0.4.x.
+Version **0.5** — `"chest": "0.5"`, the SDK 0.5.x.
 <!-- /contract:version -->
 
 **One source.** The rules below are the Chest's own code: the tables and
@@ -33,7 +33,7 @@ tracks or would add, the working tree as it is now, committed or not — and
 judges it with the Chest's code:
 
 ```
-OK: the Chest (tool contract 0.4) would take tasks, written for contract 0.4.
+OK: the Chest (tool contract 0.5) would take tasks, written for contract 0.5.
   Roles: manager, member
   It asks: database, files, members
   Migrations: 3
@@ -54,7 +54,7 @@ same code on its drafts.
 ## Versions
 
 `"chest"` names the version of the contract a tool is written for: the
-MAJOR.MINOR of the SDK it uses (SDK 0.4.x: `"chest": "0.4"`). A Chest serves
+MAJOR.MINOR of the SDK it uses (SDK 0.5.x: `"chest": "0.5"`). A Chest serves
 every version up to its own, with the one grammar it has: the contract only
 grows, and a key keeps its meaning once in it. A Chest older than the version
 a tool names refuses it before reading anything else, and says so to whoever
@@ -69,7 +69,7 @@ could be a permission nobody approved.
 
 | Key | | Rule | Example |
 |---|---|---|---|
-| `chest` | required | The version of the tool contract the tool is written for, "MAJOR.MINOR" — the SDK's MAJOR.MINOR. A Chest serves every version up to its own; an older Chest refuses the tool before reading anything else: "This tool needs a newer version of your Chest". Grammar: `^(0\|[1-9][0-9]{0,2})\.(0\|[1-9][0-9]{0,2})$`. | `"0.4"` |
+| `chest` | required | The version of the tool contract the tool is written for, "MAJOR.MINOR" — the SDK's MAJOR.MINOR. A Chest serves every version up to its own; an older Chest refuses the tool before reading anything else: "This tool needs a newer version of your Chest". Grammar: `^(0\|[1-9][0-9]{0,2})\.(0\|[1-9][0-9]{0,2})$`. | `"0.5"` |
 | `name` | required | The tool's name and the label of its address: a lowercase letter, then up to 47 lowercase letters, digits or dashes; never login, node, nor a name ending in -chest. Whoever installs the tool may give it another address. Grammar: `^[a-z][a-z0-9-]{0,47}$`. | `"tasks"` |
 | `title` |  | Shown in lists: 1 to 48 printable characters. | `"Tasks"` |
 | `description` |  | Shown in the catalogue: 1 to 160 printable characters. | `"The team's tasks, by project."` |
@@ -79,7 +79,7 @@ could be a permission nobody approved.
 | `role_labels` |  | How declared roles are shown: an object giving roles of roles 1 to 40 printable characters each. Presentation only: never approved. | `{"manager":"Manager"}` |
 | `public` |  | true for a part served to anyone on the Internet, on the tool's public host, outside /chest. Approved as a permission; closed at installation until whoever runs the tool opens it. | `true` |
 | `csp` |  | "tool": the public part sends its own Content-Security-Policy (a nonce per response, as Next.js needs), and the Chest adds beside it only its floor policy instead of its default one. Requires public; approved as a permission. | `"tool"` |
-| `capabilities` |  | What the tool uses of its Chest, each at most once, each approved as a permission: database (its own PostgreSQL), files (its private files), members (who has the tool), members.email (their addresses; with members), notifications (badges and inbox items), ai (AI models through the Chest; with the key ai). | `["database","files","members","members.email","notifications","ai"]` |
+| `capabilities` |  | What the tool uses of its Chest, each at most once, each approved as a permission: database (its own PostgreSQL), files (its private files), members (who has the tool), members.email (their addresses; with members), members.groups (every group of the Chest, and which of those members are in each; with members), notifications (badges and inbox items), ai (AI models through the Chest; with the key ai). | `["database","files","members","members.email","members.groups","notifications","ai"]` |
 | `files` |  | With the capability files: "quota" and "maxObject", sizes such as "5 GiB" or "100 MiB" — the quota from 100 MiB to 100 GiB (1 GiB without it), the largest object from 1 MiB to 512 MiB (32 MiB without it). | `{"quota":"5 GiB","maxObject":"100 MiB"}` |
 | `ai` |  | Required with the capability ai: "monthly", the whole euros a month the tool suggests, 1 to 1000 (5 without it; the owner's cap decides); "models", the aliases it calls among default, fast, smart, embedding, each once (default without it); "purpose", what it does with AI, 1 to 120 printable characters. | `{"monthly":5,"models":["default","embedding"],"purpose":"Summarises the tasks of a project"}` |
 | `receives` |  | ["member.*"]: the members' lifecycle events, posted to POST /chest-events. Requires the capability members; approved as a permission. | `["member.*"]` |

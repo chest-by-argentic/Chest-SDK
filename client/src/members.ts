@@ -3,7 +3,8 @@ import { ChestError, Unavailable } from "./errors.js";
 import { groupIdPattern, languagePattern, memberIdPattern, timeZonePattern, type Member } from "./member.js";
 
 // Who has the tool, for a server tool whose chest.json declares
-// "capabilities": ["members"] (and "members.email" for their addresses):
+// "capabilities": ["members"] (and "members.email" for their addresses,
+// "members.groups" for every group of the Chest):
 // exactly the members who have access to it at the time of the call — by a
 // grant, a group, open to all, or because they run it. list and get see
 // only them; lookup also names those the tool had who no longer have it
@@ -13,7 +14,7 @@ import { groupIdPattern, languagePattern, memberIdPattern, timeZonePattern, type
 //   const { members: page, next } = await members.list({ q: "cam" });
 //   const one = await members.get("mbr_…");            // null: no such member here
 //   const { members: found, former, unknown } = await members.lookup(ids);
-//   const all = await members.groups.list();          // groups that give the tool
+//   const { groups, next: more } = await members.groups.list(); // the groups the tool sees, a page
 //
 // Store member identifiers in your data, never names or addresses: resolve
 // them when rendering, with lookup. Errors: CapabilityNotGranted (403),
@@ -32,8 +33,11 @@ export type FormerMember = { id: string; name: string | null; status: "no_access
 // longer have it, and identifiers the tool does not know — never had, or
 // forgotten.
 export type Lookup = { members: Member[]; former: FormerMember[]; unknown: string[] };
-// A group that gives the tool, with the identifiers of its members.
-export type Group = { id: string; name: string; members: string[] };
+// A group the tool sees, and its size: how many of its members have the
+// tool — members.list({ group: id }) pages them.
+export type Group = { id: string; name: string; size: number };
+// A page of groups, and the cursor of the next one (null after the last).
+export type GroupPage = { groups: Group[]; next: string | null };
 
 const maxLimit = 500;
 const lookupBatch = 200;
@@ -51,7 +55,7 @@ const text = (value: unknown, max: number): value is string => typeof value === 
 // Chest's answer.
 function shown(value: unknown): Member {
   const m = value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-  if (!m || typeof m["id"] !== "string" || !memberIdPattern.test(m["id"]) || !text(m["first_name"], 256) || !text(m["last_name"], 256) || !text(m["name"], 520) || !(m["photo"] === null || text(m["photo"], 200)) || !(m["role"] === null || text(m["role"], 48)) || typeof m["admin"] !== "boolean" || typeof m["builder"] !== "boolean" || !Array.isArray(m["groups"]) || m["groups"].length > 16 || !m["groups"].every(g => typeof g === "string" && groupIdPattern.test(g)) || typeof m["language"] !== "string" || !languagePattern.test(m["language"]) || typeof m["time_zone"] !== "string" || !timeZonePattern.test(m["time_zone"]) || !(m["email"] === undefined || text(m["email"], 254))) throw new Unavailable();
+  if (!m || typeof m["id"] !== "string" || !memberIdPattern.test(m["id"]) || !text(m["first_name"], 256) || !text(m["last_name"], 256) || !text(m["name"], 520) || !(m["photo"] === null || text(m["photo"], 200)) || !(m["role"] === null || text(m["role"], 48)) || typeof m["admin"] !== "boolean" || typeof m["builder"] !== "boolean" || !Array.isArray(m["groups"]) || !m["groups"].every(g => typeof g === "string" && groupIdPattern.test(g)) || typeof m["language"] !== "string" || !languagePattern.test(m["language"]) || typeof m["time_zone"] !== "string" || !timeZonePattern.test(m["time_zone"]) || !(m["email"] === undefined || text(m["email"], 254))) throw new Unavailable();
   return { id: m["id"], firstName: m["first_name"], lastName: m["last_name"], name: m["name"], photo: m["photo"], role: m["role"], isAdmin: m["admin"], isBuilder: m["builder"], groups: [...m["groups"]] as string[], language: m["language"], timeZone: m["time_zone"], ...(m["email"] === undefined ? {} : { email: m["email"] }) };
 }
 
@@ -155,18 +159,32 @@ export async function lookup(ids: Iterable<string>): Promise<Lookup> {
   return result;
 }
 
-// groups are the groups of the Chest that give the tool, each with the
-// identifiers of its members; nothing of the others.
+// groups are the groups of the Chest the tool sees, a page at a time like
+// members, by name then identifier: the groups that give it — or, with
+// "members.groups", every group of the Chest, so that a tool open to
+// everyone can offer "the Sales team". Each says its size; its members are
+// members.list({ group }). Store group identifiers and resolve names when
+// rendering, as for members; who joins or leaves one is member.updated
+// naming "groups".
 export const groups = {
-  async list(): Promise<Group[]> {
-    const response = await ask("members", "GET", "/groups");
+  async list(options: { after?: string; limit?: number } = {}): Promise<GroupPage> {
+    const query = new URLSearchParams();
+    if (options.after !== undefined) query.set("after", options.after);
+    if (options.limit !== undefined) {
+      if (!Number.isInteger(options.limit) || options.limit < 1 || options.limit > maxLimit) throw new ChestError("invalid_query", 400, "limit is 1 to 500");
+      query.set("limit", String(options.limit));
+    }
+    const response = await ask("members", "GET", "/groups" + (query.size ? "?" + query.toString() : ""));
     if (response.status !== 200) throw await refusal(response, "members");
-    const answer = (await json(response)) as { groups?: unknown } | null;
-    if (!answer || !Array.isArray(answer.groups) || answer.groups.length > 16) throw new Unavailable();
-    return answer.groups.map(value => {
-      const g = value as { id?: unknown; name?: unknown; members?: unknown } | null;
-      if (!g || typeof g.id !== "string" || !groupIdPattern.test(g.id) || !text(g.name, 256) || !Array.isArray(g.members) || g.members.length > 128 || !g.members.every(m => typeof m === "string" && memberIdPattern.test(m))) throw new Unavailable();
-      return { id: g.id, name: g.name, members: [...g.members] as string[] };
-    });
+    const page = (await json(response)) as { groups?: unknown; next?: unknown } | null;
+    if (!page || !Array.isArray(page.groups) || page.groups.length > maxLimit || !(page.next === null || text(page.next, 1024))) throw new Unavailable();
+    return {
+      groups: page.groups.map(value => {
+        const g = value as { id?: unknown; name?: unknown; size?: unknown } | null;
+        if (!g || typeof g.id !== "string" || !groupIdPattern.test(g.id) || !text(g.name, 256) || typeof g.size !== "number" || !Number.isSafeInteger(g.size) || g.size < 0) throw new Unavailable();
+        return { id: g.id, name: g.name, size: g.size };
+      }),
+      next: page.next,
+    };
   },
 };

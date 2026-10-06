@@ -25,7 +25,7 @@ const expected = {
   database: ["databaseUrl"],
   files: ["delete", "get", "list", "move", "put", "stat", "uploadUrl", "url"],
   members: ["forget", "get", "groups", "list", "lookup"],
-  notifications: ["badge", "notify", "withdraw"],
+  notifications: ["badge", "broadcast", "notify", "withdraw"],
   events: ["acknowledgeErasure", "erasureIdPattern", "handle", "memorySeen", "verify"],
   schedules: ["handle", "verify"],
   ai: ["chat", "embed", "models", "usage"],
@@ -171,9 +171,9 @@ import * as files from "${name}/files";
 import type { FileData, FileObject, FilePage } from "${name}/files";
 import { chest as theChest, type Chest } from "${name}/chest";
 import * as members from "${name}/members";
-import { groups, type Group, type Lookup, type MemberPage } from "${name}/members";
+import { groups, type GroupPage, type Lookup, type MemberPage } from "${name}/members";
 import * as notifications from "${name}/notifications";
-import type { BadgeCount, BadgeWrite, Delivery, Notice } from "${name}/notifications";
+import type { Audience, BadgeCount, BadgeWrite, Delivery, Notice } from "${name}/notifications";
 import * as events from "${name}/events";
 import type { ChestEvent, Handlers, MemberErased, Seen } from "${name}/events";
 import * as ai from "${name}/ai";
@@ -186,11 +186,12 @@ export const url: string = databaseUrl();
 export async function keep(): Promise<[FileObject, FileData | null, FilePage, boolean, { url: string; expiresIn: number }]> {
   return [await files.put("a.txt", "a", "text/plain"), await files.get("a.txt"), await files.list({ prefix: "a" }), await files.delete("a.txt"), await sdk.files.url("a.txt")];
 }
-export async function team(): Promise<[MemberPage, Member | null, Lookup, Group[]]> {
-  return [await members.list({ q: "a", limit: 10 }), await members.get("mbr_x"), await sdk.members.lookup(["mbr_x"]), await groups.list()];
+export async function team(): Promise<[MemberPage, Member | null, Lookup, GroupPage, string[] | null]> {
+  const page = await groups.list({ limit: 10 });
+  return [await members.list({ q: "a", limit: 10 }), await members.get("mbr_x"), await sdk.members.lookup(["mbr_x"]), await groups.list({ after: page.next ?? "", limit: page.groups[0]?.size ?? 1 }), (await members.get("mbr_x"))?.groups ?? null];
 }
-export async function tell(ids: string[], notice: Notice, counts: BadgeCount[]): Promise<[Delivery, void, boolean, BadgeWrite]> {
-  return [await notifications.notify(ids, notice), await sdk.notifications.withdraw("task:1", ids), await notifications.badge.set("mbr_x", 1), await notifications.badge.setMany(counts)];
+export async function tell(ids: string[], notice: Notice, counts: BadgeCount[], audience: Audience): Promise<[Delivery, void, void, boolean, BadgeWrite]> {
+  return [await notifications.notify(ids, notice), await notifications.broadcast(notice, audience), await sdk.notifications.withdraw("task:1", ids), await notifications.badge.set("mbr_x", 1), await notifications.badge.setMany(counts)];
 }
 export async function receive(request: Request, seen: Seen): Promise<[number, ChestEvent | null]> {
   const handlers: Handlers = { "member.erased": async (e: MemberErased) => { await events.acknowledgeErasure(e.data.erasure); }, "member.updated": e => { void e.data.changed; } };

@@ -12,8 +12,12 @@ import type { IncomingMessage } from "node:http";
 // - photo is the address of their picture on the tool's team host
 //   (/_chest/members/{id}/photo?v=<rev>), role one of the roles chest.json
 //   declares: null when there is none.
-// - isBuilder says they build this tool; groups are the groups that give them
-//   this tool ("grp_…").
+// - isBuilder says they build this tool; groups are those of their groups
+//   the tool sees ("grp_…"): the groups that give them this tool, or all of
+//   their groups when the tool holds "members.groups". null when they are in
+//   more groups than travel with a request (about 150: the assertion keeps
+//   within half of a Node server's 16 KiB of headers): read them with
+//   members.get(member.id) — Microsoft's "groups overage", the same way.
 // - language is the language the Chest speaks to this member (their own,
 //   else the Chest's default): a BCP 47 primary tag the product speaks
 //   ("en", "fr"…). The tool's private part (/chest) speaks it to them; a
@@ -32,7 +36,7 @@ export type Member = {
   role: string | null;
   isAdmin: boolean;
   isBuilder: boolean;
-  groups: string[];
+  groups: string[] | null;
   language: string;
   timeZone: string;
   email?: string;
@@ -58,9 +62,9 @@ export const timeZonePattern = /^(?:UTC|[A-Z][A-Za-z_]{1,31}(?:\/[A-Za-z0-9_+-]{
 // reader of the former claims still reads them. This module stands alone
 // (node:* only), so that it can be copied by itself.
 const label = "Chest-Member v2";
-// The claims every assertion carries; email only for a tool that holds
-// members.email.
-const claims = ["iss", "aud", "iat", "exp", "sub", "given_name", "family_name", "name", "picture", "role", "admin", "builder", "groups", "language", "time_zone"] as const;
+// The claims every assertion carries; groups unless groups_overage says
+// they did not fit; email only for a tool that holds members.email.
+const claims = ["iss", "aud", "iat", "exp", "sub", "given_name", "family_name", "name", "picture", "role", "admin", "builder", "language", "time_zone"] as const;
 // Clocks of the Chest and of the container may differ by this much, in seconds.
 const skew = 5;
 // An assertion is a few hundred bytes; anything longer is not one.
@@ -107,13 +111,15 @@ export function member(request: IncomingMessage | Request): Member | null {
   if (signature.length !== expected.length || !timingSafeEqual(signature, expected)) return null;
   const payload = json(encodedPayload);
   if (!payload || !claims.every(name => Object.hasOwn(payload, name))) return null;
-  const { iss, aud, iat, exp, sub, given_name, family_name, name, email, picture, role, admin, builder, groups, language, time_zone } = payload;
+  const { iss, aud, iat, exp, sub, given_name, family_name, name, email, picture, role, admin, builder, groups, groups_overage, language, time_zone } = payload;
   if (typeof iss !== "string" || iss === "" || aud !== tool || typeof sub !== "string" || !memberIdPattern.test(sub)) return null;
   if (typeof iat !== "number" || !Number.isSafeInteger(iat) || typeof exp !== "number" || !Number.isSafeInteger(exp) || exp <= iat) return null;
   const now = Math.floor(Date.now() / 1000);
   if (iat > now + skew || exp <= now - skew) return null;
   if (typeof given_name !== "string" || typeof family_name !== "string" || typeof name !== "string" || typeof picture !== "string" || typeof role !== "string" || typeof admin !== "boolean" || typeof builder !== "boolean") return null;
-  if (!Array.isArray(groups) || groups.length > 16 || !groups.every(g => typeof g === "string" && groupIdPattern.test(g)) || (email !== undefined && typeof email !== "string")) return null;
+  const overage = groups_overage === true && groups === undefined;
+  if (!overage && (groups_overage !== undefined || !Array.isArray(groups) || !groups.every(g => typeof g === "string" && groupIdPattern.test(g)))) return null;
+  if (email !== undefined && typeof email !== "string") return null;
   if (typeof language !== "string" || !languagePattern.test(language) || typeof time_zone !== "string" || !timeZonePattern.test(time_zone)) return null;
-  return { id: sub, firstName: given_name, lastName: family_name, name, photo: picture === "" ? null : picture, role: role === "" ? null : role, isAdmin: admin, isBuilder: builder, groups: [...groups] as string[], language, timeZone: time_zone, ...(email === undefined ? {} : { email }) };
+  return { id: sub, firstName: given_name, lastName: family_name, name, photo: picture === "" ? null : picture, role: role === "" ? null : role, isAdmin: admin, isBuilder: builder, groups: overage ? null : [...groups as string[]], language, timeZone: time_zone, ...(email === undefined ? {} : { email }) };
 }

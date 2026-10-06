@@ -1,5 +1,5 @@
 {
-  "contract": "0.4",
+  "contract": "0.5",
   "manifest": {
     "file": "chest.json",
     "maxBytes": 16384,
@@ -9,7 +9,7 @@
         "required": true,
         "rule": "The version of the tool contract the tool is written for, \"MAJOR.MINOR\" — the SDK's MAJOR.MINOR. A Chest serves every version up to its own; an older Chest refuses the tool before reading anything else: \"This tool needs a newer version of your Chest\".",
         "pattern": "^(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
-        "example": "0.4"
+        "example": "0.5"
       },
       {
         "key": "name",
@@ -68,12 +68,13 @@
       },
       {
         "key": "capabilities",
-        "rule": "What the tool uses of its Chest, each at most once, each approved as a permission: database (its own PostgreSQL), files (its private files), members (who has the tool), members.email (their addresses; with members), notifications (badges and inbox items), ai (AI models through the Chest; with the key ai).",
+        "rule": "What the tool uses of its Chest, each at most once, each approved as a permission: database (its own PostgreSQL), files (its private files), members (who has the tool), members.email (their addresses; with members), members.groups (every group of the Chest, and which of those members are in each; with members), notifications (badges and inbox items), ai (AI models through the Chest; with the key ai).",
         "example": [
           "database",
           "files",
           "members",
           "members.email",
+          "members.groups",
           "notifications",
           "ai"
         ]
