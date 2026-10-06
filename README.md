@@ -5,7 +5,7 @@ with its Chest: the member the Chest asserts on a request, the Chest itself
 (its organization, time zone, language and currency, and where the tool is
 reached), the other members who have the tool, the address of the tool's own
 database, its private files, the badges and notifications it shows members
-inside the Chest, the events of its members' lifecycle, AI models through the
+inside the Chest, the events of its members' lifecycle and between tools, AI models through the
 Chest — and, for the tool's tests, a fake Chest. It also publishes the tool
 contract ([`contract/`](contract/README.md): what `chest.json` may say, what
 the Chest builds, what migrations may do, the policies it adds) and `chest
@@ -31,14 +31,14 @@ ai APIs as the namespaces `sealed`, `files`, `members`, `notifications`,
 | `@argentic/chest-sdk/chest` | `chest`, type `Chest`: the Chest the tool runs in — `chest.organization.name`, `chest.timeZone`, `chest.language`, `chest.currency`, `chest.today()` — and where the tool is reached — `chest.tool.teamUrl`, `chest.tool.publicUrl` —, the same for every member, on a request or outside one |
 | `@argentic/chest-sdk/members` | `list`, `get`, `lookup`, `groups.list`, `forget`, types `MemberPage`, `Lookup`, `FormerMember`, `Group`: the members who have the tool (capability `members`, their addresses with `members.email`, every group of the Chest with `members.groups`) |
 | `@argentic/chest-sdk/notifications` | `notify`, `broadcast`, `withdraw`, `badge.set`, `badge.setMany`, types `Notice`, `Words`, `Audience`, `Delivery`, `BadgeCount`, `BadgeWrite`: counters on the tool's tile and items in members' inboxes, inside the Chest (capability `notifications`) |
-| `@argentic/chest-sdk/events` | `handle`, `verify`, `acknowledgeErasure`, `memorySeen`, `erasureIdPattern`, types `ChestEvent`, `MemberUpdated`, `AccessRevoked`, `MemberRemoved`, `MemberErased`, `MemberChange`, `Handlers`, `Seen`: the events of the members' lifecycle the Chest posts to the tool's `/chest-events` (`"receives": ["member.*"]`), verified, deduplicated by id, and the acknowledgment of an erasure |
+| `@argentic/chest-sdk/events` | `handle`, `verify`, `emit`, `acknowledgeErasure`, `memorySeen`, `erasureIdPattern`, types `ChestEvent`, `ChestEventType`, `MemberUpdated`, `AccessRevoked`, `MemberRemoved`, `MemberErased`, `MemberChange`, `ToolEvent`, `ToolEventType`, `ReceivedEvent`, `Handler`, `Handlers`, `EmitOptions`, `EmitAudience`, `Emitted`, `Seen`: the events of the members' lifecycle (`"receives": ["member.*"]`) and of other tools (`"receives": ["quote.accepted"]`) the Chest posts to the tool's `/chest-events`, verified, deduplicated by id; the events the tool tells the others (`"emits"`); and the acknowledgment of an erasure |
 | `@argentic/chest-sdk/schedules` | `handle`, `verify`, types `Run`, `Handlers`, `Seen`: the runs of the tool's schedules (`"schedules"` in `chest.json`) the Chest posts to its `/chest-schedules` at their times, verified, deduplicated by id |
 | `@argentic/chest-sdk/ai` | `chat`, `embed`, `models`, `usage`, types `Alias`, `Provider`, `ChatMessage`, `ChatTool`, `ToolChoice`, `ResponseFormat`, `ChatOptions`, `ChatResult`, `ChatChunk`, `ToolCall`, `ToolCallDelta`, `Usage`, `EmbedOptions`, `Embeddings`, `AiModel`, `AiUsage`: AI models through the Chest, on the owner's connectors, metered against the tool's monthly cap (capability `ai`) |
 | `@argentic/chest-sdk/database` | `databaseUrl()`: the address of the tool's own PostgreSQL database (capability `database`) |
 | `@argentic/chest-sdk/sealed` | `seal`, `sealMany`, `open`, `openMany`, `isSealed`, types `SealOptions`, `SealItem`, `OpenItem`: sensitive values the Chest seals under a key of the tool and opens again only for the member of a request — and only one holding a role the value was sealed for (capability `sealed`) |
 | `@argentic/chest-sdk/files` | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl`, types `FileObject`, `FileData`, `FilePage`: the tool's private files (capability `files`), kept by the Chest, a 15-minute signed link to one (or to its thumbnail), and uploads straight from a member's or a visitor's browser |
 | `@argentic/chest-sdk/errors` | `ChestError` (`code`, `status`), `CapabilityNotGranted` (403), `TooLarge` (413), `QuotaExceeded` (429), `RateLimited` (429), `StorageFull` (507), `Unavailable` (503), for sealed values `MemberRequired` (401), `NotAllowed` (403), `SealedInvalid` (400), `SealedLocked` (503), `SealedLost` (503), and for AI `AiCapReached` (402), `AiModelNotAllowed` (403), `AiRefused` (422), `AiUnavailable` (502, 503), type `AiUnavailableReason`: what the SDK throws when the Chest does not give what a tool asks |
-| `@argentic/chest-sdk/testing` | `signAssertion`, `withMember`, `fakeChest`, types `AssertionOptions`, `FakeChest`, `FakeChestOptions`, `FakeGroup`, `FakeFile`, `FakeFormer`, `FakeNotification`, `FakeEvent`, `FakeRun`, `FakeAi`, `FakeAiModel`, `FakeAiReply`, `FakeAiCall`, `FakeOpen`: for the tool's own tests only |
+| `@argentic/chest-sdk/testing` | `signAssertion`, `withMember`, `fakeChest`, types `AssertionOptions`, `FakeChest`, `FakeChestOptions`, `FakeGroup`, `FakeFile`, `FakeFormer`, `FakeNotification`, `FakeEvent`, `FakeEmits`, `FakeEmitted`, `FakeRun`, `FakeAi`, `FakeAiModel`, `FakeAiReply`, `FakeAiCall`, `FakeOpen`: for the tool's own tests only |
 | `@argentic/chest-sdk` | all of the above but `testing`; `sealed`, `files`, `members`, `notifications`, `events`, `schedules` and `ai` as namespaces |
 
 ```ts
@@ -85,7 +85,7 @@ export function GET(request: Request) {
 A tool is an ordinary web server in a container without network, run by
 its Chest. The Chest's front is the only one to reach it; the tool reaches only
 what its launcher gives it on `127.0.0.1` (its database, the Chest's API for
-its files, its members, its notifications and AI), and the Chest posts it the
+its files, its members, its notifications, its events and AI), and the Chest posts it the
 events it receives on `/chest-events` and the runs of its schedules on
 `/chest-schedules`, through the same launcher. Rights come
 from the Chest — the signed member, the capabilities approved for the
@@ -466,11 +466,23 @@ A badge suits a count that goes up and down (tasks assigned, messages
 unread); a notification, an event worth a look — with a key, so that it goes
 away by itself once handled.
 
-## `events` — the members' lifecycle
+## `events` — the members' lifecycle, and events between tools
+
+The Chest posts two kinds of events to the tool's own `POST /chest-events`,
+signed for it, on one route and through one `handle`:
+
+- **the members' lifecycle**, for a tool that holds `members` and declares
+  `"receives": ["member.*"]`;
+- **events between tools**: what another tool of the Chest tells
+  (`quote.accepted` from a quotes tool), for a tool whose `"receives"`
+  names the type. And a tool tells the others with `emit`, for the types
+  its `"emits"` declares.
+
+### The members' lifecycle
 
 A tool that holds `members` and declares `"receives": ["member.*"]` in its
 `chest.json` (approved like a permission: “Is told when the members who have
-access to it change or leave.”) is told, on its own `POST /chest-events`:
+access to it change or leave.”) is told:
 
 | Event | `data` | When |
 |---|---|---|
@@ -479,7 +491,8 @@ access to it change or leave.”) is told, on its own `POST /chest-events`:
 | `member.removed` | `{id}` | The member left the Chest: `lookup` now reads them `former` |
 | `member.erased` | `{id, erasure, deadline}` | The owner asked for this person's data to be erased: delete or anonymise what the tool keeps of them before `deadline` (30 days), then `acknowledgeErasure(erasure)` |
 
-A member who gets the tool is no event: the next `list` has them.
+A member who gets the tool is no event: the next `list` has them. Every
+member event empties what `members.lookup` keeps.
 
 ```jsonc
 // chest.json
@@ -508,34 +521,139 @@ export async function POST(request: Request) {
 }
 ```
 
-- **Delivery**: at least once, in no guaranteed order. An event is an
-  envelope `{id: "evt_…", type, occurredAt, data}`, signed for this tool
-  (`Chest-Event` header, HS256 under a key derived from `CHEST_TOKEN` with
-  the label `Chest-Event v1`, naming the event and the SHA-256 of the body,
-  60 seconds). Any answer but a 2xx is delivered again, the same event with
-  the same id, after 5 s, 15 s, 30 s, 1 min, 2 min, 5 min, 10 min, 30 min, then
-  every hour, for 72 hours — a restart of the node included. Given up, the
-  tool is marked “out of sync” on its page until its next start.
 - **`members.list` is the truth.** Reconcile by listing at start (and so after
   being out of sync): events keep a tool current between starts, they do not
   replace reading who has it.
-- **`handle(request, handlers, {seen?})`** answers the status to give the
-  Chest: 401 for what is not a delivery of the Chest for this tool, 204 for an
-  event handled, one already in `seen`, a type without a handler, or one of a
-  later Chest (signed, ignored). It reads the body (64 KiB at most): mount it
-  before any body parser. A handler that throws leaves the event unseen and
-  `handle` throws: answer 500, it comes again. `seen` is the store of the
-  handled ids — `memorySeen()` (the default: 10,000 ids in the process, lost
-  at a restart) or a table of the tool's own, as above. Make handlers
-  idempotent anyway: an event handled but not yet added to `seen` when the
-  tool stops comes again.
-- **`verify(request)`** is the event of a delivery, typed, or `null`; for a
-  tool that routes events itself.
 - **`acknowledgeErasure(erasure)`**: `POST /erasures/{erasure}/done` on the
   Chest's API; the owner then sees the tool's part done (“Erased on 3 Oct.”),
   “Overdue” past the deadline otherwise. Again is harmless. Errors:
   `ChestError` `erasure_not_found` (404: an erasure this tool was not told of)
   or `invalid_id` (400), `CapabilityNotGranted` (403), `Unavailable`.
+
+### Events between tools
+
+One tool reacts to what happens in another: a quote accepted in Quotes
+creates a project in Tasks. The publisher says what it tells, each type in
+a sentence with the fields of its data; the receiver says which types it
+wants, from whichever tool tells them. The owner approves each link when
+the second of the two tools is installed (“Quotes → Tasks: A quote is
+accepted — quote, client, total”); an admin can switch a link off.
+
+```jsonc
+// chest.json of Quotes
+{ "emits": { "quote.accepted": { "description": "A quote is accepted",
+    "data": { "quote": "id", "client": "text", "total": "number", "acceptedBy": "member", "note": "text?" } } } }
+
+// chest.json of Tasks: types, never tools
+{ "receives": ["member.*", "quote.accepted"] }
+```
+
+- **A type** is two to four dotted segments of lowercase letters, digits
+  and dashes, each starting with a letter (`quote.accepted`, `hire.made`),
+  64 characters at most; `member.*` and `access.*` are the Chest's. A new
+  shape of data is a new type (`quote.accepted.v2`): a type's data only
+  grows.
+- **Fields** are camelCase names of a kind: `id` (an identifier of the
+  tool's own: 1 to 128 letters, digits, `.`, `_`, `:`, `-`), `text` (no
+  control character but line feeds and tabs, no format character), `number`,
+  `boolean`, `time` (an RFC 3339 instant), `date` (`YYYY-MM-DD`), `member` (a
+  member id), `members` (a list of distinct member ids); `?` for an
+  optional one (left out or `null`). People are member ids, never names nor
+  addresses: the receiver resolves them under its own permissions. The
+  Chest refuses a field not declared, missing or of another kind, a member
+  the tool never had, and data beyond 16 KiB of JSON.
+
+```ts
+// Quotes: tell, once the quote is accepted in the database
+import * as events from "@argentic/chest-sdk/events";
+
+const { id, receivers } = await events.emit("quote.accepted",
+  { quote: q.id, client: q.client, total: q.total, acceptedBy: who.id },
+  { subject: q.id, key: `accepted:${q.id}`, audience: { groups: q.groups } });
+```
+
+```ts
+// Tasks: app/chest-events/route.ts — the same route as the members' events
+export async function POST(request: Request) {
+  return new Response(null, { status: await events.handle(request, {
+    "access.revoked": e => unassign(e.data.id),
+    "quote.accepted": async e => {
+      // e: {id, type, source: "quotes", occurredAt, subject?, audience, data}
+      await createProject({ quote: String(e.data["quote"]), visibleTo: e.audience === "all" ? null : e.audience });
+    },
+  }, { seen }) });
+}
+```
+
+- **`emit(type, data, {subject?, key?, occurredAt?, audience?})`** →
+  `{id, receivers}`: the event's id and how many tools it was written for
+  (0 is no error: nobody listens, or none of their members may see it). The
+  Chest writes it for each linked receiver before answering. `subject` is
+  the thing it is about (an `id`): a receiver gets a subject's events in
+  the order emitted. `key` makes it idempotent: the same key within 72 hours
+  answers the same event and tells nobody again (after an `Unavailable`,
+  emit again with the same key); the same key with other content is
+  `key_reused`. `occurredAt` (a `Date` or an RFC 3339 instant within the
+  last 72 hours) is when it happened, the Chest's time by default.
+  `audience` is who in the tool may see the item: `{members?, groups?,
+  roles?}` (the tool's roles), each listed once — leave it out when
+  everyone who has the tool may. The SDK refuses what is no type, no
+  identifier or no audience before sending anything; the Chest checks the
+  data. Errors: `ChestError` `invalid_type` (400: not in `"emits"`),
+  `invalid_data` (400), `invalid_audience` (400), `invalid_event` (400:
+  `subject`, `key`, `occurredAt`), `key_reused` (409); `TooLarge`,
+  `CapabilityNotGranted` (the version emits nothing), `Unavailable`.
+- **The audience is who may see it, and the receiver honours it.** The
+  Chest intersects it with the members who have the receiver: none in
+  common, the event is not delivered there; all of them, `audience` is
+  `"all"`; otherwise it is the list of the receiver's members who may see
+  the item. Show it to them only — the Chest cannot look inside the
+  receiver's database: honouring the list is the receiver's rule.
+- **Read data defensively.** `data` holds the fields the publisher's
+  version declares, and a later one may add some: `handle` never refuses an
+  event for a field it does not know. `source` is the tool that told it,
+  stamped by the Chest.
+- **Loops are cut by the Chest.** An `emit` made inside the handler of a
+  tool event carries that event as its `cause`, by itself (through the
+  handler's async context): a chain that would pass twice through the same
+  tool and type is accepted and told to nobody. Work deferred elsewhere (a
+  schedule) starts a new chain.
+- A draft's own emits reach no tool; the preview's log says what it emitted.
+
+### Delivery, for both
+
+- **At least once.** An event is an envelope `{id: "evt_…", type,
+  occurredAt, data}` — for a tool event also `source`, `audience` and, when
+  the publisher gave one, `subject` — signed for this tool (`Chest-Event`
+  header, HS256 under a key derived from `CHEST_TOKEN` with the label
+  `Chest-Event v1`, naming the event and the SHA-256 of the body, 60
+  seconds). Any answer but a 2xx is delivered again, the same event with the
+  same id, after 5 s, 15 s, 30 s, 1 min, 2 min, 5 min, 10 min, 30 min, then
+  every hour, for 72 hours — a restart of the node included. Given up, a
+  member event leaves the tool “out of sync” on its page until its next
+  start; a tool event is a failed delivery on the receiver's **Events**
+  page, kept 30 days, that an admin may send again (the same id). Tool
+  events of one subject come in the order emitted; nothing else is ordered.
+  A sleeping tool is woken by a delivery, like by a visit.
+- **`handle(request, handlers, {seen?})`** answers the status to give the
+  Chest: 401 for what is not a delivery of the Chest for this tool, 204 for
+  an event handled, one already in `seen`, a type without a handler, or a
+  member type of a later Chest (signed, ignored). Handlers are keyed by
+  type: a member type's handler gets its own event (`MemberErased`…), any
+  other type's a `ToolEvent` (annotate a handlers object apart with the
+  types it holds: `Handlers<"member.erased" | "quote.accepted">`). It reads
+  the body — up to 32 MiB, as a tool event may name a whole team in its
+  audience, and only once the signature holds: mount it before any body
+  parser. A handler that throws leaves the event unseen and `handle`
+  throws: answer 500, it comes again. `seen` is the store of the handled
+  ids — `memorySeen()` (the default: 10,000 ids in the process, lost at a
+  restart) or a table of the tool's own, as above. Make handlers idempotent
+  anyway: an event handled but not yet added to `seen` when the tool stops
+  comes again.
+- **`verify(request)`** is the event of a delivery, typed (`ChestEvent` or
+  `ToolEvent`), or `null`; for a tool that routes events itself (its emits
+  then carry no cause).
+- Never put the route behind your own session or under `/chest`.
 
 ## `ai` — AI models through the Chest
 
@@ -988,9 +1106,12 @@ export async function POST(request: Request) {
 import { fakeChest, signAssertion, withMember } from "@argentic/chest-sdk/testing";
 
 const camille = { id: "mbr_k2qhx4mzc7v3b6nfp5r2t7w4ya", firstName: "Camille", lastName: "Martin", name: "Camille Martin", photo: null, role: "editor", isAdmin: false, isBuilder: false, groups: [], language: "fr", timeZone: "Europe/Paris" };
-const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications", "ai"], ai: { reply: () => "Summary." } });
+const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications", "ai"], ai: { reply: () => "Summary." },
+  emits: { "task.done": { description: "A task is done", data: { task: "id", doneBy: "member" } } } });
 const response = await handler(withMember(new Request("http://tool.test/chest/tasks"), camille));
-assert.equal(await chest.emit({ type: "member.erased", data: { id: camille.id, erasure: "era_k2qhx4mzc7v3b6nfp5r2t7w4ya", deadline: "2026-10-28T10:00:00Z" } }, request => handler(request)), 204);
+assert.equal(await chest.deliver({ type: "member.erased", data: { id: camille.id, erasure: "era_k2qhx4mzc7v3b6nfp5r2t7w4ya", deadline: "2026-10-28T10:00:00Z" } }, request => handler(request)), 204);
+assert.equal(await chest.deliver({ type: "quote.accepted", source: "quotes", subject: "q-1", audience: [camille.id], data: { quote: "q-1", total: 1250 } }, request => handler(request)), 204);
+assert.deepEqual(chest.emitted.map(e => [e.type, e.cause]), [["task.done", undefined]]);
 assert.deepEqual(chest.acknowledged, ["era_k2qhx4mzc7v3b6nfp5r2t7w4ya"]);
 assert.deepEqual((await members.list()).members.map(m => m.id), [camille.id]);
 assert.ok(chest.files.has("reports/2026.pdf"));
@@ -1005,9 +1126,10 @@ await chest.close();
 |---|---|
 | `signAssertion(member, {token?, tool?, now?})` | A `Chest-Member` header value signed like the Chest's for that `Member` (the token and tool of the environment by default), signed as given, so a language or a zone the Chest never sends makes `member()` refuse it |
 | `withMember(request, member, options?)` | The request carrying that assertion (the options of `signAssertion`): a new Web `Request`, or the same Node request |
-| `fakeChest({members?, former?, groups?, capabilities?, roles?, receives?, files?, ai?, chest?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set), the Chest's `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_CURRENCY`, `CHEST_TEAM_URL`, `CHEST_PUBLIC_URL` (`chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`: `"Test organization"`, `"UTC"`, `"en"`, `"EUR"`, `https://<tool>-chest.chest.test`, `https://<tool>.chest.test` by default; `publicUrl: null` for a tool without a public part) and answers members, groups, files, badges, notifications, AI and erasure acknowledgments with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `members.groups` shows the groups given `grants: false` — groups that do not give the tool —, in `groups.list()` (paged, each with its `size` among those who have the tool) and in each member's `groups`; a member whose `groups` is `null` is signed with the groups overage; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments). `former: [{id, name?, status?}]` are those the tool had who no longer have it: `lookup` answers them `no_access`, `former` (by default) or `erased`. With `sealed`, it seals and opens values with a Chest's format and rules — the roles a value is sealed for among `roles` (any of the grammar without), its context, the member's role, a member it keeps — under a key of its own, and `withMember` carries the member's ticket while it runs |
+| `fakeChest({members?, former?, groups?, capabilities?, roles?, receives?, emits?, files?, ai?, chest?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set), the Chest's `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_CURRENCY`, `CHEST_TEAM_URL`, `CHEST_PUBLIC_URL` (`chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`: `"Test organization"`, `"UTC"`, `"en"`, `"EUR"`, `https://<tool>-chest.chest.test`, `https://<tool>.chest.test` by default; `publicUrl: null` for a tool without a public part) and answers members, groups, files, badges, notifications, AI, erasure acknowledgments and emits with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `members.groups` shows the groups given `grants: false` — groups that do not give the tool —, in `groups.list()` (paged, each with its `size` among those who have the tool) and in each member's `groups`; a member whose `groups` is `null` is signed with the groups overage; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments; `emits` is what the tool's `chest.json` declares, `{type: {description, data: {field: kind}}}`, refused as the Chest refuses the manifest — none by default, which answers an emit `CapabilityNotGranted`). `former: [{id, name?, status?}]` are those the tool had who no longer have it: `lookup` answers them `no_access`, `former` (by default) or `erased`. With `sealed`, it seals and opens values with a Chest's format and rules — the roles a value is sealed for among `roles` (any of the grammar without), its context, the member's role, a member it keeps — under a key of its own, and `withMember` carries the member's ticket while it runs |
 | Links and uploads | The fake serves the team host's part of the files on its own origin (`chest.api`): a link from `files.url` opens the content it was signed for (the image itself for a thumbnail — a fake does not reduce it; `no_thumbnail` for a file that is not a JPEG, PNG, GIF or WebP image), until it expires or the file changes; an address from `files.uploadUrl` takes one `PUT`, within its life, of the types and size it names and whose first bytes are those of its type (403 `invalid_token`, 415 `type_refused`, 400 `type_mismatch`, 413 `too_large`, as the Chest's), named by the Chest in a folder (20 hex characters and the type's ending), and answers `201 {name, type, size}`. A visitor's upload (`public: true`, 409 `no_public_part` with `chest.publicUrl: null`) is a path the test sends to the fake's origin (`fetch(new URL(up.url, chest.api), …)`), of the type its content is among those granted (415 `type_refused` otherwise; an office document told by the names of its parts). It checks no session and paces no visitor: a test's `fetch` is the browser |
-| `chest.emit(event, to)` | Delivers an event (`{type, data, id?, occurredAt?}`: a new id and now by default; name an id to deliver the same event twice) signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-events`) or a function of a Web `Request` — and says the status it answered. A `member.erased` makes its erasure one the tool may acknowledge |
+| `chest.deliver(event, to)` | Delivers an event signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-events`) or a function of a Web `Request` — and says the status it answered. A member event is `{type, data, id?, occurredAt?}`; a tool event, told apart by its `source` (the publisher's name), `{type, source, data, audience?, subject?, id?, occurredAt?}` (`audience` `"all"` by default, or the members of this tool who may see it). A new id and now by default: name an id to deliver the same event twice. The envelope is signed as given, so one the Chest never sends makes `handle` refuse it. A `member.erased` makes its erasure one the tool may acknowledge |
+| `chest.emitted` | The events the tool emitted, `{id, type, data, subject?, key?, occurredAt, audience?, cause?}` in order, each checked as the Chest checks it: a type of `emits` (`invalid_type`), its declared fields of their kinds, members the tool has or had (`invalid_data`, 16 KiB at most: `too_large`), an audience of its members, former members, groups and any role (`invalid_audience`), `subject`, `key`, `occurredAt`, `cause` (`invalid_event`); a key used again answers its first event for the same content (kept once), `key_reused` for other content. `cause` is the event whose handler emitted it. Each answers `receivers: 0` |
 | `ai: {models?, reply?, cap?, unavailable?}` | The fake Chest's AI, deterministic and without any provider. `models`: the aliases the tool declared, `{alias, model, provider?, input?, output?}` (all four by default, `fake-default`…`fake-embedding`, provider `openrouter`, 1 and 2 USD per million tokens); another alias answers `model_not_allowed`. `reply(request)`: what a chat answers, given the wire request — a string, or `{text?, toolCalls?: {name, arguments, id?}[]}` (by default the last user message, echoed); streamed, it comes word by word, each tool call's arguments in two pieces, then the finish reason and the usage. Embeddings are unit vectors from a hash of each text (8 dimensions unless `dimensions`). Tokens count one per 4 characters; once the spending reaches `cap` (euros, 5 by default; 0 refuses at once) a call answers `cap_reached`. `unavailable` (`no_connector`, `provider_key_invalid`, `provider_unavailable`) makes chat and embeddings answer it. 60 requests a minute |
 | `chest.run(name, to, {id?, scheduledAt?, attempt?})` | Delivers a run of the schedule `name` (a new id, now and attempt 1 by default; name an id to deliver the same run twice) signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-schedules`) or a function of a Web `Request` — and says the status it answered |
 | `chest.ai` | The tool's calls to AI, `{path, body}` in order (`body` null for a `GET`) |
@@ -1059,7 +1181,7 @@ the words around them are written here. `check/` is the workspace of
 `client/src` holds the modules, `client/index.ts` the package root,
 `client/test` the tests. `npm run build` compiles `client/index.ts`, the
 nine published modules (`errors`, `member`, `members`, `database`, `files`,
-`notifications`, `events`, `ai`, `testing`) and the one they share (`api`, the Chest's API) —
+`notifications`, `events`, `ai`, `testing`) and those they share (`api`, the Chest's API; `signed`, its signed deliveries; `eventrules`, the rules of events between tools) —
 TypeScript strict, ES2022, NodeNext — into `dist/`: ESM `.js`, `.d.ts` and
 their maps. `member.ts` imports nothing but `node:*`, so that a tool may copy
 it alone.

@@ -3,10 +3,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import type { Alias, Provider } from "./ai.js";
 import type { AiUnavailableReason } from "./errors.js";
-import type { ChestEvent } from "./events.js";
+import { clockSkew, eventWindow, fieldNamePattern, fieldOf, instantOf, isAudience, isDeclaredData, isToolEventType, itemIdPattern, maxData, rolePattern } from "./eventrules.js";
+import type { ChestEvent, EmitAudience, ToolEvent } from "./events.js";
 import { groupIdPattern, languagePattern, memberIdPattern, type Member } from "./member.js";
 import { forget } from "./members.js";
-import { eventChannel, scheduleChannel, sign, signClaims, type Channel } from "./signed.js";
+import { eventChannel, json, object, scheduleChannel, sign, signClaims, type Channel } from "./signed.js";
 
 // For a tool's own tests, never imported by its production code: a member's
 // assertion signed as the Chest signs it, and a Chest's API in the test's
@@ -17,15 +18,19 @@ import { eventChannel, scheduleChannel, sign, signClaims, type Channel } from ".
 // for the members and roles it keeps; withMember carries the member's
 // ticket), badges, notifications and broadcasts, AI (chat,
 // streamed or not, embeddings, models, usage: deterministic answers, no
-// provider) and the acknowledgment of an erasure with the Chest's bounds,
-// quotas and errors; and that delivers an event or a run of a schedule to
-// the tool, signed as the Chest signs them.
+// provider), the acknowledgment of an erasure and the events the tool emits
+// (checked against the "emits" of its chest.json, as the Chest checks them,
+// and kept in order) with the Chest's bounds, quotas and errors; and that
+// delivers an event — of the members' lifecycle, or of another tool — or a
+// run of a schedule to the tool, signed as the Chest signs them.
 //
 //   import { fakeChest, withMember } from "@argentic/chest-sdk/testing";
-//   const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications"] });
+//   const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications"], emits: { "task.done": { description: "A task is done", data: { task: "id" } } } });
 //   const response = await app(withMember(new Request("http://tool/chest"), camille));
 //   assert.equal(chest.notifications[0]?.member, camille.id);
-//   assert.equal(await chest.emit({ type: "access.revoked", data: { id: camille.id } }, request => app(request)), 204);
+//   assert.equal(await chest.deliver({ type: "access.revoked", data: { id: camille.id } }, request => app(request)), 204);
+//   assert.equal(await chest.deliver({ type: "quote.accepted", source: "quotes", data: { quote: "q-1" } }, request => app(request)), 204);
+//   assert.equal(chest.emitted[0]?.type, "task.done");
 //   assert.equal(await chest.run("morning", request => app(request)), 204);
 //   await chest.close();
 
@@ -79,7 +84,8 @@ export type FakeOpen = { member: string; opened: number; refused: number };
 // addresses, members.groups to see every group, sealed to seal and open
 // values), the roles the tool declares (any role of the grammar a value is
 // sealed for, when not said), the events it receives (["member.*"] by default, [] to answer
-// an acknowledgment 403), the files it keeps, its AI, and what the Chest is
+// an acknowledgment 403), the events the tool emits (chest.json "emits":
+// none by default, which answers an emit 403), the files it keeps, its AI, and what the Chest is
 // (the chest module: "Test organization", UTC, English and euros by default;
 // the tool at https://<tool>-chest.chest.test, its public part at
 // https://<tool>.chest.test).
@@ -90,15 +96,34 @@ export type FakeChestOptions = {
   capabilities?: string[];
   roles?: string[];
   receives?: string[];
+  emits?: Record<string, FakeEmits>;
   files?: Record<string, { data: Uint8Array | string; type?: string }>;
   ai?: FakeAi;
   chest?: { organization?: string; timeZone?: string; language?: string; currency?: string; teamUrl?: string; publicUrl?: string | null };
 };
 
-// An event for emit: its type and data; its id (a new evt_… by default) and
+// A type a tool emits, as its chest.json declares it in "emits": what
+// happened, in a sentence of 1 to 80 characters, and each field of its data
+// with its kind (id, text, number, boolean, time, date, member, members; a
+// trailing ? for an optional one).
+export type FakeEmits = { description: string; data: Record<string, string> };
+
+// An event for deliver: of the members' lifecycle, its type and data; or of
+// another tool, told apart by its source (the publisher's name), its type,
+// data, subject (none by default) and audience ("all" by default, or the
+// members of this tool who may see it). Its id (a new evt_… by default) and
 // when it happened (now by default) may be named, to deliver the same event
-// twice.
-export type FakeEvent = { [K in ChestEvent["type"]]: { type: K; data: Extract<ChestEvent, { type: K }>["data"]; id?: string; occurredAt?: string } }[ChestEvent["type"]];
+// twice. It is signed as given: an envelope the Chest would never send
+// makes handle() refuse it.
+export type FakeEvent =
+  | { [K in ChestEvent["type"]]: { type: K; data: Extract<ChestEvent, { type: K }>["data"]; id?: string; occurredAt?: string } }[ChestEvent["type"]]
+  | { type: string; source: string; data: Record<string, unknown>; audience?: ToolEvent["audience"]; subject?: string; id?: string; occurredAt?: string };
+
+// An event the tool emitted, as the fake Chest took it: its id, type and
+// data, its subject and key when given, when it happened (the tool's time,
+// or the Chest's), its audience when given, and the event whose handler
+// emitted it (cause).
+export type FakeEmitted = { id: string; type: string; data: Record<string, unknown>; subject?: string; key?: string; occurredAt: string; audience?: EmitAudience; cause?: string };
 
 // A run for run: its id (a new run_… by default: name it to deliver the same
 // run twice), the time it stands for (now by default) and its attempt (1 by
@@ -111,7 +136,7 @@ export type FakeRun = { id?: string; scheduledAt?: string; attempt?: number };
 // changes or reads; the notifications the tool sent, in the order sent, a
 // replaced one last; each member's badge; the erasures the tool
 // acknowledged; its calls to AI, in order; its opens of sealed values, in
-// order), emit, which delivers an event to the tool — POST
+// order; the events it emitted, in order), deliver, which delivers an event to the tool — POST
 // /chest-events of its address, or a handler of Web Requests — and says the
 // status it answered, run, which delivers a run of a schedule the same way
 // on /chest-schedules, and close, which stops it and restores the
@@ -129,7 +154,8 @@ export type FakeChest = {
   acknowledged: string[];
   ai: FakeAiCall[];
   opens: FakeOpen[];
-  emit(event: FakeEvent, to: string | ((request: Request) => Response | Promise<Response>)): Promise<number>;
+  emitted: FakeEmitted[];
+  deliver(event: FakeEvent, to: string | ((request: Request) => Response | Promise<Response>)): Promise<number>;
   run(name: string, to: string | ((request: Request) => Response | Promise<Response>), run?: FakeRun): Promise<number>;
   close(): Promise<void>;
 };
@@ -237,7 +263,7 @@ const newToken = (): string => randomBytes(18).toString("base64url") + "." + ran
 const maxTitle = 80, maxText = 280, maxPath = 512, maxCount = 9999, maxRoles = 16;
 const textBytes = 64 << 10, memberBytes = 64;
 const paceBurst = 10, paceEvery = 6 * 60_000;
-const keyPattern = /^[a-z0-9._:-]{1,64}$/u, rolePattern = /^[a-z][a-z0-9-]{0,47}$/u;
+const keyPattern = /^[a-z0-9._:-]{1,64}$/u;
 const reordering = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 const cleanTitle = (s: string): string => s.replace(/[\t\r\n]/gu, " ").replace(/\p{Cc}/gu, "").replace(reordering, "").trim();
 const cleanText = (s: string): string => s.replace(/\r\n?/gu, "\n").replace(/\t/gu, " ").replace(/[^\P{Cc}\n]/gu, "").replace(reordering, "").trim();
@@ -263,6 +289,15 @@ function vectorOf(text: string, dimensions: number): number[] {
 // in seconds (chest/toolseal).
 const sealedBody = 4 << 20, sealedValue = 512 << 10, sealedContext = 256, ticketLife = 60;
 const sealedText = /^chest:sealed:1:((?:[a-z][a-z0-9-]{0,47}(?:,[a-z][a-z0-9-]{0,47}){0,15})?):([A-Za-z0-9_-]+)$/u;
+// Its events: the keys of an emit, and its envelope beyond the data and
+// the identifiers of its audience.
+const emitKeys = ["type", "data", "subject", "key", "occurredAt", "audience", "cause"], envelopeBytes = 4096, idBytes = 64;
+// canonical is a value's JSON with the keys of each object in order: the
+// content an idempotency key stands for, whatever order the tool wrote.
+const canonical = (value: unknown): string => Array.isArray(value) ? `[${value.map(canonical).join(",")}]`
+  : value !== null && typeof value === "object" ? `{${Object.keys(value).sort().map(k => JSON.stringify(k) + ":" + canonical((value as Record<string, unknown>)[k])).join(",")}}`
+  : JSON.stringify(value) ?? "null";
+const newId = (prefix: string): string => prefix + Array.from(randomBytes(26), b => "abcdefghijklmnopqrstuvwxyz234567"[b & 31]).join("");
 
 const fold = (s: string): string => s.normalize("NFD").replace(/\p{Mn}/gu, "").toLowerCase();
 
@@ -297,9 +332,18 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     files.set(name, { data: typeof file.data === "string" ? new TextEncoder().encode(file.data) : file.data, type: file.type ?? "application/octet-stream", updated: new Date().toISOString() });
   }
   const receives = options.receives ?? ["member.*"];
-  // The erasures the tool was told of, by emit: those it may acknowledge.
+  // What the tool's chest.json declares it emits, refused as the Chest
+  // refuses the manifest.
+  const emits = options.emits ?? {};
+  for (const [type, declared] of Object.entries(emits)) {
+    const length = typeof declared?.description === "string" ? [...declared.description].length : 0;
+    if (!isToolEventType(type) || length < 1 || length > 80 || !object(declared.data) || !Object.entries(declared.data).every(([name, kind]) => fieldNamePattern.test(name) && fieldOf(kind) !== null)) {
+      throw new Error(`fakeChest: the Chest refuses "emits" ${JSON.stringify(type)}: a type of two to four dotted words, a description of 1 to 80 characters, camelCase fields of the kinds id, text, number, boolean, time, date, member, members (? when optional)`);
+    }
+  }
+  // The erasures the tool was told of, by deliver: those it may acknowledge.
   const erasures = new Set<string>();
-  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], ai: [], opens: [], emit: async () => 0, run: async () => 0, close: async () => {} };
+  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], ai: [], opens: [], emitted: [], deliver: async () => 0, run: async () => 0, close: async () => {} };
   const former = [...(options.former ?? [])];
   let window = 0, calls = 0;
   // The groups the tool sees: those that give it, or all with members.groups;
@@ -758,7 +802,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     send(response, 200, { values });
   }
 
-  // The acknowledgment of an erasure the tool was told of (emit).
+  // The acknowledgment of an erasure the tool was told of (deliver).
   async function erasuresRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     if (!receives.includes("member.*")) return send(response, 403, { error: "capability_not_granted" });
     const done = /^\/erasures\/([^/]+)\/done$/u.exec(url.pathname);
@@ -770,10 +814,45 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     send(response, 204);
   }
 
+  // The events the tool emits (POST /events), checked against its "emits"
+  // as the Chest checks them: a member it never had, a group it does not
+  // know, are refused; an idempotency key used within 72 hours answers its
+  // first event for the same content, key_reused for other content.
+  const used = new Map<string, { id: string; content: string; at: number }>();
+  const had = (id: string): boolean => access(id) || former.some(f => f.id === id);
+  async function eventsRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    if (request.method !== "POST" || url.pathname !== "/events" || url.search) return send(response, 404, { error: "not_found" });
+    if (Object.keys(emits).length === 0) return send(response, 403, { error: "capability_not_granted" });
+    // The data, the envelope, and an audience of as many identifiers as the Chest holds.
+    const raw = await body(request, maxData + envelopeBytes + idBytes * (chest.members.length + former.length + chest.groups.length + maxRoles));
+    if (raw === null) return send(response, 413, { error: "too_large" });
+    const command = object(json(raw.toString("utf8")));
+    if (!command || !Object.keys(command).every(k => emitKeys.includes(k))) return send(response, 400, { error: "invalid_event" });
+    const { type, data, subject, key, occurredAt, audience, cause } = command;
+    if (!isToolEventType(type) || !Object.hasOwn(emits, type)) return send(response, 400, { error: "invalid_type" });
+    const now = Date.now(), time = occurredAt === undefined ? now : instantOf(occurredAt);
+    const identifier = (value: unknown, pattern: RegExp): boolean => value === undefined || (typeof value === "string" && pattern.test(value));
+    if (!identifier(subject, itemIdPattern) || !identifier(key, itemIdPattern) || !identifier(cause, eventChannel.id) || time === null || time > now + clockSkew || time < now - eventWindow) return send(response, 400, { error: "invalid_event" });
+    if (Buffer.byteLength(JSON.stringify(data) ?? "") > maxData) return send(response, 413, { error: "too_large" });
+    if (!isDeclaredData(data, emits[type]!.data, had)) return send(response, 400, { error: "invalid_data" });
+    if (audience !== undefined && (!isAudience(audience) || !(audience.members ?? []).every(had) || !(audience.groups ?? []).every(g => chest.groups.some(x => x.id === g)))) return send(response, 400, { error: "invalid_audience" });
+    const content = canonical({ type, data, subject, occurredAt, audience });
+    const first = key === undefined ? undefined : used.get(key as string);
+    if (first && now - first.at < eventWindow) return first.content === content ? send(response, 200, { id: first.id, receivers: 0 }) : send(response, 409, { error: "key_reused" });
+    const id = newId("evt_");
+    if (key !== undefined) used.set(key as string, { id, content, at: now });
+    chest.emitted.push({
+      id, type, data: data as Record<string, unknown>, ...(subject === undefined ? {} : { subject: subject as string }), ...(key === undefined ? {} : { key: key as string }),
+      occurredAt: (occurredAt as string | undefined) ?? new Date(now).toISOString(), ...(audience === undefined ? {} : { audience }), ...(cause === undefined ? {} : { cause: cause as string }),
+    });
+    send(response, 202, { id, receivers: 0 });
+  }
+
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     const route = url.pathname.startsWith("/_chest/files/") ? front
       : url.pathname.startsWith("/erasures/") ? erasuresRoute
+      : url.pathname === "/events" ? eventsRoute
       : url.pathname.startsWith("/ai/") ? aiRoute
       : url.pathname.startsWith("/sealed/") ? sealedRoute
       : url.pathname === "/members" || url.pathname.startsWith("/members/") || url.pathname === "/groups" ? members
@@ -801,12 +880,14 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     await answer.body?.cancel();
     return answer.status;
   };
-  const newId = (prefix: string): string => prefix + Array.from(randomBytes(26), b => "abcdefghijklmnopqrstuvwxyz234567"[b & 31]).join("");
-  chest.emit = async (event, to) => {
-    const id = event.id ?? newId("evt_");
-    const body = JSON.stringify({ id, type: event.type, occurredAt: event.occurredAt ?? new Date().toISOString(), data: event.data });
+  chest.deliver = async (event, to) => {
+    const id = event.id ?? newId("evt_"), occurredAt = event.occurredAt ?? new Date().toISOString();
+    if ("source" in event) {
+      const body = JSON.stringify({ id, type: event.type, source: event.source, occurredAt, ...(event.subject === undefined ? {} : { subject: event.subject }), audience: event.audience ?? "all", data: event.data });
+      return post("/chest-events", eventChannel, id, body, to);
+    }
     if (event.type === "member.erased") erasures.add(event.data.erasure);
-    return post("/chest-events", eventChannel, id, body, to);
+    return post("/chest-events", eventChannel, id, JSON.stringify({ id, type: event.type, occurredAt, data: event.data }), to);
   };
   chest.run = async (name, to, run = {}) => {
     const id = run.id ?? newId("run_");

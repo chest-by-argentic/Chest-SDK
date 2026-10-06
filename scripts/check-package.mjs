@@ -27,7 +27,7 @@ const expected = {
   files: ["delete", "get", "list", "move", "put", "stat", "uploadUrl", "url"],
   members: ["forget", "get", "groups", "list", "lookup"],
   notifications: ["badge", "broadcast", "notify", "withdraw"],
-  events: ["acknowledgeErasure", "erasureIdPattern", "handle", "memorySeen", "verify"],
+  events: ["acknowledgeErasure", "emit", "erasureIdPattern", "handle", "memorySeen", "verify"],
   schedules: ["handle", "verify"],
   ai: ["chat", "embed", "models", "usage"],
   testing: ["fakeChest", "signAssertion", "withMember"],
@@ -106,7 +106,7 @@ try {
     `let streamed = "";`,
     `for await (const piece of modules[${JSON.stringify(name + "/ai")}].chat({ model: "fast", messages: [{ role: "user", content: "Hi there" }], stream: true })) streamed += piece.text;`,
     `const calls = chest.ai.map(c => c.path);`,
-    `const answered = await chest.emit({ type: "access.revoked", data: { id: chest.members[0].id } }, request => root.events.handle(request, { "access.revoked": e => { told.push(e.data.id); } }).then(status => new Response(null, { status })));`,
+    `const answered = await chest.deliver({ type: "access.revoked", data: { id: chest.members[0].id } }, request => root.events.handle(request, { "access.revoked": e => { told.push(e.data.id); } }).then(status => new Response(null, { status })));`,
     `await chest.close();`,
     `console.log(JSON.stringify({ names, sameClass: root.ChestError === errors.ChestError, sameFiles: root.files.put === modules[${JSON.stringify(name + "/files")}].put, sameMembers: root.members.list === modules[${JSON.stringify(name + "/members")}].list, sameAi: root.ai.chat === modules[${JSON.stringify(name + "/ai")}].chat, refused, nobody, listed, delivered, kept, signed, said, streamed, calls, answered, told }));`,
   ].join("\n") + "\n";
@@ -124,7 +124,7 @@ try {
     assert.equal(result.sameAi, true, `${how}: one ai module for the root and /ai`);
     assert.deepEqual([result.said, result.streamed, result.calls], ["Hi", "Hi there", ["/ai/chat", "/ai/chat"]], `${how}: a chat answered by a fake Chest, whole and streamed`);
     assert.equal(result.signed, "mbr_" + "a".repeat(26), `${how}: an assertion of the testing module reads as its member`);
-    assert.deepEqual([result.answered, result.told], [204, ["mbr_" + "a".repeat(26)]], `${how}: an event emitted by a fake Chest handled once`);
+    assert.deepEqual([result.answered, result.told], [204, ["mbr_" + "a".repeat(26)]], `${how}: an event delivered by a fake Chest handled once`);
     for (const specifier of specifiers) console.log(`  ${specifier}: ${result.names[specifier].join(", ")}`);
   }
 
@@ -176,10 +176,10 @@ import { groups, type GroupPage, type Lookup, type MemberPage } from "${name}/me
 import * as notifications from "${name}/notifications";
 import type { Audience, BadgeCount, BadgeWrite, Delivery, Notice } from "${name}/notifications";
 import * as events from "${name}/events";
-import type { ChestEvent, Handlers, MemberErased, Seen } from "${name}/events";
+import type { EmitOptions, Emitted, Handlers, MemberErased, ReceivedEvent, Seen, ToolEvent } from "${name}/events";
 import * as ai from "${name}/ai";
 import type { AiModel, AiUsage, ChatChunk, ChatMessage, ChatResult, ChatTool, Embeddings } from "${name}/ai";
-import { fakeChest, signAssertion, withMember, type FakeAi, type FakeAiCall, type FakeChest, type FakeEvent, type FakeNotification } from "${name}/testing";
+import { fakeChest, signAssertion, withMember, type FakeAi, type FakeAiCall, type FakeChest, type FakeEmitted, type FakeEvent, type FakeNotification } from "${name}/testing";
 
 export function who(request: Request | IncomingMessage): Member | null { return member(request); }
 export function where(): [Chest, string, string, string | null] { return [theChest, theChest.currency, new URL("/chest", theChest.tool.teamUrl).href, theChest.tool.publicUrl]; }
@@ -194,9 +194,13 @@ export async function team(): Promise<[MemberPage, Member | null, Lookup, GroupP
 export async function tell(ids: string[], notice: Notice, counts: BadgeCount[], audience: Audience): Promise<[Delivery, void, void, boolean, BadgeWrite]> {
   return [await notifications.notify(ids, notice), await notifications.broadcast(notice, audience), await sdk.notifications.withdraw("task:1", ids), await notifications.badge.set("mbr_x", 1), await notifications.badge.setMany(counts)];
 }
-export async function receive(request: Request, seen: Seen): Promise<[number, ChestEvent | null]> {
-  const handlers: Handlers = { "member.erased": async (e: MemberErased) => { await events.acknowledgeErasure(e.data.erasure); }, "member.updated": e => { void e.data.changed; } };
-  return [await events.handle(request, handlers, { seen }), await sdk.events.verify(request)];
+export async function receive(request: Request, seen: Seen): Promise<[number, number, ReceivedEvent | null]> {
+  const handlers: Handlers<"member.erased" | "member.updated" | "quote.accepted"> = { "member.erased": async (e: MemberErased) => { await events.acknowledgeErasure(e.data.erasure); }, "member.updated": e => { void e.data.changed; }, "quote.accepted": (e: ToolEvent) => { void e.audience; } };
+  const told = await events.handle(request, { "quote.accepted": async e => { await events.emit("project.created", { project: String(e.data["quote"]) }, { subject: e.subject ?? "p", audience: { members: e.audience === "all" ? [] : e.audience } }); } });
+  return [await events.handle(request, handlers, { seen }), told, await sdk.events.verify(request)];
+}
+export async function tellTools(options: EmitOptions): Promise<Emitted> {
+  return sdk.events.emit("quote.accepted", { quote: "q-1", total: 12.5 }, { ...options, occurredAt: new Date() });
 }
 export async function think(messages: ChatMessage[], tools: ChatTool[], signal: AbortSignal): Promise<[ChatResult, string, Embeddings, AiModel[], AiUsage]> {
   const result: ChatResult = await ai.chat({ model: "default", messages, tools, toolChoice: "auto", responseFormat: { type: "json_object" }, maxTokens: 800, signal });
@@ -216,15 +220,17 @@ export async function testAi(): Promise<FakeAiCall[]> {
   return chest.ai;
 }
 export async function test(someone: Member): Promise<string> {
-  const chest: FakeChest = await fakeChest({ members: [someone], capabilities: ["members", "notifications"] });
+  const chest: FakeChest = await fakeChest({ members: [someone], capabilities: ["members", "notifications"], emits: { "quote.accepted": { description: "A quote is accepted", data: { quote: "id", note: "text?" } } } });
   const sent: FakeNotification[] = chest.notifications;
   const badges: Map<string, number> = chest.badges;
   const request: Request = withMember(new Request("http://tool.test/chest"), someone);
   const event: FakeEvent = { type: "member.erased", data: { id: someone.id, erasure: "era_" + "a".repeat(26), deadline: new Date().toISOString() } };
-  await chest.emit(event, "http://127.0.0.1:1");
+  await chest.deliver(event, "http://127.0.0.1:1");
+  await chest.deliver({ type: "quote.accepted", source: "quotes", audience: [someone.id], subject: "q-1", data: { quote: "q-1" } }, "http://127.0.0.1:1");
+  const emitted: FakeEmitted[] = chest.emitted;
   const acknowledged: string[] = chest.acknowledged;
   await chest.close();
-  return signAssertion(someone, { token: chest.token, tool: chest.tool }) + request.url + sent.length + badges.size + acknowledged.length;
+  return signAssertion(someone, { token: chest.token, tool: chest.tool }) + request.url + sent.length + badges.size + acknowledged.length + emitted.length;
 }
 export function code(error: unknown): string | null {
   if (error instanceof CapabilityNotGranted || error instanceof QuotaExceeded || error instanceof RateLimited || error instanceof TooLarge || error instanceof Unavailable) return error.code;

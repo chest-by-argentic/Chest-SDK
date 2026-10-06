@@ -1,8 +1,8 @@
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 
-// What the Chest signs for a server tool — the events of its members
-// (events), the runs of its schedules (schedules), posted through its
+// What the Chest signs for a server tool — the events of its members and
+// of other tools (events), the runs of its schedules (schedules), posted through its
 // launcher only (never from the Internet), each on a route of its own —: one
 // mechanism, shared by the modules that read it and by testing, which signs
 // as the Chest. Not a published module. member.ts reads the Chest-Member
@@ -22,8 +22,12 @@ import type { IncomingMessage } from "node:http";
 // the grammar of its identifiers and the largest body it carries.
 export type Channel = { header: string; label: string; id: RegExp; maxBody: number };
 
-// The events of the members (events): POST /chest-events.
-export const eventChannel: Channel = { header: "Chest-Event", label: "Chest-Event v1", id: /^evt_[a-z2-7]{26}$/u, maxBody: 64 << 10 };
+// The events of the members and of other tools (events): POST /chest-events.
+// A tool event names the members who may see it, up to a whole team: its
+// body is bounded by the team's capacity — a full team's policy, 32 MiB —
+// and its 64 KiB of envelope and data. Only the Chest makes a tool read that
+// much: delivery reads no body before its signature holds.
+export const eventChannel: Channel = { header: "Chest-Event", label: "Chest-Event v1", id: /^evt_[a-z2-7]{26}$/u, maxBody: (32 << 20) + (64 << 10) };
 // The runs of the schedules (schedules): POST /chest-schedules.
 export const scheduleChannel: Channel = { header: "Chest-Schedule", label: "Chest-Schedule v1", id: /^run_[a-z2-7]{26}$/u, maxBody: 1024 };
 
