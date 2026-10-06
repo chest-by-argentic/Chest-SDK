@@ -213,5 +213,5 @@ export async function uploadUrl(name: string, options: { maxSize?: number; types
 function uploadToken(url: unknown): string | undefined {
   if (typeof url !== "string" || !url.startsWith(uploadPath)) return undefined;
   const token = url.slice(uploadPath.length);
-  return /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(token) ? token : undefined;
+  return token.length <= 2048 && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(token) ? token : undefined;
 }

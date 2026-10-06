@@ -189,7 +189,7 @@ test("uploadUrl authorises a visitor's upload into a folder, of the types it nam
   }
   refuse = null;
   // A visitor's upload is a path of the Chest's, nothing else; a member's never one.
-  for (const url of [upload, "/_chest/files/upload/a", "/_chest/files/a.b", "//evil.example/_chest/files/upload/a.b", "/_chest/files/upload/a.b?x=1"]) {
+  for (const url of [upload, "/_chest/files/upload/a", "/_chest/files/a.b", "//evil.example/_chest/files/upload/a.b", "/_chest/files/upload/a.b?x=1", "/_chest/files/upload/" + "a".repeat(2047) + ".b"]) {
     forged = { value: { url, method: "PUT", expires_in: 900 } };
     await assert.rejects(files.uploadUrl("applications/", { public: true, types: ["application/pdf"] }), Unavailable, url);
   }
