@@ -1,7 +1,7 @@
 {
   "name": "@argentic/chest-sdk",
   "version": "0.5.0",
-  "description": "The client a Chest server tool embeds: the member the Chest asserts on a request, the Chest itself (its organization, time zone, language and currency, and where the tool is reached), who else has the tool, the tool's own database, its private files, badges and notifications inside the Chest, the events of its members' lifecycle, the runs of its schedules, AI models through the Chest, a fake Chest for its tests — and the tool contract, published in its repository (chest check is @argentic/chest-check).",
+  "description": "The client a Chest server tool embeds: the member the Chest asserts on a request, the Chest itself (its organization, time zone, language and currency, and where the tool is reached), who else has the tool, the tool's own database, its private files, badges and notifications inside the Chest, the events of its members' lifecycle, the runs of its schedules, AI models through the Chest, live updates of its members' pages (and their browser client), a fake Chest for its tests — and the tool contract, published in its repository (chest check is @argentic/chest-check).",
   "keywords": [
     "chest",
     "argentic",
@@ -15,7 +15,8 @@
     "events",
     "schedules",
     "ai",
-    "llm"
+    "llm",
+    "realtime"
   ],
   "homepage": "https://github.com/chest-by-argentic/Chest-SDK#readme",
   "bugs": {
@@ -80,6 +81,14 @@
       "types": "./dist/src/ai.d.ts",
       "default": "./dist/src/ai.js"
     },
+    "./realtime": {
+      "types": "./dist/src/realtime.d.ts",
+      "default": "./dist/src/realtime.js"
+    },
+    "./realtime/client": {
+      "types": "./dist/src/realtime-client.d.ts",
+      "default": "./dist/src/realtime-client.js"
+    },
     "./testing": {
       "types": "./dist/src/testing.d.ts",
       "default": "./dist/src/testing.js"
@@ -101,7 +110,10 @@
     "client/src/events.ts",
     "client/src/schedules.ts",
     "client/src/ai.ts",
-    "client/src/testing.ts"
+    "client/src/realtime.ts",
+    "client/src/realtime-client.ts",
+    "client/src/testing.ts",
+    "client/src/testing-realtime.ts"
   ],
   "publishConfig": {
     "access": "public",

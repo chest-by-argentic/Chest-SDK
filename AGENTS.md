@@ -23,8 +23,9 @@ server-side:
 | Do work by itself at set times (digests, reminders, purges) | `handle`, `verify` from `@argentic/chest-sdk/schedules` | `"schedules": [{"name", "cron"}]` in `chest.json` |
 | Tell members what needs their attention — some, or everyone who has the tool, or some groups or roles | `notify`, `broadcast`, `withdraw`, `badge.set`, `badge.setMany` from `@argentic/chest-sdk/notifications` | `"capabilities": ["notifications"]` |
 | Call AI models (chat, streamed or not, tools, embeddings) | `chat`, `embed`, `models`, `usage` from `@argentic/chest-sdk/ai` | `"capabilities": ["ai"]` and `"ai": {"monthly", "models", "purpose"}` |
+| Keep the members' pages live (chat, presence, typing, rows as they are written) | `connect` from `@argentic/chest-sdk/realtime/client` **in the browser**; `publish`, `send`, `online`, `presence` from `@argentic/chest-sdk/realtime` on the server | `"capabilities": ["realtime"]` and `"realtime": {"channels", "feeds"}` |
 | Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `Unavailable`, `AiCapReached`, `AiUnavailable`, `AiModelNotAllowed`, `AiRefused` from `@argentic/chest-sdk/errors` | — |
-| Tests without a Chest | `fakeChest` (its `emit`, `run`, its links and uploads, `chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
+| Tests without a Chest | `fakeChest` (its `emit`, `run`, its links and uploads, its `realtime`, `chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
 
 ## Install
 
@@ -236,6 +237,59 @@ const { embeddings } = await ai.embed({ model: "embedding", input: texts }); // 
   `unavailable: "no_connector"` every call `AiUnavailable`; `chest.ai` lists
   the calls.
 
+## Keep pages live
+
+The Chest holds every page's connection; the tool writes rows as always and
+sleeps meanwhile. Declare the channels and the tables whose writes are
+events; no socket code, no token, no polling.
+
+```jsonc
+// chest.json
+{
+  "capabilities": ["database", "realtime"],
+  "realtime": {
+    "channels": [
+      { "name": "everyone", "presence": true },
+      { "name": "room:{id}", "join": { "table": "room_members", "key": "room_id", "member": "member_id" }, "send": true, "presence": true },
+      { "name": "inbox:{member}" }
+    ],
+    "feeds": [{ "table": "messages", "channel": "room:{room_id}", "columns": ["id", "room_id", "author", "text", "created_at"] }]
+  }
+}
+```
+
+```ts
+// In the page's own script (the one SDK module made for the browser)
+import { connect } from "@argentic/chest-sdk/realtime/client";
+const room = connect().channel("room:42");
+room.on("joined", () => load());                       // fetch once joined: nothing missed after
+room.on("messages.insert", row => add(row));           // dedupe by id
+room.on("resync", () => load());
+room.on("typing", (_, from) => showTyping(from));
+room.send("typing");
+room.presence.track({ active: true });
+```
+
+```ts
+// On the server, for what is not a row
+import * as realtime from "@argentic/chest-sdk/realtime";
+const { online } = await realtime.online(memberIds);    // notify the others
+await realtime.publish("inbox:" + id, "rooms.changed", { room: 42 });
+```
+
+- Who joins is the manifest's rule, checked by the Chest without the tool:
+  every member, some roles, or a membership table — insert a row to let
+  someone in, delete it to take them out (at once).
+- A feed's columns are sent to everyone in the channel: never list a column
+  some of them may not read; put rows on channels whose members may see them.
+- Events are hints, at most once: the database is the truth. Fetch on
+  `joined` and `resync`; render text, never HTML.
+- Write through the tool's own HTTP routes (`POST /chest/api/…`), which
+  check `member()`; the socket only reads, but for ephemeral `send`.
+- Test with `fakeChest({ capabilities: [..., "realtime"], realtime: { channels, feeds, membership } })`:
+  `chest.realtime.commit("messages", "insert", row)`, `chest.realtime.published`,
+  and a page as `connect({ url: chest.realtime.url(memberId) })`.
+
 ## Let a member upload a file
 
 The browser sends the bytes to the Chest itself; the tool only authorises one
@@ -269,7 +323,11 @@ at install and at every update.
 ## Rules that keep a tool correct
 
 - **Server only.** Never import the SDK in a `"use client"` module or ship it
-  to a browser: it reads secrets from the environment.
+  to a browser: it reads secrets from the environment — but
+  `@argentic/chest-sdk/realtime/client`, made for the browser.
+- **No polling, no socket of your own.** A page that must stay up to date
+  uses realtime: polling keeps the tool awake as long as a tab is open, and
+  the container has no WebSocket server reachable.
 - **Speak the member's language.** In `/chest`, render in `member.language`
   (`"en"`, `"fr"`…; its own default for one it does not speak) and offer no
   language switch there; only public pages keep their own switch.
@@ -371,6 +429,8 @@ at install and at every update.
 | The Chest refuses the repository: `manifest` | A key the contract does not have (a typo, or a key of a later contract), a missing `"chest"`, or a value outside its rule: `npx chest check` says which. |
 | The Chest refuses the repository: `migrations` | A file of `migrations/` not named `NNNN_name.sql`, not SQL text, or migrations without the capability `database`. |
 | `ChestError` with `invalid_path` | `path` is not `/chest` or under it (a full URL, `//`, `..`, a space or non-ASCII character). |
+| `realtime/client` never connects | The page is not on the tool's team host (`/chest`), the version lacks `"realtime"` in its capabilities or was not approved, or the connection is from another site. |
+| `ChestError` `invalid_channel` from `realtime.publish` | No pattern of `"realtime": {"channels"}` matches the name (a typo, an uppercase letter, a segment of more than 64 characters). |
 | `events.handle` always answers 401 | The body was read before `handle` (a body parser), or the environment is not the Chest's (`CHEST_TOKEN`, `CHEST_TOOL`; in a test, deliver with `fakeChest().emit`). |
 | `schedules.handle` always answers 401 | The body was read before `handle`, or the environment is not the Chest's (in a test, deliver with `fakeChest().run`). |
 | A schedule never runs | The route is not `POST /chest-schedules` at the root, the version was not approved, or its handler is missing (the tool's page says “the tool has no handler for this schedule (404)”). |
