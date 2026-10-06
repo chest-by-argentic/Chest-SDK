@@ -336,7 +336,10 @@ To search tasks by assignee name: `members.list({ q })` first, then
 A tool that declares `"capabilities": ["notifications"]` (approved like a
 permission: “Shows counters and sends notifications, inside the Chest, to the
 members who have access to it.”) tells its members what needs their
-attention, inside the Chest only — no email, no push to a phone. Two
+attention, inside the Chest — no push to a phone. Members may also get mails
+of their notifications, by their own choice in their profile (each one,
+once or twice a day, or none): that is the Chest's, and the tool does
+nothing for it — no call, no permission, no member's address. Two
 primitives:
 
 - a **badge** is a count on the tool's tile in the Chest home and on its row
