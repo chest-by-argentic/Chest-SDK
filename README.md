@@ -920,7 +920,7 @@ import { connect } from "@argentic/chest-sdk/realtime/client";
 
 const live = connect();
 const room = live.channel("room:42");
-room.on("joined", () => refetchAfter(lastId));     // joined (again): fetch what the page shows
+room.on("joined", ({ replayed }) => replayed || refetchAfter(lastId));  // joined (again): fetch, unless replayed
 room.on("messages.insert", row => show(row));      // a row, as committed
 room.on("typing", (_, from) => showTyping(from));
 room.on("resync", () => refetchAfter(lastId));     // what was missed is not all kept
@@ -954,8 +954,10 @@ const { members } = await realtime.presence("everyone");
   something changed. A page that reconnects (a phone back from the
   background, a network that returns) is replayed what it missed within 2
   minutes, or told `resync`: fetch from the tool what came after the last id.
-- **Joined, then fetch.** Fetch a channel's data on `joined`: an event after
-  it is never missed. Deduplicate by id: the author's own row comes back too.
+- **Joined, then fetch.** Fetch a channel's data on `joined` — but when its
+  payload says `replayed` (a reconnect within 2 minutes: what was missed came
+  again, the tool may stay asleep): an event after it is never missed.
+  Deduplicate by id: the author's own row comes back too.
 - **Never trust content as HTML.** Render payloads and rows as text.
 - **Revocation is the Chest's.** A member whose access is taken back is
   closed `access_removed` at once; `closed` says it. `signed_out`: the

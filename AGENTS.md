@@ -262,7 +262,7 @@ events; no socket code, no token, no polling.
 // In the page's own script (the one SDK module made for the browser)
 import { connect } from "@argentic/chest-sdk/realtime/client";
 const room = connect().channel("room:42");
-room.on("joined", () => load());                       // fetch once joined: nothing missed after
+room.on("joined", ({ replayed }) => replayed || load()); // fetch once joined, unless what was missed came again
 room.on("messages.insert", row => add(row));           // dedupe by id
 room.on("resync", () => load());
 room.on("typing", (_, from) => showTyping(from));

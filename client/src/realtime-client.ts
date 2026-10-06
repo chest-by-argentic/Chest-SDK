@@ -12,7 +12,7 @@
 //   const room = live.channel("room:42");
 //   room.on("messages.insert", row => show(row));
 //   room.on("typing", (_, from) => showTyping(from));
-//   room.on("joined", () => refetchAfter(lastId));  // joined: fetch what the page shows from now on
+//   room.on("joined", ({ replayed }) => replayed || refetchAfter(lastId));  // joined: fetch, unless what was missed came again
 //   room.on("resync", () => refetchAfter(lastId));  // what was missed is not all kept: ask the tool
 //   room.send("typing");
 //   room.presence.track({ active: true });
@@ -46,11 +46,13 @@ export type Listener = (payload: unknown, from: string | undefined, partial: boo
 export interface Channel {
   // on listens to an event of the channel ("messages.insert", "typing"…),
   // or to what the Chest says of it: "joined" (again, after a reconnect):
-  // what reaches it from now on is heard — fetch what the page shows then;
+  // what reaches it from now on is heard — fetch what the page shows then,
+  // unless its payload says { replayed: true }: what was missed came again;
   // "resync": what the page missed is not all kept, fetch it again;
   // "kicked": the member was taken out of it; "refused": the join was, its
   // code the payload ("forbidden", "invalid_channel", "unavailable"…). It
   // returns what stops listening.
+  on(event: "joined", listener: (joined: { replayed: boolean }) => void): () => void;
   on(event: string, listener: Listener): () => void;
   // send sends an ephemeral event to the other pages of the channel — a
   // channel whose rule lets it send —, 4 KiB of JSON at most; nothing is
@@ -156,7 +158,7 @@ export function connect(options: { url?: string } = {}): Live {
       if (ch.tracked && member !== undefined) ch.present.set(member, ch.tracked);
       if (ch.tracked) write({ op: "track", ch: ch.name, state: ch.tracked });
       if (answer["presence"] !== undefined || since.since !== undefined) presenceChanged(ch);
-      fire(ch, "joined", undefined);
+      fire(ch, "joined", { replayed });
       if (answer["resync"] === true) fire(ch, "resync", undefined);
     });
   };
@@ -300,11 +302,12 @@ export function connect(options: { url?: string } = {}): Live {
       }
       const state = ch;
       return {
-        on(event, listener) {
+        on(event: string, listener: Listener | ((joined: { replayed: boolean }) => void)) {
           let set = state.listeners.get(event);
           if (!set) state.listeners.set(event, set = new Set());
-          set.add(listener);
-          return () => { set.delete(listener); };
+          const kept = listener as Listener;
+          set.add(kept);
+          return () => { set.delete(kept); };
         },
         send(event, payload) {
           if (state.joined) write({ op: "send", ch: state.name, event, payload: payload ?? null });

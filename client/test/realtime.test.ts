@@ -138,9 +138,9 @@ test("a page that reconnects is replayed what it missed; access removed stops it
   b.on("closed", reason => ends.push(reason));
   const room = b.channel("room:42");
   room.on("messages.insert", row => rows.push((row as { id: number }).id));
-  let joined = 0;
-  room.on("joined", () => joined++);
-  await until("joined", () => joined === 1);
+  const joins: unknown[] = [];
+  room.on("joined", payload => joins.push(payload));
+  await until("joined", () => joins.length === 1);
   c.realtime.commit("messages", "insert", { id: 1, room_id: 42 });
   await until("first row", () => rows.length === 1);
   c.realtime.drop(dan.id);
@@ -149,7 +149,7 @@ test("a page that reconnects is replayed what it missed; access removed stops it
   c.realtime.commit("messages", "insert", { id: 3, room_id: 42 });
   await until("replayed after reconnecting", () => rows.length === 3);
   assert.deepEqual(rows, [1, 2, 3]);
-  assert.equal(joined, 2);
+  assert.deepEqual(joins, [{ replayed: false }, { replayed: true }]);
   c.realtime.revoke(dan.id);
   await until("closed for good", () => ends.length === 1);
   assert.deepEqual(ends, ["access_removed"]);
