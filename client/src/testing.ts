@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Alias, Provider } from "./ai.js";
@@ -12,7 +12,9 @@ import { eventChannel, scheduleChannel, sign, signClaims, type Channel } from ".
 // assertion signed as the Chest signs it, and a Chest's API in the test's
 // process that answers members, groups, files (stat, move, links and
 // uploads, which it serves and takes itself as the team host would, on its
-// own origin), badges, notifications and broadcasts, AI (chat,
+// own origin), sealed values (sealed and opened under a key of its own,
+// for the members and roles it keeps; withMember carries the member's
+// ticket), badges, notifications and broadcasts, AI (chat,
 // streamed or not, embeddings, models, usage: deterministic answers, no
 // provider) and the acknowledgment of an erasure with the Chest's bounds,
 // quotas and errors; and that delivers an event or a run of a schedule to
@@ -64,11 +66,18 @@ export type FakeAi = { models?: FakeAiModel[]; reply?: (request: Record<string, 
 // sent (null for a GET).
 export type FakeAiCall = { path: string; body: unknown };
 
+// An open of sealed values the tool asked of a fake Chest, as the Chest
+// journals it: the member on whose behalf, how many opened, how many
+// refused — never a value.
+export type FakeOpen = { member: string; opened: number; refused: number };
+
 // What a fake Chest is given: the members who have the tool, those it had
 // who no longer have it (FakeFormer), its groups, the
 // capabilities its version holds (a capability left out answers 403;
 // members, files, notifications and ai by default, members.email to read the
-// addresses, members.groups to see every group), the events it receives (["member.*"] by default, [] to answer
+// addresses, members.groups to see every group, sealed to seal and open
+// values), the roles the tool declares (any role of the grammar a value is
+// sealed for, when not said), the events it receives (["member.*"] by default, [] to answer
 // an acknowledgment 403), the files it keeps, its AI, and what the Chest is
 // (the chest module: "Test organization", UTC, English and euros by default;
 // the tool at https://<tool>-chest.chest.test, its public part at
@@ -78,6 +87,7 @@ export type FakeChestOptions = {
   former?: FakeFormer[];
   groups?: FakeGroup[];
   capabilities?: string[];
+  roles?: string[];
   receives?: string[];
   files?: Record<string, { data: Uint8Array | string; type?: string }>;
   ai?: FakeAi;
@@ -99,7 +109,8 @@ export type FakeRun = { id?: string; scheduledAt?: string; attempt?: number };
 // the tool it set in the environment, what it keeps (members, groups and files a test
 // changes or reads; the notifications the tool sent, in the order sent, a
 // replaced one last; each member's badge; the erasures the tool
-// acknowledged; its calls to AI, in order), emit, which delivers an event to the tool — POST
+// acknowledged; its calls to AI, in order; its opens of sealed values, in
+// order), emit, which delivers an event to the tool — POST
 // /chest-events of its address, or a handler of Web Requests — and says the
 // status it answered, run, which delivers a run of a schedule the same way
 // on /chest-schedules, and close, which stops it and restores the
@@ -116,6 +127,7 @@ export type FakeChest = {
   badges: Map<string, number>;
   acknowledged: string[];
   ai: FakeAiCall[];
+  opens: FakeOpen[];
   emit(event: FakeEvent, to: string | ((request: Request) => Response | Promise<Response>)): Promise<number>;
   run(name: string, to: string | ((request: Request) => Response | Promise<Response>), run?: FakeRun): Promise<number>;
   close(): Promise<void>;
@@ -148,17 +160,26 @@ export function signAssertion(member: Member, options: AssertionOptions = {}): s
 }
 
 
+// ticketOf makes the ticket of a member's request to open sealed values
+// (Chest-Opener), under the key of the fake Chest running; null when none
+// runs. The tool never holds that key: only the Chest makes tickets.
+let ticketOf: ((id: string) => string) | null = null;
+
 // withMember is the request carrying that member's assertion, signed with
-// the options of signAssertion: a new Web Request, or the same Node request
-// with its header set.
+// the options of signAssertion, and — while a fake Chest runs — the
+// member's ticket to open sealed values: a new Web Request, or the same
+// Node request with its headers set.
 export function withMember<R extends Request | IncomingMessage>(request: R, member: Member, options: AssertionOptions = {}): R {
   const assertion = signAssertion(member, options);
+  const ticket = ticketOf?.(member.id);
   if (request instanceof Request) {
     const headers = new Headers(request.headers);
     headers.set("Chest-Member", assertion);
+    if (ticket) headers.set("Chest-Opener", ticket);
     return new Request(request, { headers }) as R;
   }
   (request as IncomingMessage).headers["chest-member"] = assertion;
+  if (ticket) (request as IncomingMessage).headers["chest-opener"] = ticket;
   return request;
 }
 
@@ -209,6 +230,11 @@ function vectorOf(text: string, dimensions: number): number[] {
   return kept.map(x => x / norm);
 }
 
+// Its sealed values: a call's body, one value, a context, a ticket's life
+// in seconds (chest/toolseal).
+const sealedBody = 4 << 20, sealedValue = 512 << 10, sealedContext = 256, ticketLife = 60;
+const sealedText = /^chest:sealed:1:((?:[a-z][a-z0-9-]{0,47}(?:,[a-z][a-z0-9-]{0,47}){0,15})?):([A-Za-z0-9_-]+)$/u;
+
 const fold = (s: string): string => s.normalize("NFD").replace(/\p{Mn}/gu, "").toLowerCase();
 
 function send(response: ServerResponse, status: number, value?: unknown, headers: Record<string, string> = {}): void {
@@ -244,7 +270,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   const receives = options.receives ?? ["member.*"];
   // The erasures the tool was told of, by emit: those it may acknowledge.
   const erasures = new Set<string>();
-  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], ai: [], emit: async () => 0, run: async () => 0, close: async () => {} };
+  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], ai: [], opens: [], emit: async () => 0, run: async () => 0, close: async () => {} };
   const former = [...(options.former ?? [])];
   let window = 0, calls = 0;
   // The groups the tool sees: those that give it, or all with members.groups;
@@ -637,6 +663,64 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     response.end();
   }
 
+  // Its sealed values: AES-256-GCM under a key of its own — the format and
+  // the rules of a Chest, not its cipher —, bound to the tool, the roles
+  // and the context; its tickets, HMAC under another, for 60 seconds.
+  const sealingKey = randomBytes(32), ticketKey = randomBytes(32);
+  const additional = (roles: string, context: string) => Buffer.from(`chest:sealed:1:\u0000${tool}\u0000${roles}\u0000${context}`);
+  const ticketMac = (id: string, expiry: string) => createHmac("sha256", ticketKey).update(`${id}\u0000${expiry}`).digest();
+  ticketOf = id => { const expiry = String(Math.floor(Date.now() / 1000) + ticketLife); return `1.${id}.${expiry}.${ticketMac(id, expiry).toString("base64url")}`; };
+  const ticketMember = (ticket: string | string[] | undefined): string | null => {
+    const parts = typeof ticket === "string" ? ticket.split(".") : [];
+    if (parts.length !== 4 || parts[0] !== "1" || !memberIdPattern.test(parts[1]!) || Number(parts[2]) < Date.now() / 1000) return null;
+    const mac = Buffer.from(parts[3]!, "base64url"), expected = ticketMac(parts[1]!, parts[2]!);
+    return mac.length === expected.length && timingSafeEqual(mac, expected) ? parts[1]! : null;
+  };
+  const isContext = (c: unknown): c is string | undefined => c === undefined || (typeof c === "string" && Buffer.byteLength(c) <= sealedContext);
+  async function sealedRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    if (!capabilities.has("sealed")) return send(response, 403, { error: "capability_not_granted" });
+    if (request.method !== "POST" || url.search || (url.pathname !== "/sealed/seal" && url.pathname !== "/sealed/open")) return send(response, 404, { error: "not_found" });
+    const id = url.pathname === "/sealed/open" ? ticketMember(request.headers["chest-opener"]) : null;
+    if (url.pathname === "/sealed/open" && id === null) return send(response, 401, { error: "member_required" });
+    const raw = await body(request, sealedBody);
+    if (raw === null) return send(response, 413, { error: "too_large" });
+    let items: unknown;
+    try { items = (JSON.parse(raw.toString()) as { items?: unknown }).items; } catch { items = undefined; }
+    if (!Array.isArray(items)) return send(response, 400, { error: "invalid_body" });
+    if (url.pathname === "/sealed/seal") {
+      const sealed: string[] = [];
+      for (const item of items as { value?: unknown; roles?: unknown; context?: unknown }[]) {
+        if (typeof item?.value !== "string" || Buffer.byteLength(item.value) > sealedValue || !isContext(item.context)) return send(response, 400, { error: "invalid_body" });
+        const roles = item.roles;
+        if (roles !== undefined && (!Array.isArray(roles) || roles.length === 0 || roles.length > maxRoles || !roles.every(r => typeof r === "string" && rolePattern.test(r) && (!options.roles || options.roles.includes(r))) || new Set(roles).size !== roles.length)) return send(response, 400, { error: "invalid_role" });
+        const joined = (roles as string[] | undefined)?.join(",") ?? "", nonce = randomBytes(12);
+        const cipher = createCipheriv("aes-256-gcm", sealingKey, nonce).setAAD(additional(joined, item.context ?? ""));
+        const box = Buffer.concat([nonce, cipher.update(item.value, "utf8"), cipher.final(), cipher.getAuthTag()]);
+        sealed.push(`chest:sealed:1:${joined}:${box.toString("base64url")}`);
+      }
+      return send(response, 200, { sealed });
+    }
+    const holder = chest.members.find(m => m.id === id);
+    if (!holder) return send(response, 403, { error: "access_removed" });
+    const values: ({ value: string } | { refused: "role" | "invalid" })[] = [];
+    for (const item of items as { sealed?: unknown; context?: unknown }[]) {
+      if (typeof item?.sealed !== "string" || !isContext(item.context)) return send(response, 400, { error: "invalid_body" });
+      const found = sealedText.exec(item.sealed), box = found ? Buffer.from(found[2]!, "base64url") : Buffer.alloc(0);
+      let value: string | null = null;
+      if (found && box.length >= 28) {
+        try {
+          const decipher = createDecipheriv("aes-256-gcm", sealingKey, box.subarray(0, 12)).setAAD(additional(found[1]!, item.context ?? ""));
+          decipher.setAuthTag(box.subarray(box.length - 16));
+          value = Buffer.concat([decipher.update(box.subarray(12, box.length - 16)), decipher.final()]).toString("utf8");
+        } catch { value = null; }
+      }
+      const roles = found?.[1] ? found[1].split(",") : [];
+      values.push(value === null ? { refused: "invalid" } : roles.length && !roles.includes(holder.role ?? "") ? { refused: "role" } : { value });
+    }
+    if (values.length) chest.opens.push({ member: holder.id, opened: values.filter(v => "value" in v).length, refused: values.filter(v => "refused" in v).length });
+    send(response, 200, { values });
+  }
+
   // The acknowledgment of an erasure the tool was told of (emit).
   async function erasuresRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     if (!receives.includes("member.*")) return send(response, 403, { error: "capability_not_granted" });
@@ -654,6 +738,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     const route = url.pathname.startsWith("/_chest/files/") ? front
       : url.pathname.startsWith("/erasures/") ? erasuresRoute
       : url.pathname.startsWith("/ai/") ? aiRoute
+      : url.pathname.startsWith("/sealed/") ? sealedRoute
       : url.pathname === "/members" || url.pathname.startsWith("/members/") || url.pathname === "/groups" ? members
       : url.pathname === "/files" || url.pathname.startsWith("/files/") ? filesRoute
       : url.pathname === "/badges" || url.pathname.startsWith("/badges/") || url.pathname.startsWith("/notifications") ? notificationsRoute : null;
@@ -692,6 +777,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     return post("/chest-schedules", scheduleChannel, id, body, to);
   };
   chest.close = async () => {
+    ticketOf = null;
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     for (const [name, value] of Object.entries(saved)) {
