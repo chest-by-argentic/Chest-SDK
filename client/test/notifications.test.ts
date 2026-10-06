@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { after, afterEach, before, test } from "node:test";
-import { CapabilityNotGranted, ChestError, QuotaExceeded, RateLimited, Unavailable } from "../src/errors.js";
+import { CapabilityNotGranted, ChestError, RateLimited, Unavailable } from "../src/errors.js";
 import * as notifications from "../src/notifications.js";
 
 // A Chest's API as its notifications answer (badges, inbox items): the SDK is
@@ -120,11 +120,9 @@ test("broadcast sends the notice and whom it is for, and says nothing back", asy
   ];
   for (const [notice, audience, expected] of bad) await assert.rejects(notifications.broadcast(notice, audience), code(expected), JSON.stringify([notice, audience]));
   assert.equal(seen.length, 0);
-  // A 200 is not what the Chest answers; a quota is the tool's to wait.
+  // A 200 is not what the Chest answers.
   reply = () => ({ status: 200, value: { delivered: 3 } });
   await assert.rejects(notifications.broadcast({ title: "a" }), Unavailable);
-  reply = () => ({ status: 429, value: { error: "quota_exceeded" } });
-  await assert.rejects(notifications.broadcast({ title: "a" }), QuotaExceeded);
 });
 
 test("withdraw names the key, and the members when given; it says nothing of what existed", async () => {
@@ -163,7 +161,7 @@ test("badge.setMany puts up to 500 counts, a member once", async () => {
 });
 
 test("the Chest's refusals are errors the tool tests", async () => {
-  for (const [status, value, kind] of [[403, "capability_not_granted", CapabilityNotGranted], [429, "quota_exceeded", QuotaExceeded], [429, "rate_limited", RateLimited], [503, "unavailable", Unavailable]] as const) {
+  for (const [status, value, kind] of [[403, "capability_not_granted", CapabilityNotGranted], [429, "rate_limited", RateLimited], [503, "unavailable", Unavailable]] as const) {
     reply = () => ({ status, value: { error: value } });
     await assert.rejects(notifications.notify([camille], { title: "a" }), (error: unknown) => error instanceof kind && error.code === value, value);
     await assert.rejects(notifications.badge.set(camille, 1), kind, value);

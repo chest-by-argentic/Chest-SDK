@@ -42,7 +42,9 @@ export type FakeFormer = { id: string; name?: string; status?: "no_access" | "fo
 // in that member's language — the translation of theirs, the tool's own
 // otherwise — cleaned as the Chest cleans it, its path (/chest when not
 // said) and its key. A broadcast keeps one for each member it reached.
-export type FakeNotification = { member: string; title: string; body?: string; path: string; key?: string };
+// Beyond the pace, a member's notices are folded into one item, grouped
+// counting them, its text and path the latest's.
+export type FakeNotification = { member: string; title: string; body?: string; path: string; key?: string; grouped?: number };
 // An alias a fake Chest maps: the model behind it, its provider (openrouter
 // by default) and its prices in US dollars per million tokens (1 and 2 by
 // default).
@@ -179,11 +181,12 @@ const extensions: Record<string, string> = { "image/jpeg": ".jpg", "image/png": 
 const newToken = (): string => randomBytes(18).toString("base64url") + "." + randomBytes(12).toString("base64url");
 // Its notifications: recipients and badges a call, text, quotas.
 // No count bounds a call but the team's size: a body takes the texts and an
-// entry for each member who has the tool; the quotas are per member — a
-// hundred items a member a day, five badges a minute for each member.
+// entry for each member who has the tool. Nothing is refused for its pace:
+// ten items at once to a member, one more every six minutes; beyond, the
+// notices are folded into the one grouped item of that member.
 const maxTitle = 80, maxText = 280, maxPath = 512, maxCount = 9999, maxRoles = 16;
 const textBytes = 64 << 10, memberBytes = 64;
-const badgesPerMemberMinute = 5, itemsPerDay = 100;
+const paceBurst = 10, paceEvery = 6 * 60_000;
 const keyPattern = /^[a-z0-9._:-]{1,64}$/u, rolePattern = /^[a-z][a-z0-9-]{0,47}$/u;
 const reordering = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 const cleanTitle = (s: string): string => s.replace(/[\t\r\n]/gu, " ").replace(/\p{Cc}/gu, "").replace(reordering, "").trim();
@@ -402,16 +405,24 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     send(response, 201, { name, type, size: data.length });
   }
 
-  // The windows of the notification quotas, each from the first call it
-  // counts: each member's items this day, the tool's badge writes this
-  // minute.
+  // The windows of a request rate (AI), each from the first call it counts.
   type Window = { start: number; count: number };
-  const minute: Window = { start: 0, count: 0 }, days = new Map<string, Window>();
   const live = (w: Window | undefined, span: number, now: number): boolean => w !== undefined && w.count > 0 && now - w.start < span;
   const wait = (w: Window, span: number, now: number): Record<string, string> => ({ "Retry-After": String(Math.max(1, Math.ceil((w.start + span - now) / 1000))) });
   const count = (w: Window, span: number, now: number, n: number): void => {
     if (!live(w, span, now)) [w.start, w.count] = [now, 0];
     w.count += n;
+  };
+  // The pace of each member: a token bucket, as of when it was last used.
+  const buckets = new Map<string, { tokens: number; at: number }>();
+  const paced = (id: string, now: number): boolean => {
+    const b = buckets.get(id) ?? { tokens: paceBurst, at: now };
+    b.tokens = Math.min(paceBurst, b.tokens + (now - b.at) / paceEvery);
+    b.at = now;
+    buckets.set(id, b);
+    if (b.tokens < 1) return false;
+    b.tokens--;
+    return true;
   };
   const access = (id: string) => chest.members.some(m => m.id === id);
   // drop removes kept notifications in place: a test may hold the list.
@@ -437,7 +448,6 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     } catch {
       command = null;
     }
-    const audience = Math.max(chest.members.length, 1);
     const keys = (...allowed: string[]) => command !== null && Object.keys(command).every(k => allowed.includes(k));
     const now = Date.now();
     if (badge || url.pathname === "/badges") {
@@ -455,8 +465,6 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       }
       if (!writes.every(b => typeof b.count === "number" && Number.isInteger(b.count) && b.count >= 0 && b.count <= maxCount)) return send(response, 400, { error: "invalid_count" });
       if (new Set(writes.map(b => b.member)).size !== writes.length) return send(response, 400, { error: "invalid_body" });
-      if (live(minute, 60_000, now) && minute.count + writes.length > badgesPerMemberMinute * audience) return send(response, 429, { error: "quota_exceeded" }, wait(minute, 60_000, now));
-      count(minute, 60_000, now, writes.length);
       const answer = { set: [] as string[], skipped: [] as string[] };
       for (const b of writes) {
         if (!access(b.member)) {
@@ -518,14 +526,18 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       }
     }
     const kept = ids.filter(access);
-    const full = kept.map(id => days.get(id)).filter((w): w is Window => live(w, 86_400_000, now) && w!.count >= itemsPerDay);
-    if (full.length > 0) return send(response, 429, { error: "quota_exceeded" }, wait(full.reduce((a, b) => a.start > b.start ? a : b), 86_400_000, now));
     for (const id of kept) {
-      if (!days.has(id)) days.set(id, { start: 0, count: 0 });
-      count(days.get(id)!, 86_400_000, now, 1);
-      if (key !== undefined) drop(n => n.member === id && n.key === key);
       const language = chest.members.find(m => m.id === id)!.language;
-      chest.notifications.push({ member: id, ...(other.get(language) ?? own), path: (path as string | undefined) ?? "/chest", ...(key !== undefined ? { key: key as string } : {}) });
+      const item: FakeNotification = { member: id, ...(other.get(language) ?? own), path: (path as string | undefined) ?? "/chest", ...(key !== undefined ? { key: key as string } : {}) };
+      if (key !== undefined && chest.notifications.some(n => n.member === id && n.key === key)) drop(n => n.member === id && n.key === key);
+      else if (!paced(id, now)) {
+        // Beyond the pace: folded into the member's grouped item, never refused.
+        const grouped = chest.notifications.find(n => n.member === id && n.grouped !== undefined);
+        drop(n => n === grouped);
+        delete item.key;
+        item.grouped = (grouped?.grouped ?? 0) + 1;
+      }
+      chest.notifications.push(item);
     }
     if (broadcast) return send(response, 204);
     send(response, 200, { delivered: kept, skipped: ids.filter(id => !access(id)) });

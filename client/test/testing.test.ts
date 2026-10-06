@@ -4,7 +4,7 @@ import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { mock, test } from "node:test";
 import * as ai from "../src/ai.js";
-import { AiCapReached, AiModelNotAllowed, AiUnavailable, CapabilityNotGranted, ChestError, QuotaExceeded, RateLimited, TooLarge } from "../src/errors.js";
+import { AiCapReached, AiModelNotAllowed, AiUnavailable, CapabilityNotGranted, ChestError, RateLimited, TooLarge } from "../src/errors.js";
 import * as files from "../src/files.js";
 import { member, type Member } from "../src/member.js";
 import * as members from "../src/members.js";
@@ -261,36 +261,30 @@ test("its notifications and badges are kept as a Chest keeps them: cleaned, repl
   }
 });
 
-test("its notification quotas are a Chest's, and a refused call changes nothing", async () => {
+test("its notifications are never refused for their pace: a burst is folded into one item, nothing lost", async () => {
   mock.timers.enable({ apis: ["Date"], now: 1_790_000_000_000 });
   const many = Array.from({ length: 500 }, (_, i) => ({ ...zoe, id: id("m" + String.fromCharCode(97 + (i % 26), 97 + Math.floor(i / 26))) }));
   const chest = await fakeChest({ members: [camille, ...many] });
   try {
     const ids = many.map(m => m.id);
-    // 100 items per member a day, per member, never for the tool: the whole
-    // team of 501 at once, again and again; replacements counted; a member at
-    // 100 refuses the whole call.
-    for (let i = 0; i < 3; i++) await notifications.notify([camille.id, ...ids], { title: "a" + i });
-    assert.equal(chest.notifications.length, 1503);
-    mock.timers.setTime(1_790_000_000_000 + 3_600_000);
-    for (let i = 3; i < 100; i++) await notifications.notify([camille.id], { title: "d", key: "same" });
-    await assert.rejects(notifications.notify([camille.id, ids[0]!], { title: "e" }), QuotaExceeded);
-    const response = await fetch(chest.api + "/notifications", { method: "POST", body: JSON.stringify({ members: [camille.id], title: "c" }) });
-    assert.deepEqual([response.status, response.headers.get("retry-after")], [429, "82800"]);
-    await response.body?.cancel();
-    assert.equal(chest.notifications.filter(n => n.member === camille.id).length, 4);
-    await notifications.notify(ids, { title: "the others" });
-    // Recipients without access are not counted.
-    assert.deepEqual(await notifications.notify([id("mallory")], { title: "f" }), { delivered: [], skipped: [id("mallory")] });
-    mock.timers.setTime(1_790_000_000_000 + 3_600_000 + 86_400_000);
-    await notifications.notify([camille.id], { title: "g" });
-    // Five badge writes a minute for each member, each badge of setMany one.
-    for (let i = 0; i < 5; i++) await notifications.badge.setMany(ids.map(memberId => ({ memberId, count: i + 1 })));
-    await notifications.badge.setMany(ids.slice(0, 5).map(memberId => ({ memberId, count: 9 })));
-    await assert.rejects(notifications.badge.set(camille.id, 1), QuotaExceeded);
-    assert.equal(chest.badges.has(camille.id), false);
-    mock.timers.setTime(1_790_000_000_000 + 3_600_000 + 86_400_000 + 60_000);
+    // The whole team of 501 at once, over and over: ten items each, the
+    // rest folded into one grouped item each, showing the latest.
+    for (let i = 0; i < 37; i++) assert.deepEqual((await notifications.notify([camille.id, ...ids], { title: "Order " + i })).skipped, []);
+    const camilles = chest.notifications.filter(n => n.member === camille.id);
+    assert.equal(camilles.length, 11);
+    assert.deepEqual(camilles.at(-1), { member: camille.id, title: "Order 36", path: "/chest", grouped: 27 });
+    assert.equal(chest.notifications.length, 501 * 11);
+    // A replacement by key is never folded; after six minutes, an item again.
+    await notifications.notify([camille.id], { title: "Pinned", key: "pin" });
+    assert.equal(chest.notifications.at(-1)?.grouped, 28);
+    mock.timers.setTime(1_790_000_000_000 + 6 * 60_000);
+    await notifications.notify([camille.id], { title: "Pinned", key: "pin" });
+    await notifications.notify([camille.id], { title: "Pinned again", key: "pin" });
+    assert.deepEqual(chest.notifications.filter(n => n.key === "pin"), [{ member: camille.id, title: "Pinned again", path: "/chest", key: "pin" }]);
+    // Badges, a state: the last write wins, none refused.
+    for (let i = 0; i < 20; i++) await notifications.badge.setMany(ids.map(memberId => ({ memberId, count: i + 1 })));
     assert.equal(await notifications.badge.set(camille.id, 1), true);
+    assert.equal(chest.badges.get(ids[0]!), 20);
   } finally {
     await chest.close();
     mock.timers.reset();

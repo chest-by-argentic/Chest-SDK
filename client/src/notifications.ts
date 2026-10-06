@@ -6,9 +6,14 @@ import { groupIdPattern, languagePattern, memberIdPattern } from "./member.js";
 // chest.json declares "capabilities": ["notifications"]: a badge is a count
 // shown on the tool's tile for one member; a notification is an item in a
 // member's inbox that opens a page of the tool. Only members who have access
-// to the tool receive them; nothing leaves the Chest (no email, no push).
-// A notice may say the same in other languages: each member reads the one of
-// theirs (member.language), the tool's own otherwise.
+// to the tool receive them. The tool sends nothing else: members may get
+// mails of their notifications, as each of them chooses — the Chest's
+// service. A notice may say the same in other languages: each member reads
+// the one of theirs (member.language), the tool's own otherwise. Nothing is
+// refused for its pace: beyond ten at once to a member, then one every six
+// minutes, the Chest folds a tool's notices into one grouped item of that
+// member's inbox ("37 new notifications", the latest shown) — the call
+// still succeeds, nothing is lost.
 //
 //   import * as notifications from "@argentic/chest-sdk/notifications";
 //   const { delivered, skipped } = await notifications.notify(ids, { title: "New task", path: "/chest/tasks/42", key: "task:42" });
@@ -19,11 +24,10 @@ import { groupIdPattern, languagePattern, memberIdPattern } from "./member.js";
 //
 // Text is plain: the Chest removes control characters, interprets neither
 // Markdown nor HTML, keeps line breaks in body. A member who muted the tool
-// counts as delivered: the tool never learns it. Errors: CapabilityNotGranted
-// (403), QuotaExceeded (429; per member, never fixed for the tool: 100 items
-// per member a day — a broadcast counts for each recipient —, five badge
-// writes a minute for each member who has the tool),
-// Unavailable (503, or the Chest not reached), ChestError otherwise
+// counts as delivered: the tool never learns it. Badges are a state, the
+// last write wins. Errors: CapabilityNotGranted (403), Unavailable (503, or
+// the Chest not reached), ChestError otherwise — only a malformed or
+// oversized call
 // (invalid_id, invalid_role, invalid_title, invalid_text, invalid_path,
 // invalid_key, invalid_language, invalid_count, invalid_body 400).
 

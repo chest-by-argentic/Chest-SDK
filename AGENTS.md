@@ -345,11 +345,10 @@ at install and at every update.
   nothing; decide in your code who may trigger it (a role).
 - **Notify members, never others.** Only members with access receive
   anything; send member ids from your data, never addresses.
-- **Mind the quotas.** They are per member: 100 items per member a day (a
-  broadcast counts for each recipient) and five badge writes a minute for
-  each member who has the tool: notify
-  the people concerned, and on `QuotaExceeded` wait (a refused call changed
-  nothing).
+- **Notify at a human pace.** Nothing is refused, but beyond ten at once to a
+  member, then one every six minutes, the Chest folds your notices into one
+  “37 new notifications” item: give each its own words only when it matters,
+  and use a `key` for what updates (a replacement is never folded).
 - **Large files go through `uploadUrl`, not `put`.** `put` and `get` carry the
   bytes through the tool's memory (256 MiB by default).
 
@@ -372,7 +371,6 @@ at install and at every update.
 | The Chest refuses the repository: `manifest` | A key the contract does not have (a typo, or a key of a later contract), a missing `"chest"`, or a value outside its rule: `npx chest check` says which. |
 | The Chest refuses the repository: `migrations` | A file of `migrations/` not named `NNNN_name.sql`, not SQL text, or migrations without the capability `database`. |
 | `ChestError` with `invalid_path` | `path` is not `/chest` or under it (a full URL, `//`, `..`, a space or non-ASCII character). |
-| `QuotaExceeded` from `notifications` | Beyond 100 items per member a day, or five badge writes a minute for each member who has the tool; the call changed nothing. |
 | `events.handle` always answers 401 | The body was read before `handle` (a body parser), or the environment is not the Chest's (`CHEST_TOKEN`, `CHEST_TOOL`; in a test, deliver with `fakeChest().emit`). |
 | `schedules.handle` always answers 401 | The body was read before `handle`, or the environment is not the Chest's (in a test, deliver with `fakeChest().run`). |
 | A schedule never runs | The route is not `POST /chest-schedules` at the root, the version was not approved, or its handler is missing (the tool's page says “the tool has no handler for this schedule (404)”). |

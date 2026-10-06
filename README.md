@@ -439,18 +439,22 @@ const { set, skipped: noAccess } = await notifications.badge.setMany([
   new items are then dropped, but they still count as `delivered`, and their
   badges stay. The tool never learns who muted it.
 - **Badges** go from 0 to 9,999, 0 clears one. `setMany` takes one at least,
-  a member at most once.
-- **Quotas**, per tool and per member, never fixed for the tool: 100 items
-  per member a day (those with access, muted or not, of `notify` and
-  `broadcast` alike; a replacement counts; one recipient at 100 refuses the
-  whole call) — so the whole team, whatever its size, can be told a hundred
-  times a day —, and five badge writes a minute for each member who has the
-  tool (each badge of `setMany` counts). Beyond, `QuotaExceeded` (429, the Chest answers `Retry-After`); a
-  refused call changes nothing.
+  a member at most once. A badge is a state: the last write wins, never
+  refused.
+- **Pace, never a refusal.** A tool's notices to a member go at a normal
+  pace — ten at once, then one every six minutes, per tool and member;
+  beyond, of `notify` and `broadcast` alike, the Chest folds them into the
+  tool's one grouped item in that member's inbox: “37 new notifications”
+  above the latest's title, opening the latest's path, unread again — and
+  one line of the member's next mail, if they get mails. The call answers as
+  ever, nothing is lost, and a burst however fast takes one item. A notice
+  whose `key` names an item replaces it, never folded; a folded notice keeps
+  no key (`withdraw` cannot reach it). Only a malformed or oversized call is
+  refused.
 - **Lifecycle**: a member who loses access loses the tool's items and badge;
   removing the tool removes them all. A member's inbox keeps 500 items for 90
   days.
-- Errors: `CapabilityNotGranted` (403), `QuotaExceeded` (429), `Unavailable`
+- Errors: `CapabilityNotGranted` (403), `Unavailable`
   (503, the Chest not reached, or an answer that is not its own: the call may
   or may not have happened), `ChestError` for the rest (`invalid_id`,
   `invalid_role`, `invalid_title`, `invalid_text`, `invalid_path`,
@@ -897,7 +901,7 @@ await chest.close();
 | `chest.ai` | The tool's calls to AI, `{path, body}` in order (`body` null for a `GET`) |
 | `chest.acknowledged` | The erasures the tool acknowledged, each once |
 | `chest.members`, `chest.groups`, `chest.files` | What the fake Chest holds, to change or assert on; its `members` are those who have the tool |
-| `chest.notifications`, `chest.badges` | What the tool sent: the items kept, `{member, title, body?, path, key?}` in the member's language (their translation, the tool's own words otherwise) cleaned as the Chest cleans them — one for each member a broadcast reached —, in the order sent (a replaced item removed, the new one last; `withdraw` removes), and each member's badge (`Map` member → count; 0 removes it) |
+| `chest.notifications`, `chest.badges` | What the tool sent: the items kept, `{member, title, body?, path, key?}` in the member's language (their translation, the tool's own words otherwise) cleaned as the Chest cleans them — one for each member a broadcast reached —, in the order sent (a replaced item removed, the new one last; `withdraw` removes; beyond the pace, a member's notices folded into one item with `grouped`, the latest's text, last), and each member's badge (`Map` member → count; 0 removes it) |
 | `chest.close()` | Stops it and restores the environment |
 
 ## Version
