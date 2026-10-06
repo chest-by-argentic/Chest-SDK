@@ -208,6 +208,36 @@ test("its team host serves the links it signs and takes the uploads it authorise
   }
 });
 
+test("its public part takes a visitor's upload of the type its content is, among those granted", async () => {
+  const chest = await fakeChest({ capabilities: ["files"] });
+  const pdf = new TextEncoder().encode("%PDF-1.7\n%%EOF\n");
+  try {
+    const up = await files.uploadUrl("applications/", { public: true, types: ["application/pdf"] });
+    assert.match(up.url, /^\/_chest\/files\/upload\//u);
+    // Whatever the browser says, the type is the content's.
+    const sent = await fetch(new URL(up.url, chest.api), { method: "PUT", body: pdf, headers: { "Content-Type": "image/png" } });
+    assert.equal(sent.status, 201);
+    const { name, type } = await sent.json() as { name: string; type: string };
+    assert.match(name, /^applications\/[a-f0-9]{20}\.pdf$/u);
+    assert.equal(type, "application/pdf");
+    assert.equal((await files.stat(name))?.type, "application/pdf");
+    // A page that says it is a PDF is refused; a type not recognised by its content is never granted.
+    const fake = await files.uploadUrl("applications/", { public: true, types: ["application/pdf"] });
+    const refused = await fetch(new URL(fake.url, chest.api), { method: "PUT", body: "<html></html>", headers: { "Content-Type": "application/pdf" } });
+    assert.deepEqual([refused.status, (await refused.json() as { error: string }).error], [415, "type_refused"]);
+    await assert.rejects(files.uploadUrl("applications/", { public: true, types: ["text/plain"] }), (e: unknown) => e instanceof ChestError && e.code === "invalid_type");
+  } finally {
+    await chest.close();
+  }
+  // A tool without a public part grants none.
+  const closed = await fakeChest({ capabilities: ["files"], chest: { publicUrl: null } });
+  try {
+    await assert.rejects(files.uploadUrl("applications/", { public: true, types: ["application/pdf"] }), (e: unknown) => e instanceof ChestError && e.code === "no_public_part" && e.status === 409);
+  } finally {
+    await closed.close();
+  }
+});
+
 test("its notifications and badges are kept as a Chest keeps them: cleaned, replaced by key, withdrawn", async () => {
   const chest = await fakeChest({ members: [camille, emile] });
   const sent = chest.notifications;

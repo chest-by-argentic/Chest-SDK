@@ -1,4 +1,4 @@
-import { CapabilityNotGranted, ChestError, QuotaExceeded, RateLimited, TooLarge, Unavailable } from "./errors.js";
+import { CapabilityNotGranted, ChestError, QuotaExceeded, RateLimited, StorageFull, TooLarge, Unavailable } from "./errors.js";
 
 // The Chest's API as a server tool reaches it, shared by the modules that
 // call it (files, members): CHEST_API is http://127.0.0.1:<port>, the tool's
@@ -98,6 +98,7 @@ export async function refusal(response: Response, capability: string): Promise<C
   if (response.status === 403) return new CapabilityNotGranted(capability);
   if (response.status === 413) return new TooLarge();
   if (response.status === 429) return code === "rate_limited" ? new RateLimited() : new QuotaExceeded();
+  if (response.status === 507 && code === "storage_full") return new StorageFull();
   if (response.status >= 500) return new Unavailable();
   return new ChestError(code, response.status, `the Chest refused: ${code}`);
 }

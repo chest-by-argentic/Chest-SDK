@@ -11,8 +11,9 @@ import { eventChannel, scheduleChannel, sign, signClaims, type Channel } from ".
 // For a tool's own tests, never imported by its production code: a member's
 // assertion signed as the Chest signs it, and a Chest's API in the test's
 // process that answers members, groups, files (stat, move, links and
-// uploads, which it serves and takes itself as the team host would, on its
-// own origin), sealed values (sealed and opened under a key of its own,
+// uploads — its members' and its visitors' —, which it serves and takes
+// itself as the team host and the public part would, on its own origin),
+// sealed values (sealed and opened under a key of its own,
 // for the members and roles it keeps; withMember carries the member's
 // ticket), badges, notifications and broadcasts, AI (chat,
 // streamed or not, embeddings, models, usage: deterministic answers, no
@@ -188,17 +189,45 @@ const maxLimit = 500, defaultLimit = 100, maxLookup = 200, callsPerMinute = 600;
 const maxObject = 32 << 20, maxObjects = 10000, maxTotal = 1 << 30;
 const namePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,7}$/u;
 // Its links and uploads: their paths on the team host, their lives in
-// seconds, the images it makes thumbnails of, the first bytes an upload of
-// a type must start with, the endings of the names it chooses (chest/toolfiles).
+// seconds, the images it makes thumbnails of, the types it recognises by
+// their content — a member's upload of one must hold it, a visitor's is of
+// the one its content is —, the endings of the names it chooses
+// (chest/toolfiles). An office document is told by the names of its parts,
+// read in its bytes rather than in its archive's directory.
 const linkPath = "/_chest/files/", uploadPath = "/_chest/files/upload/", linkLife = 900, uploadLife = 900;
 const mediaPattern = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,62}\/(\*|[a-z0-9][a-z0-9!#$&^_.+-]{0,62})$/u;
 const thumbnailed = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 const starts = (...heads: string[]) => (data: Buffer): boolean => heads.some(head => data.subarray(0, head.length).equals(Buffer.from(head, "latin1")));
-const signatures: Record<string, (data: Buffer) => boolean> = {
+const text = (data: Buffer, from: number, to: number): string => data.subarray(from, to).toString("latin1");
+const brands = (...said: string[]) => (data: Buffer): boolean => text(data, 4, 8) === "ftyp" && Array.from({ length: Math.max(0, Math.min(data.readUInt32BE(0), data.length) - 8) / 4 }, (_, i) => text(data, 8 + 4 * i, 12 + 4 * i)).some((brand, i) => i !== 1 && said.includes(brand));
+const zip = starts("PK\x03\x04", "PK\x05\x06");
+const office = (main: string) => (data: Buffer): boolean => zip(data) && data.includes("[Content_Types].xml") && data.includes(main);
+const openDocument = (type: string) => (data: Buffer): boolean => zip(data) && text(data, 30, 38) === "mimetype" && text(data, 38, 38 + type.length) === type;
+const recognisers: Record<string, (data: Buffer) => boolean> = {
   "image/jpeg": starts("\xff\xd8\xff"), "image/png": starts("\x89PNG\r\n\x1a\n"), "image/gif": starts("GIF87a", "GIF89a"),
-  "image/webp": data => data.subarray(0, 4).toString("latin1") === "RIFF" && data.subarray(8, 12).toString("latin1") === "WEBP", "application/pdf": starts("%PDF-"),
+  "image/webp": data => text(data, 0, 4) === "RIFF" && text(data, 8, 12) === "WEBP", "image/avif": brands("avif", "avis"), "image/heic": brands("heic", "heix", "heim", "heis", "hevc", "hevx"),
+  "image/bmp": starts("BM"), "image/tiff": starts("II*\x00", "MM\x00*"), "application/pdf": starts("%PDF-"),
+  "application/zip": zip, "application/gzip": starts("\x1f\x8b"), "application/x-7z-compressed": starts("7z\xbc\xaf\x27\x1c"), "application/vnd.rar": starts("Rar!\x1a\x07"),
+  "application/x-tar": data => text(data, 257, 262) === "ustar", "application/x-bzip2": starts("BZh"), "application/x-xz": starts("\xfd7zXZ\x00"), "application/vnd.ms-cab-compressed": starts("MSCF"),
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": office("word/document.xml"),
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": office("xl/workbook.xml"),
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": office("ppt/presentation.xml"),
+  "application/vnd.oasis.opendocument.text": openDocument("application/vnd.oasis.opendocument.text"),
+  "application/vnd.oasis.opendocument.spreadsheet": openDocument("application/vnd.oasis.opendocument.spreadsheet"),
+  "application/vnd.oasis.opendocument.presentation": openDocument("application/vnd.oasis.opendocument.presentation"),
 };
-const extensions: Record<string, string> = { "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp", "image/avif": ".avif", "image/heic": ".heic", "application/pdf": ".pdf", "text/plain": ".txt", "text/csv": ".csv", "application/json": ".json", "application/zip": ".zip", "video/mp4": ".mp4", "audio/mpeg": ".mp3" };
+// The types recognised, an office document before the archive it also is.
+const precise = (type: string): boolean => type.includes("officedocument") || type.includes("opendocument");
+const recognised = Object.keys(recognisers).sort((a, b) => Number(precise(b)) - Number(precise(a)) || (a < b ? -1 : a > b ? 1 : 0));
+const accepted = (types: string[], type: string): boolean => types.some(t => t === type || (t.endsWith("/*") && type.startsWith(t.slice(0, -1))));
+const extensions: Record<string, string> = {
+  "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp", "image/avif": ".avif", "image/heic": ".heic", "image/bmp": ".bmp", "image/tiff": ".tiff",
+  "application/pdf": ".pdf", "text/plain": ".txt", "text/csv": ".csv", "application/json": ".json", "application/zip": ".zip",
+  "application/gzip": ".gz", "application/x-7z-compressed": ".7z", "application/vnd.rar": ".rar", "application/x-tar": ".tar", "application/x-bzip2": ".bz2", "application/x-xz": ".xz", "application/vnd.ms-cab-compressed": ".cab",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx", "application/vnd.oasis.opendocument.text": ".odt",
+  "application/vnd.oasis.opendocument.spreadsheet": ".ods", "application/vnd.oasis.opendocument.presentation": ".odp", "video/mp4": ".mp4", "audio/mpeg": ".mp3",
+};
 const newToken = (): string => randomBytes(18).toString("base64url") + "." + randomBytes(12).toString("base64url");
 // Its notifications: recipients and badges a call, text, quotas.
 // No count bounds a call but the team's size: a body takes the texts and an
@@ -358,15 +387,17 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
         return send(response, 200, { url: `${chest.api}${linkPath}${token}`, expires_in: linkLife });
       }
       if (url.pathname === "/files/upload-url") {
-        const { name, max_size: maxSize, types, expires_in: expiresIn } = command;
+        const { name, max_size: maxSize, types, expires_in: expiresIn, public: visitor } = command;
         const folder = typeof name === "string" && name.endsWith("/");
-        if (typeof name !== "string" || !namePattern.test(folder ? name.slice(0, -1) : name)) return send(response, 400, { error: "invalid_name" });
+        if (typeof name !== "string" || !namePattern.test(folder ? name.slice(0, -1) : name) || (visitor === true && !folder)) return send(response, 400, { error: "invalid_name" });
         if (!(types === undefined || (Array.isArray(types) && types.length <= 8 && types.every(t => typeof t === "string" && mediaPattern.test(t))))) return send(response, 400, { error: "invalid_type" });
-        if (!(maxSize === undefined || (typeof maxSize === "number" && Number.isSafeInteger(maxSize) && maxSize > 0)) || !(expiresIn === undefined || (typeof expiresIn === "number" && Number.isInteger(expiresIn) && expiresIn > 0 && expiresIn <= uploadLife))) return send(response, 400, { error: "invalid_body" });
+        if (visitor === true && (!Array.isArray(types) || types.length === 0 || !types.every(t => recognised.some(r => accepted([t as string], r))))) return send(response, 400, { error: "invalid_type" });
+        if (!(maxSize === undefined || (typeof maxSize === "number" && Number.isSafeInteger(maxSize) && maxSize > 0)) || !(expiresIn === undefined || (typeof expiresIn === "number" && Number.isInteger(expiresIn) && expiresIn > 0 && expiresIn <= uploadLife)) || !(visitor === undefined || typeof visitor === "boolean")) return send(response, 400, { error: "invalid_body" });
+        if (visitor === true && process.env["CHEST_PUBLIC_URL"] === undefined) return send(response, 409, { error: "no_public_part" });
         if ((maxSize ?? 0) > maxObject) return send(response, 413, { error: "too_large" });
         const token = newToken(), life = (expiresIn as number | undefined) ?? uploadLife;
-        uploads.set(token, { name, maxSize: (maxSize as number | undefined) ?? maxObject, types: (types as string[] | undefined) ?? [], until: Date.now() + life * 1000 });
-        return send(response, 200, { url: `${chest.api}${uploadPath}${token}`, method: "PUT", expires_in: life });
+        uploads.set(token, { name, maxSize: (maxSize as number | undefined) ?? maxObject, types: (types as string[] | undefined) ?? [], until: Date.now() + life * 1000, visitor: visitor === true });
+        return send(response, 200, { url: visitor === true ? uploadPath + token : `${chest.api}${uploadPath}${token}`, method: "PUT", expires_in: life });
       }
       const from = command["from"], to = command["to"];
       if (typeof from !== "string" || typeof to !== "string" || !namePattern.test(from) || !namePattern.test(to)) return send(response, 400, { error: "invalid_name" });
@@ -398,15 +429,17 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     send(response, 404, { error: "not_found" });
   }
 
-  // The team host's part of the files, on the fake's own origin: a link it
-  // signed opens the content it was signed for, for its life, as long as
-  // the file is that content — a thumbnail is the image itself, a fake does
-  // not reduce it —; an upload token takes one file, once, within its life,
-  // of the types it names and up to its size, whose first bytes are those of
-  // its type, named by the Chest in a folder. Nobody's session is checked:
+  // The team host's and the public part's files, on the fake's own origin:
+  // a link it signed opens the content it was signed for, for its life, as
+  // long as the file is that content — a thumbnail is the image itself, a
+  // fake does not reduce it —; an upload token takes one file, once, within
+  // its life, up to its size, named by the Chest in a folder: a member's of
+  // the types it names, holding the type it says when the fake recognises
+  // it; a visitor's of the type its content is among those it names,
+  // whatever it says. Nobody's session is checked, nor a visitor's pace:
   // the Chest's own front does that.
   const links = new Map<string, { name: string; object: FakeFile; until: number; download: boolean }>();
-  const uploads = new Map<string, { name: string; maxSize: number; types: string[]; until: number }>();
+  const uploads = new Map<string, { name: string; maxSize: number; types: string[]; until: number; visitor: boolean }>();
   async function front(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     if (request.method === "GET" && url.pathname.startsWith(linkPath) && !url.pathname.startsWith(uploadPath)) {
       const link = links.get(url.pathname.slice(linkPath.length));
@@ -419,11 +452,15 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     const token = url.pathname.slice(uploadPath.length), grant = uploads.get(token);
     uploads.delete(token);
     if (!grant || grant.until < Date.now()) return send(response, 403, { error: "invalid_token" });
-    const type = (request.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
-    if (!mediaPattern.test(type) || type.endsWith("/*") || (grant.types.length > 0 && !grant.types.some(t => t === type || (t.endsWith("/*") && type.startsWith(t.slice(0, -1)))))) return send(response, 415, { error: "type_refused" });
+    let type = (request.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+    if (!grant.visitor && (!mediaPattern.test(type) || type.endsWith("/*") || (grant.types.length > 0 && !accepted(grant.types, type)))) return send(response, 415, { error: "type_refused" });
     const data = await body(request, grant.maxSize);
     if (data === null) return send(response, 413, { error: "too_large" });
-    if (signatures[type] && !signatures[type]!(data)) return send(response, 400, { error: "type_mismatch" });
+    if (grant.visitor) {
+      const found = recognised.find(r => accepted(grant.types, r) && recognisers[r]!(data));
+      if (found === undefined) return send(response, 415, { error: "type_refused" });
+      type = found;
+    } else if (recognisers[type] && !recognisers[type]!(data)) return send(response, 400, { error: "type_mismatch" });
     const name = grant.name.endsWith("/") ? grant.name + randomBytes(10).toString("hex") + (extensions[type] ?? "") : grant.name;
     const total = [...files.entries()].reduce((sum, [n, f]) => n === name ? sum : sum + f.data.byteLength, 0);
     if (total + data.length > maxTotal || (!files.has(name) && files.size >= maxObjects)) return send(response, 429, { error: "quota_exceeded" });
