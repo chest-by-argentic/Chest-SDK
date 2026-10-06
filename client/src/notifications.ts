@@ -20,8 +20,9 @@ import { groupIdPattern, languagePattern, memberIdPattern } from "./member.js";
 // Text is plain: the Chest removes control characters, interprets neither
 // Markdown nor HTML, keeps line breaks in body. A member who muted the tool
 // counts as delivered: the tool never learns it. Errors: CapabilityNotGranted
-// (403), QuotaExceeded (429: 1,000 recipients an hour, 100 items per member a
-// day, 600 badge writes a minute — a broadcast counts each recipient),
+// (403), QuotaExceeded (429; they grow with the team: eight recipients an
+// hour and five badge writes a minute for each member who has the tool — a
+// broadcast counts each recipient —, 100 items per member a day),
 // Unavailable (503, or the Chest not reached), ChestError otherwise
 // (invalid_id, invalid_role, invalid_title, invalid_text, invalid_path,
 // invalid_key, invalid_language, invalid_count, invalid_body 400).
@@ -38,7 +39,7 @@ export type Notice = Words & { path?: string; key?: string; translations?: Recor
 // Whom a broadcast reaches: every member who has the tool, or with to those
 // in any of its groups or holding any of its roles — a group the tool does
 // not see, or a role it does not declare, reaches no one —, but those of
-// except (up to 128: a Chest's members).
+// except (the author, those who already answered).
 export type Audience = { to?: { groups?: string[]; roles?: string[] }; except?: Iterable<string> };
 // Who got it and who not, each identifier once in the order given: skipped
 // are identifiers the Chest does not know and members without access.
@@ -49,10 +50,10 @@ export type BadgeCount = { memberId: string; count: number };
 // order given.
 export type BadgeWrite = { set: string[]; skipped: string[] };
 
-// The bounds of a Chest: the identifiers and texts of a call, and its
-// capacity — 128 members, 16 groups, 16 roles a tool declares.
-const maxMembers = 500, maxTitle = 80, maxBody = 280, maxPath = 512, maxCount = 9999;
-const chestMembers = 128, chestGroups = 16, toolRoles = 16;
+// The bounds of a Chest on a call's texts and counts, and the roles a tool
+// declares. No count bounds the members a call names: the Chest takes as
+// many as its team holds, and refuses a body beyond (invalid_body).
+const maxTitle = 80, maxBody = 280, maxPath = 512, maxCount = 9999, toolRoles = 16;
 const keyPattern = /^[a-z0-9._:-]{1,64}$/u, rolePattern = /^[a-z][a-z0-9-]{0,47}$/u;
 // What the Chest removes from a title before keeping it: control characters
 // and the characters that reorder text.
@@ -75,10 +76,10 @@ function checkId(id: unknown): string {
   if (typeof id !== "string" || !memberIdPattern.test(id)) throw new ChestError("invalid_id", 400, "invalid member identifier");
   return id;
 }
-// checkIds reads 1 to 500 member identifiers, as given.
+// checkIds reads member identifiers, one at least, as given.
 function checkIds(ids: Iterable<string>): string[] {
   const all = [...ids];
-  if (all.length < 1 || all.length > maxMembers) throw new ChestError("invalid_body", 400, "1 to 500 member identifiers");
+  if (all.length < 1) throw new ChestError("invalid_body", 400, "one member identifier at least");
   return all.map(checkId);
 }
 function checkKey(key: unknown): string {
@@ -130,7 +131,7 @@ function command(notice: Notice): Record<string, unknown> {
 }
 
 // notify puts one item in the inbox of each member who has the tool, among
-// 1 to 500 identifiers (each counted once), in their language. A link to
+// the identifiers given (each counted once), in their language. A link to
 // path, on the tool's team host, opens it. With a key, the member's item of
 // that key is replaced: new text, new time, first and unread again.
 export async function notify(memberIds: Iterable<string>, notice: Notice): Promise<Delivery> {
@@ -151,20 +152,19 @@ export async function broadcast(notice: Notice, audience: Audience = {}): Promis
   if (to !== undefined) {
     const groups = to.groups === undefined ? undefined : [...to.groups], roles = to.roles === undefined ? undefined : [...to.roles];
     if (!groups?.length && !roles?.length) throw new ChestError("invalid_body", 400, "to names groups or roles: leave it out for everyone");
-    if ((groups?.length ?? 0) > chestGroups || (roles?.length ?? 0) > toolRoles) throw new ChestError("invalid_body", 400, "16 groups and 16 roles at most");
+    if ((roles?.length ?? 0) > toolRoles) throw new ChestError("invalid_body", 400, "16 roles at most: those the tool declares");
     if (groups && !groups.every(g => typeof g === "string" && groupIdPattern.test(g))) throw new ChestError("invalid_id", 400, "invalid group identifier");
     if (roles && !roles.every(r => typeof r === "string" && rolePattern.test(r))) throw new ChestError("invalid_role", 400, "invalid role");
     target = { ...(groups?.length ? { groups } : {}), ...(roles?.length ? { roles } : {}) };
   }
   const except = audience.except === undefined ? undefined : [...audience.except];
-  if (except !== undefined && except.length > chestMembers) throw new ChestError("invalid_body", 400, "128 members left out at most");
   except?.forEach(checkId);
   const response = await ask("POST", "/notifications/broadcast", { ...command(notice), ...(target ? { to: target } : {}), ...(except?.length ? { except } : {}) });
   await expect(response, 204);
 }
 
 // withdraw removes the items of that key, from every member or from those
-// named (1 to 500): the thing they were about is done. It never says what
+// named: the thing they were about is done. It never says what
 // existed.
 export async function withdraw(key: string, memberIds?: Iterable<string>): Promise<void> {
   const command = { key: checkKey(key), ...(memberIds !== undefined ? { members: checkIds(memberIds) } : {}) };
@@ -183,10 +183,10 @@ export const badge = {
     await expect(response, 200);
     return partition(await json(response), "set", "skipped", [memberId])[0].length === 1;
   },
-  // setMany sets 1 to 500 badges, a member at most once.
+  // setMany sets badges, one at least, a member at most once.
   async setMany(counts: Iterable<BadgeCount>): Promise<BadgeWrite> {
     const all = [...counts];
-    if (all.length < 1 || all.length > maxMembers) throw new ChestError("invalid_body", 400, "1 to 500 badges");
+    if (all.length < 1) throw new ChestError("invalid_body", 400, "one badge at least");
     const badges = all.map(b => {
       if (b === null || typeof b !== "object") throw new ChestError("invalid_body", 400, "a badge is {memberId, count}");
       return { member: checkId(b.memberId), count: checkCount(b.count) };

@@ -335,14 +335,19 @@ at install and at every update.
   their notifications, by their own choice: the Chest sends them, the tool
   does nothing — it keeps no email preference and sends no reminder mail of
   its own.
+- **Page every list, and handle `member.groups === null`.** No count
+  bounds a team: read `members.list` and `groups.list` page after page
+  (`next`). A member in more groups than travel with a request (about 150)
+  has `groups: null`: read them with `members.get(member.id)`.
 - **Tell a group or everyone with `broadcast`**, never by listing members
   and notifying them in batches: the Chest resolves who has the tool now,
   in which group or role, and leaves out `except` (the author). It answers
   nothing; decide in your code who may trigger it (a role).
 - **Notify members, never others.** Only members with access receive
   anything; send member ids from your data, never addresses.
-- **Mind the quotas.** 1,000 recipients an hour (a broadcast counts each
-  recipient), 100 items per member a day, 600 badge writes a minute: notify
+- **Mind the quotas.** They grow with the team: eight recipients an hour and
+  five badge writes a minute for each member who has the tool (a broadcast
+  counts each recipient), 100 items per member a day: notify
   the people concerned, and on `QuotaExceeded` wait (a refused call changed
   nothing).
 - **Large files go through `uploadUrl`, not `put`.** `put` and `get` carry the
@@ -367,7 +372,7 @@ at install and at every update.
 | The Chest refuses the repository: `manifest` | A key the contract does not have (a typo, or a key of a later contract), a missing `"chest"`, or a value outside its rule: `npx chest check` says which. |
 | The Chest refuses the repository: `migrations` | A file of `migrations/` not named `NNNN_name.sql`, not SQL text, or migrations without the capability `database`. |
 | `ChestError` with `invalid_path` | `path` is not `/chest` or under it (a full URL, `//`, `..`, a space or non-ASCII character). |
-| `QuotaExceeded` from `notifications` | Beyond 1,000 recipients an hour, 100 items per member a day or 600 badge writes a minute; the call changed nothing. |
+| `QuotaExceeded` from `notifications` | Beyond eight recipients an hour or five badge writes a minute for each member who has the tool, or 100 items per member a day; the call changed nothing. |
 | `events.handle` always answers 401 | The body was read before `handle` (a body parser), or the environment is not the Chest's (`CHEST_TOKEN`, `CHEST_TOOL`; in a test, deliver with `fakeChest().emit`). |
 | `schedules.handle` always answers 401 | The body was read before `handle`, or the environment is not the Chest's (in a test, deliver with `fakeChest().run`). |
 | A schedule never runs | The route is not `POST /chest-schedules` at the root, the version was not approved, or its handler is missing (the tool's page says “the tool has no handler for this schedule (404)”). |

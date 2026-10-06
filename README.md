@@ -143,8 +143,9 @@ type Member = {
   role: string | null;   // one of the roles chest.json declares; null if it declares none
   isAdmin: boolean;      // owner or admin of the Chest
   isBuilder: boolean;    // builder of this tool
-  groups: string[];      // "grp_…": the groups that give the member this tool —
-                         // all of the member's groups with "members.groups"
+  groups: string[] | null; // "grp_…": the groups that give the member this tool —
+                         // all of the member's groups with "members.groups";
+                         // null when more than travel with a request (below)
   language: string;      // "en", "fr"…: the language the Chest speaks to this member
   timeZone: string;      // "America/New_York": the zone the member works in
   email?: string;        // only with the capability "members.email"
@@ -160,7 +161,11 @@ the Chest's derivation; the label changes when a claim changes meaning or
 goes, so an assertion of another shape is refused rather than misread, and
 stays when a claim is added —, `aud` equal to
 `CHEST_TOOL`, `iat` and `exp` within 5 s, the shape of each claim (`sub` an
-`mbr_` identifier, `groups` `grp_` identifiers, `language` a primary tag of
+`mbr_` identifier, `groups` `grp_` identifiers — or, instead, `groups_overage`
+for a member in more groups than an assertion carries: about 150, the
+assertion keeping within half of a Node server's 16 KiB of request headers;
+`member.groups` is then `null` and the tool reads them with
+`members.get(member.id)`, as Microsoft's tokens send a groups overage —, `language` a primary tag of
 2 or 3 lowercase letters, `time_zone` a zone of `timeZonePattern`; an
 unknown claim is ignored). Without
 `CHEST_TOKEN` or `CHEST_TOOL`, nobody is a member. The function never throws
@@ -283,7 +288,7 @@ import * as members from "@argentic/chest-sdk/members";
 const { members: page, next } = await members.list({ q: "cam", limit: 50 }); // by name, then id
 const camille = await members.get("mbr_k2qhx4mzc7v3b6nfp5r2t7w4ya");        // Member, or null
 const { members: found, former, unknown } = await members.lookup(ids);      // any number of ids
-const teams = await members.groups.list();                                  // [{id, name, members}]
+const { groups: teams, next: more } = await members.groups.list();         // [{id, name, size}], a page
 ```
 
 - **Who**: exactly the members who have the tool now — by a grant, a group,
@@ -309,11 +314,14 @@ const teams = await members.groups.list();                                  // [
   keeps each answer a minute in the process (5,000 at most); `forget()`
   empties it, and so does every event of the members' lifecycle
   (`events.handle`).
-- **`groups.list()`**: the groups the tool sees — those that give it, or
-  every group of the Chest with `members.groups` —, each `{id, name,
-  members}`, `members` being those of its members who have the tool (never
-  anyone without access). A Chest holds 16 groups of 128 members at most:
-  one call answers them all. A tool open to everyone (news, polls, a wiki)
+- **`groups.list({after, limit})`**: the groups the tool sees — those that
+  give it, or every group of the Chest with `members.groups` —, a page at a
+  time like `list` (by name then identifier, 100 by default, 500 at most,
+  `next` the cursor of the next page), each `{id, name, size}`: `size` is
+  how many of its members have the tool, and `list({group: id})` pages
+  them (never anyone without access). No count bounds a team: a Chest
+  holds as many members and groups as its capacity, and every list is
+  read page after page. A tool open to everyone (news, polls, a wiki)
   declares `members.groups` to offer “the Sales team”; `member.groups` then
   answers “is she in Sales?” without a call. Store group identifiers and
   resolve names when rendering, as for members: a renamed group needs
@@ -390,8 +398,11 @@ const { set, skipped: noAccess } = await notifications.badge.setMany([
   given; `skipped` holds identifiers the Chest does not know and members
   without access (as for `members`, the two are indistinguishable). `badge.set`
   answers `false` for such a member, `setMany` puts them in `skipped`.
-- **`notify(memberIds, {title, body?, path?, key?})`**: 1 to 500 identifiers
-  (a duplicate counts once), one inbox item per recipient. `title` is 1 to 80
+- **`notify(memberIds, {title, body?, path?, key?, translations?})`**: the
+  identifiers given, one at least (a duplicate counts once), one inbox item
+  per recipient; no count bounds them but the team's size — the Chest takes
+  a body that names each member once, and refuses one beyond
+  (`invalid_body`). `title` is 1 to 80
   characters (Unicode code points), `body` 280 at most (an empty body is
   none). `path` is a page of the tool's private part: `/chest`, or `/chest`
   followed by `/`, `?` or `#`; printable ASCII without spaces or `\`, 512
@@ -401,8 +412,8 @@ const { set, skipped: noAccess } = await notifications.badge.setMany([
 - **`broadcast(notice, {to?, except?})`**: one item, in each member's
   language, for every member who has the tool now — resolved by the Chest:
   the tool needs not see its members —, or with `to` those in any of its
-  `groups` **or** holding any of its `roles` (16 of each at most); `except`
-  leaves out up to 128 members (a Chest's capacity), the author for one. A
+  `groups` **or** holding any of its `roles` (the 16 it declares at most);
+  `except` leaves members out — the author, those who already answered. A
   group the tool does not see (one that does not give it, without
   `members.groups`, or deleted) and a role it does not declare reach no one,
   and the call answers nothing — not even how many received it: a tool that
@@ -417,7 +428,7 @@ const { set, skipped: noAccess } = await notifications.badge.setMany([
 - **Replace and withdraw.** A notification with the key of an earlier one, for
   the same member, replaces it: new text, new time, first in the inbox and
   unread again — never a duplicate. `withdraw(key, memberIds?)` removes the
-  items of that key, from every member or from those named (1 to 500), once
+  items of that key, from every member or from those named, once
   the thing they were about is done. It never says what existed.
 - **Plain text.** The Chest removes control characters (a tab or a line break
   in a title becomes a space; `body` keeps its line breaks) and the characters
@@ -427,13 +438,14 @@ const { set, skipped: noAccess } = await notifications.badge.setMany([
 - **Muting is invisible.** A member may mute the tool in their profile: their
   new items are then dropped, but they still count as `delivered`, and their
   badges stay. The tool never learns who muted it.
-- **Badges** go from 0 to 9,999, 0 clears one. `setMany` takes 1 to 500, a
-  member at most once.
-- **Quotas**, per tool: 1,000 recipients an hour (those with access, muted or
-  not, of `notify` and `broadcast` alike: at a Chest's 128 members, about
-  seven broadcasts to everyone an hour), 100 items per member a day (a replacement counts; one recipient at 100
-  refuses the whole call), 600 badge writes a minute (each badge of `setMany`
-  counts). Beyond, `QuotaExceeded` (429, the Chest answers `Retry-After`); a
+- **Badges** go from 0 to 9,999, 0 clears one. `setMany` takes one at least,
+  a member at most once.
+- **Quotas**, per tool, growing with the team — the members who have the
+  tool at the time of the call: eight recipients an hour for each of them
+  (those with access, muted or not, of `notify` and `broadcast` alike: the
+  whole team eight times an hour, whatever its size), five badge writes a
+  minute for each (each badge of `setMany` counts), and 100 items per member
+  a day (a replacement counts; one recipient at 100 refuses the whole call). Beyond, `QuotaExceeded` (429, the Chest answers `Retry-After`); a
   refused call changes nothing.
 - **Lifecycle**: a member who loses access loses the tool's items and badge;
   removing the tool removes them all. A member's inbox keeps 500 items for 90
@@ -877,7 +889,7 @@ await chest.close();
 |---|---|
 | `signAssertion(member, {token?, tool?, now?})` | A `Chest-Member` header value signed like the Chest's for that `Member` (the token and tool of the environment by default), signed as given, so a language or a zone the Chest never sends makes `member()` refuse it |
 | `withMember(request, member, options?)` | The request carrying that assertion (the options of `signAssertion`): a new Web `Request`, or the same Node request |
-| `fakeChest({members?, former?, groups?, capabilities?, receives?, files?, ai?, chest?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set), the Chest's `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_CURRENCY`, `CHEST_TEAM_URL`, `CHEST_PUBLIC_URL` (`chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`: `"Test organization"`, `"UTC"`, `"en"`, `"EUR"`, `https://<tool>-chest.chest.test`, `https://<tool>.chest.test` by default; `publicUrl: null` for a tool without a public part) and answers members, groups, files, badges, notifications, AI and erasure acknowledgments with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `members.groups` shows the groups given `grants: false` — groups that do not give the tool —, in `groups.list()` and in each member's `groups`; a group's `members` are answered among those who have the tool; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments). `former: [{id, name?, status?}]` are those the tool had who no longer have it: `lookup` answers them `no_access`, `former` (by default) or `erased` |
+| `fakeChest({members?, former?, groups?, capabilities?, receives?, files?, ai?, chest?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set), the Chest's `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_CURRENCY`, `CHEST_TEAM_URL`, `CHEST_PUBLIC_URL` (`chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`: `"Test organization"`, `"UTC"`, `"en"`, `"EUR"`, `https://<tool>-chest.chest.test`, `https://<tool>.chest.test` by default; `publicUrl: null` for a tool without a public part) and answers members, groups, files, badges, notifications, AI and erasure acknowledgments with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `members.groups` shows the groups given `grants: false` — groups that do not give the tool —, in `groups.list()` (paged, each with its `size` among those who have the tool) and in each member's `groups`; a member whose `groups` is `null` is signed with the groups overage; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments). `former: [{id, name?, status?}]` are those the tool had who no longer have it: `lookup` answers them `no_access`, `former` (by default) or `erased` |
 | Links and uploads | The fake serves the team host's part of the files on its own origin (`chest.api`): a link from `files.url` opens the content it was signed for (the image itself for a thumbnail — a fake does not reduce it; `no_thumbnail` for a file that is not a JPEG, PNG, GIF or WebP image), until it expires or the file changes; an address from `files.uploadUrl` takes one `PUT`, within its life, of the types and size it names and whose first bytes are those of its type (403 `invalid_token`, 415 `type_refused`, 400 `type_mismatch`, 413 `too_large`, as the Chest's), named by the Chest in a folder (20 hex characters and the type's ending), and answers `201 {name, type, size}`. It checks no session: a test's `fetch` is the member's browser |
 | `chest.emit(event, to)` | Delivers an event (`{type, data, id?, occurredAt?}`: a new id and now by default; name an id to deliver the same event twice) signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-events`) or a function of a Web `Request` — and says the status it answered. A `member.erased` makes its erasure one the tool may acknowledge |
 | `ai: {models?, reply?, cap?, unavailable?}` | The fake Chest's AI, deterministic and without any provider. `models`: the aliases the tool declared, `{alias, model, provider?, input?, output?}` (all four by default, `fake-default`…`fake-embedding`, provider `openrouter`, 1 and 2 USD per million tokens); another alias answers `model_not_allowed`. `reply(request)`: what a chat answers, given the wire request — a string, or `{text?, toolCalls?: {name, arguments, id?}[]}` (by default the last user message, echoed); streamed, it comes word by word, each tool call's arguments in two pieces, then the finish reason and the usage. Embeddings are unit vectors from a hash of each text (8 dimensions unless `dimensions`). Tokens count one per 4 characters; once the spending reaches `cap` (euros, 5 by default; 0 refuses at once) a call answers `cap_reached`. `unavailable` (`no_connector`, `provider_key_invalid`, `provider_unavailable`) makes chat and embeddings answer it. 60 requests a minute |

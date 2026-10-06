@@ -53,6 +53,9 @@ test("an assertion signed for a member reads as that member, in its language, on
     assert.equal(member(withMember(new Request("http://tool.test/chest"), camille, { tool: "other" })), null);
     assert.equal(member(withMember(new Request("http://tool.test/chest"), camille, { now: new Date(Date.now() - 120_000) })), null);
     assert.throws(() => signAssertion({ ...camille, id: "camille" }), /identifiers/u);
+    // More groups than travel with a request: none, and the overage said —
+    // the tool reads them with members.get.
+    assert.deepEqual(member(withMember(new Request("http://tool.test/chest"), { ...camille, groups: null })), { ...camille, groups: null });
   } finally {
     await chest.close();
   }
@@ -76,7 +79,7 @@ test("its members answer as a Chest's: order, pages, search, lookup, groups, add
     assert.equal(await members.get(id("rose")), null);
     // Erased, a former member has no name any more.
     assert.deepEqual((await members.lookup([id("eve")])).former, [{ id: id("eve"), name: null, status: "erased" }]);
-    assert.deepEqual(await members.groups.list(), [{ id: nord, name: "Nord", members: [camille.id] }]);
+    assert.deepEqual(await members.groups.list(), { groups: [{ id: nord, name: "Nord", size: 1 }], next: null });
     await assert.rejects(files.get("a.txt"), CapabilityNotGranted);
   } finally {
     await chest.close();
@@ -95,7 +98,7 @@ test("its groups that give nothing are seen only with members.groups, their memb
   const groups = [{ id: nord, name: "Nord", members: [camille.id] }, { id: sud, name: "Sud", members: [emile.id, id("mallory")], grants: false }];
   const narrow = await fakeChest({ members: [camille, inSud], groups, capabilities: ["members"] });
   try {
-    assert.deepEqual(await members.groups.list(), [{ id: nord, name: "Nord", members: [camille.id] }]);
+    assert.deepEqual((await members.groups.list()).groups, [{ id: nord, name: "Nord", size: 1 }]);
     assert.deepEqual((await members.get(emile.id))?.groups, []);
     assert.deepEqual((await members.list({ group: sud })).members, []);
   } finally {
@@ -103,7 +106,10 @@ test("its groups that give nothing are seen only with members.groups, their memb
   }
   const every = await fakeChest({ members: [camille, inSud], groups, capabilities: ["members", "members.groups", "notifications"] });
   try {
-    assert.deepEqual(await members.groups.list(), [{ id: nord, name: "Nord", members: [camille.id] }, { id: sud, name: "Sud", members: [emile.id] }]);
+    // Sud lists someone without the tool: not counted.
+    assert.deepEqual((await members.groups.list()).groups, [{ id: nord, name: "Nord", size: 1 }, { id: sud, name: "Sud", size: 1 }]);
+    const first = await members.groups.list({ limit: 1 });
+    assert.deepEqual([first.groups.map(g => g.name), (await members.groups.list({ after: first.next!, limit: 1 })).groups.map(g => g.name)], [["Nord"], ["Sud"]]);
     assert.deepEqual((await members.get(emile.id))?.groups, [sud]);
     assert.deepEqual((await members.list({ group: sud })).members.map(m => m.id), [emile.id]);
   } finally {
@@ -261,29 +267,28 @@ test("its notification quotas are a Chest's, and a refused call changes nothing"
   const chest = await fakeChest({ members: [camille, ...many] });
   try {
     const ids = many.map(m => m.id);
-    // 1,000 recipients an hour, from the first call.
-    await notifications.notify(ids, { title: "a" });
-    mock.timers.setTime(1_790_000_000_000 + 1_800_000);
-    await notifications.notify(ids, { title: "b" });
+    // Eight recipients an hour for each of the 501 members who have the
+    // tool: the whole team eight times, then the hour is spent.
+    for (let i = 0; i < 8; i++) await notifications.notify(ids, { title: "a" + i });
+    for (let i = 0; i < 8; i++) await notifications.notify([camille.id], { title: "b" + i });
     await assert.rejects(notifications.notify([camille.id], { title: "c" }), QuotaExceeded);
     const response = await fetch(chest.api + "/notifications", { method: "POST", body: JSON.stringify({ members: [camille.id], title: "c" }) });
-    assert.deepEqual([response.status, response.headers.get("retry-after")], [429, "1800"]);
+    assert.deepEqual([response.status, response.headers.get("retry-after")], [429, "3600"]);
     await response.body?.cancel();
-    assert.equal(chest.notifications.length, 1000);
+    assert.equal(chest.notifications.length, 4008);
     mock.timers.setTime(1_790_000_000_000 + 3_600_000);
-    await notifications.notify([camille.id], { title: "c" });
     // 100 items per member a day, replacements counted: a member at 100
     // refuses the whole call.
-    for (let i = 1; i < 100; i++) await notifications.notify([camille.id], { title: "d", key: "same" });
+    for (let i = 8; i < 100; i++) await notifications.notify([camille.id], { title: "d", key: "same" });
     await assert.rejects(notifications.notify([camille.id, ids[0]!], { title: "e" }), QuotaExceeded);
-    assert.equal(chest.notifications.filter(n => n.member === camille.id).length, 2);
+    assert.equal(chest.notifications.filter(n => n.member === camille.id).length, 9);
     // Recipients without access are not counted.
     assert.deepEqual(await notifications.notify([id("mallory")], { title: "f" }), { delivered: [], skipped: [id("mallory")] });
     mock.timers.setTime(1_790_000_000_000 + 3_600_000 + 86_400_000);
     await notifications.notify([camille.id], { title: "g" });
-    // 600 badge writes a minute, each badge of setMany one.
-    await notifications.badge.setMany(ids.map(memberId => ({ memberId, count: 1 })));
-    await notifications.badge.setMany(ids.slice(0, 100).map(memberId => ({ memberId, count: 2 })));
+    // Five badge writes a minute for each member, each badge of setMany one.
+    for (let i = 0; i < 5; i++) await notifications.badge.setMany(ids.map(memberId => ({ memberId, count: i + 1 })));
+    await notifications.badge.setMany(ids.slice(0, 5).map(memberId => ({ memberId, count: 9 })));
     await assert.rejects(notifications.badge.set(camille.id, 1), QuotaExceeded);
     assert.equal(chest.badges.has(camille.id), false);
     mock.timers.setTime(1_790_000_000_000 + 3_600_000 + 86_400_000 + 60_000);

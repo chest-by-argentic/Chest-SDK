@@ -133,14 +133,14 @@ export function signAssertion(member: Member, options: AssertionOptions = {}): s
   const token = options.token ?? process.env["CHEST_TOKEN"];
   const tool = options.tool ?? process.env["CHEST_TOOL"];
   if (!token || !tool) throw new Error("signAssertion needs a token and a tool: start a fakeChest, or name them");
-  if (!memberIdPattern.test(member.id) || !member.groups.every(g => groupIdPattern.test(g))) throw new Error("signAssertion needs identifiers of the Chest's shape (mbr_…, grp_…)");
+  if (!memberIdPattern.test(member.id) || !(member.groups ?? []).every(g => groupIdPattern.test(g))) throw new Error("signAssertion needs identifiers of the Chest's shape (mbr_…, grp_…)");
   const iat = Math.floor((options.now ?? new Date()).getTime() / 1000);
   // Under the label of the assertion's shape, as the Chest signs it and
   // member() reads it.
   return signClaims("Chest-Member v2", {
     iss: `https://${tool}-chest.chest.test`, aud: tool, iat, exp: iat + 60, sub: member.id,
     given_name: member.firstName, family_name: member.lastName, name: member.name, picture: member.photo ?? "", role: member.role ?? "",
-    admin: member.isAdmin, builder: member.isBuilder, groups: member.groups, time_zone: member.timeZone, ...(member.email === undefined ? {} : { email: member.email }),
+    admin: member.isAdmin, builder: member.isBuilder, ...(member.groups === null ? { groups_overage: true } : { groups: member.groups }), time_zone: member.timeZone, ...(member.email === undefined ? {} : { email: member.email }),
     language: member.language,
   }, token);
 }
@@ -178,9 +178,13 @@ const signatures: Record<string, (data: Buffer) => boolean> = {
 const extensions: Record<string, string> = { "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp", "image/avif": ".avif", "image/heic": ".heic", "application/pdf": ".pdf", "text/plain": ".txt", "text/csv": ".csv", "application/json": ".json", "application/zip": ".zip", "video/mp4": ".mp4", "audio/mpeg": ".mp3" };
 const newToken = (): string => randomBytes(18).toString("base64url") + "." + randomBytes(12).toString("base64url");
 // Its notifications: recipients and badges a call, text, quotas.
-const maxRecipients = 500, maxTitle = 80, maxText = 280, maxPath = 512, maxCount = 9999;
-const recipientsPerHour = 1000, itemsPerDay = 100, badgesPerMinute = 600;
-const maxMembers = 128, maxGroups = 16, maxRoles = 16;
+// No count bounds a call but the team's size: a body takes the texts and an
+// entry for each member who has the tool; the quotas grow with them —
+// eight recipients an hour and five badges a minute for each member, a
+// hundred items a member a day.
+const maxTitle = 80, maxText = 280, maxPath = 512, maxCount = 9999, maxRoles = 16;
+const textBytes = 64 << 10, memberBytes = 64;
+const recipientsPerMemberHour = 8, badgesPerMemberMinute = 5, itemsPerDay = 100;
 const keyPattern = /^[a-z0-9._:-]{1,64}$/u, rolePattern = /^[a-z][a-z0-9-]{0,47}$/u;
 const reordering = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 const cleanTitle = (s: string): string => s.replace(/[\t\r\n]/gu, " ").replace(/\p{Cc}/gu, "").replace(reordering, "").trim();
@@ -244,7 +248,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   // The groups the tool sees: those that give it, or all with members.groups;
   // a member's groups among them (an identifier it was not given stays).
   const unseen = () => new Set(everyGroup ? [] : chest.groups.filter(g => g.grants === false).map(g => g.id));
-  const groupsOf = (m: Member) => m.groups.filter(g => !unseen().has(g));
+  const groupsOf = (m: Member) => (m.groups ?? []).filter(g => !unseen().has(g));
   const shown = (m: Member) => ({ id: m.id, first_name: m.firstName, last_name: m.lastName, name: m.name, photo: m.photo, role: m.role, admin: m.isAdmin, builder: m.isBuilder, groups: groupsOf(m), language: m.language, time_zone: m.timeZone, ...(email && m.email !== undefined ? { email: m.email } : {}) });
   const key = (m: Member) => fold(m.name) + "\u0000" + m.id;
   const described = (name: string, f: FakeFile) => ({ name, type: f.type, size: f.data.byteLength, sha256: createHash("sha256").update(f.data).digest("hex"), updated: f.updated });
@@ -291,7 +295,16 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       const m = chest.members.find(x => x.id === id);
       return m ? send(response, 200, shown(m)) : send(response, 404, { error: "member_not_found" });
     }
-    if (request.method === "GET" && url.pathname === "/groups") return send(response, 200, { groups: chest.groups.filter(g => !unseen().has(g.id)).map(g => ({ id: g.id, name: g.name, members: g.members.filter(access) })) });
+    if (request.method === "GET" && url.pathname === "/groups") {
+      const q = url.searchParams, keys = [...q.keys()];
+      const limit = q.has("limit") ? Number(q.get("limit")) : defaultLimit;
+      const after = q.has("after") ? Buffer.from(q.get("after")!, "base64url").toString() : "";
+      if ((q.has("after") && !groupIdPattern.test(after.split("\u0000")[1] ?? "")) || keys.some(k => !["after", "limit"].includes(k) || q.getAll(k).length !== 1) || !Number.isInteger(limit) || limit < 1 || limit > maxLimit || String(limit) !== (q.get("limit") ?? String(defaultLimit))) return send(response, 400, { error: "invalid_query" });
+      const groupKey = (g: FakeGroup) => fold(g.name) + "\u0000" + g.id;
+      const listed = chest.groups.filter(g => !unseen().has(g.id) && (after === "" || groupKey(g) > after)).sort((a, b) => groupKey(a) < groupKey(b) ? -1 : groupKey(a) > groupKey(b) ? 1 : 0);
+      const page = listed.slice(0, limit);
+      return send(response, 200, { groups: page.map(g => ({ id: g.id, name: g.name, size: g.members.filter(access).length })), next: listed.length > limit ? Buffer.from(groupKey(page.at(-1)!)).toString("base64url") : null });
+    }
     send(response, 404, { error: "not_found" });
   }
 
@@ -408,7 +421,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   };
   // recipients reads 1 to 500 member identifiers, each once.
   function recipients(value: unknown): string[] | { error: string } {
-    if (!Array.isArray(value) || value.length < 1 || value.length > maxRecipients) return { error: "invalid_body" };
+    if (!Array.isArray(value) || value.length < 1) return { error: "invalid_body" };
     if (!value.every(v => typeof v === "string" && memberIdPattern.test(v))) return { error: "invalid_id" };
     return [...new Set(value as string[])];
   }
@@ -417,7 +430,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     if (!capabilities.has("notifications")) return send(response, 403, { error: "capability_not_granted" });
     const badge = request.method === "PUT" && url.pathname.startsWith("/badges/");
     if (!badge && !(request.method === "PUT" && url.pathname === "/badges") && !(request.method === "POST" && ["/notifications", "/notifications/broadcast", "/notifications/withdraw"].includes(url.pathname))) return send(response, 404, { error: "not_found" });
-    const raw = await body(request, 64 << 10);
+    const raw = await body(request, textBytes + memberBytes * chest.members.length);
     let command: Record<string, unknown> | null = null;
     try {
       const value = JSON.parse(raw?.toString() ?? "") as unknown;
@@ -425,6 +438,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     } catch {
       command = null;
     }
+    const audience = Math.max(chest.members.length, 1);
     const keys = (...allowed: string[]) => command !== null && Object.keys(command).every(k => allowed.includes(k));
     const now = Date.now();
     if (badge || url.pathname === "/badges") {
@@ -436,13 +450,13 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
         writes = [{ member: id, count: command!["count"] as number }];
       } else {
         const list = command?.["badges"];
-        if (!keys("badges") || !Array.isArray(list) || list.length < 1 || list.length > maxRecipients || !list.every(b => b !== null && typeof b === "object" && !Array.isArray(b) && Object.keys(b).every(k => k === "member" || k === "count"))) return send(response, 400, { error: "invalid_body" });
+        if (!keys("badges") || !Array.isArray(list) || list.length < 1 || !list.every(b => b !== null && typeof b === "object" && !Array.isArray(b) && Object.keys(b).every(k => k === "member" || k === "count"))) return send(response, 400, { error: "invalid_body" });
         writes = list as { member: string; count: number }[];
         if (!writes.every(b => typeof b.member === "string" && memberIdPattern.test(b.member))) return send(response, 400, { error: "invalid_id" });
       }
       if (!writes.every(b => typeof b.count === "number" && Number.isInteger(b.count) && b.count >= 0 && b.count <= maxCount)) return send(response, 400, { error: "invalid_count" });
       if (new Set(writes.map(b => b.member)).size !== writes.length) return send(response, 400, { error: "invalid_body" });
-      if (live(minute, 60_000, now) && minute.count + writes.length > badgesPerMinute) return send(response, 429, { error: "quota_exceeded" }, wait(minute, 60_000, now));
+      if (live(minute, 60_000, now) && minute.count + writes.length > badgesPerMemberMinute * audience) return send(response, 429, { error: "quota_exceeded" }, wait(minute, 60_000, now));
       count(minute, 60_000, now, writes.length);
       const answer = { set: [] as string[], skipped: [] as string[] };
       for (const b of writes) {
@@ -472,7 +486,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       const to = command!["to"] as Record<string, unknown> | undefined, except = command!["except"];
       if (to !== undefined && (to === null || typeof to !== "object" || Array.isArray(to) || !Object.keys(to).every(k => k === "groups" || k === "roles"))) return send(response, 400, { error: "invalid_body" });
       const groups = to?.["groups"] ?? [], roles = to?.["roles"] ?? [];
-      if (!Array.isArray(groups) || !Array.isArray(roles) || (to !== undefined && groups.length + roles.length === 0) || groups.length > maxGroups || roles.length > maxRoles || (except !== undefined && (!Array.isArray(except) || except.length > maxMembers))) return send(response, 400, { error: "invalid_body" });
+      if (!Array.isArray(groups) || !Array.isArray(roles) || (to !== undefined && groups.length + roles.length === 0) || roles.length > maxRoles || (except !== undefined && !Array.isArray(except))) return send(response, 400, { error: "invalid_body" });
       if (!groups.every(g => typeof g === "string" && groupIdPattern.test(g)) || !((except ?? []) as unknown[]).every(id => typeof id === "string" && memberIdPattern.test(id))) return send(response, 400, { error: "invalid_id" });
       if (!roles.every(r => typeof r === "string" && rolePattern.test(r))) return send(response, 400, { error: "invalid_role" });
       ids = chest.members.filter(m => !((except ?? []) as string[]).includes(m.id) && (to === undefined || (m.role !== null && roles.includes(m.role)) || groupsOf(m).some(g => groups.includes(g)))).map(m => m.id);
@@ -505,7 +519,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       }
     }
     const kept = ids.filter(access);
-    if (live(hour, 3_600_000, now) && hour.count + kept.length > recipientsPerHour) return send(response, 429, { error: "quota_exceeded" }, wait(hour, 3_600_000, now));
+    if (live(hour, 3_600_000, now) && hour.count + kept.length > recipientsPerMemberHour * audience) return send(response, 429, { error: "quota_exceeded" }, wait(hour, 3_600_000, now));
     const full = kept.map(id => days.get(id)).filter((w): w is Window => live(w, 86_400_000, now) && w!.count >= itemsPerDay);
     if (full.length > 0) return send(response, 429, { error: "quota_exceeded" }, wait(full.reduce((a, b) => a.start > b.start ? a : b), 86_400_000, now));
     count(hour, 3_600_000, now, kept.length);
