@@ -117,7 +117,7 @@
       },
       {
         "key": "receives",
-        "rule": "The events posted to POST /chest-events: \"member.*\", the members' lifecycle (requires the capability members), and event types other tools emit, from whichever tool emits them — never one the tool emits itself. Each approved as a permission, with the tools it comes from.",
+        "rule": "The events posted to POST /chest-events: \"member.*\", the members' lifecycle (requires the capability members), and event types, from whichever other tool emits them — never the tool's own events. Each approved as a permission, with the tools it comes from.",
         "example": [
           "member.*",
           "quote.accepted"
