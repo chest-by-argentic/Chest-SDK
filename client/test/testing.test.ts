@@ -267,21 +267,19 @@ test("its notification quotas are a Chest's, and a refused call changes nothing"
   const chest = await fakeChest({ members: [camille, ...many] });
   try {
     const ids = many.map(m => m.id);
-    // Eight recipients an hour for each of the 501 members who have the
-    // tool: the whole team eight times, then the hour is spent.
-    for (let i = 0; i < 8; i++) await notifications.notify(ids, { title: "a" + i });
-    for (let i = 0; i < 8; i++) await notifications.notify([camille.id], { title: "b" + i });
-    await assert.rejects(notifications.notify([camille.id], { title: "c" }), QuotaExceeded);
-    const response = await fetch(chest.api + "/notifications", { method: "POST", body: JSON.stringify({ members: [camille.id], title: "c" }) });
-    assert.deepEqual([response.status, response.headers.get("retry-after")], [429, "3600"]);
-    await response.body?.cancel();
-    assert.equal(chest.notifications.length, 4008);
+    // 100 items per member a day, per member, never for the tool: the whole
+    // team of 501 at once, again and again; replacements counted; a member at
+    // 100 refuses the whole call.
+    for (let i = 0; i < 3; i++) await notifications.notify([camille.id, ...ids], { title: "a" + i });
+    assert.equal(chest.notifications.length, 1503);
     mock.timers.setTime(1_790_000_000_000 + 3_600_000);
-    // 100 items per member a day, replacements counted: a member at 100
-    // refuses the whole call.
-    for (let i = 8; i < 100; i++) await notifications.notify([camille.id], { title: "d", key: "same" });
+    for (let i = 3; i < 100; i++) await notifications.notify([camille.id], { title: "d", key: "same" });
     await assert.rejects(notifications.notify([camille.id, ids[0]!], { title: "e" }), QuotaExceeded);
-    assert.equal(chest.notifications.filter(n => n.member === camille.id).length, 9);
+    const response = await fetch(chest.api + "/notifications", { method: "POST", body: JSON.stringify({ members: [camille.id], title: "c" }) });
+    assert.deepEqual([response.status, response.headers.get("retry-after")], [429, "82800"]);
+    await response.body?.cancel();
+    assert.equal(chest.notifications.filter(n => n.member === camille.id).length, 4);
+    await notifications.notify(ids, { title: "the others" });
     // Recipients without access are not counted.
     assert.deepEqual(await notifications.notify([id("mallory")], { title: "f" }), { delivered: [], skipped: [id("mallory")] });
     mock.timers.setTime(1_790_000_000_000 + 3_600_000 + 86_400_000);

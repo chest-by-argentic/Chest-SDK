@@ -20,9 +20,9 @@ import { groupIdPattern, languagePattern, memberIdPattern } from "./member.js";
 // Text is plain: the Chest removes control characters, interprets neither
 // Markdown nor HTML, keeps line breaks in body. A member who muted the tool
 // counts as delivered: the tool never learns it. Errors: CapabilityNotGranted
-// (403), QuotaExceeded (429; they grow with the team: eight recipients an
-// hour and five badge writes a minute for each member who has the tool — a
-// broadcast counts each recipient —, 100 items per member a day),
+// (403), QuotaExceeded (429; per member, never fixed for the tool: 100 items
+// per member a day — a broadcast counts for each recipient —, five badge
+// writes a minute for each member who has the tool),
 // Unavailable (503, or the Chest not reached), ChestError otherwise
 // (invalid_id, invalid_role, invalid_title, invalid_text, invalid_path,
 // invalid_key, invalid_language, invalid_count, invalid_body 400).

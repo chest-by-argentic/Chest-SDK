@@ -440,12 +440,12 @@ const { set, skipped: noAccess } = await notifications.badge.setMany([
   badges stay. The tool never learns who muted it.
 - **Badges** go from 0 to 9,999, 0 clears one. `setMany` takes one at least,
   a member at most once.
-- **Quotas**, per tool, growing with the team — the members who have the
-  tool at the time of the call: eight recipients an hour for each of them
-  (those with access, muted or not, of `notify` and `broadcast` alike: the
-  whole team eight times an hour, whatever its size), five badge writes a
-  minute for each (each badge of `setMany` counts), and 100 items per member
-  a day (a replacement counts; one recipient at 100 refuses the whole call). Beyond, `QuotaExceeded` (429, the Chest answers `Retry-After`); a
+- **Quotas**, per tool and per member, never fixed for the tool: 100 items
+  per member a day (those with access, muted or not, of `notify` and
+  `broadcast` alike; a replacement counts; one recipient at 100 refuses the
+  whole call) — so the whole team, whatever its size, can be told a hundred
+  times a day —, and five badge writes a minute for each member who has the
+  tool (each badge of `setMany` counts). Beyond, `QuotaExceeded` (429, the Chest answers `Retry-After`); a
   refused call changes nothing.
 - **Lifecycle**: a member who loses access loses the tool's items and badge;
   removing the tool removes them all. A member's inbox keeps 500 items for 90

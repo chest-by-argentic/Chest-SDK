@@ -179,12 +179,11 @@ const extensions: Record<string, string> = { "image/jpeg": ".jpg", "image/png": 
 const newToken = (): string => randomBytes(18).toString("base64url") + "." + randomBytes(12).toString("base64url");
 // Its notifications: recipients and badges a call, text, quotas.
 // No count bounds a call but the team's size: a body takes the texts and an
-// entry for each member who has the tool; the quotas grow with them —
-// eight recipients an hour and five badges a minute for each member, a
-// hundred items a member a day.
+// entry for each member who has the tool; the quotas are per member — a
+// hundred items a member a day, five badges a minute for each member.
 const maxTitle = 80, maxText = 280, maxPath = 512, maxCount = 9999, maxRoles = 16;
 const textBytes = 64 << 10, memberBytes = 64;
-const recipientsPerMemberHour = 8, badgesPerMemberMinute = 5, itemsPerDay = 100;
+const badgesPerMemberMinute = 5, itemsPerDay = 100;
 const keyPattern = /^[a-z0-9._:-]{1,64}$/u, rolePattern = /^[a-z][a-z0-9-]{0,47}$/u;
 const reordering = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
 const cleanTitle = (s: string): string => s.replace(/[\t\r\n]/gu, " ").replace(/\p{Cc}/gu, "").replace(reordering, "").trim();
@@ -404,10 +403,10 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   }
 
   // The windows of the notification quotas, each from the first call it
-  // counts: the tool's recipients this hour, each member's items this day,
-  // the tool's badge writes this minute.
+  // counts: each member's items this day, the tool's badge writes this
+  // minute.
   type Window = { start: number; count: number };
-  const hour: Window = { start: 0, count: 0 }, minute: Window = { start: 0, count: 0 }, days = new Map<string, Window>();
+  const minute: Window = { start: 0, count: 0 }, days = new Map<string, Window>();
   const live = (w: Window | undefined, span: number, now: number): boolean => w !== undefined && w.count > 0 && now - w.start < span;
   const wait = (w: Window, span: number, now: number): Record<string, string> => ({ "Retry-After": String(Math.max(1, Math.ceil((w.start + span - now) / 1000))) });
   const count = (w: Window, span: number, now: number, n: number): void => {
@@ -519,10 +518,8 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       }
     }
     const kept = ids.filter(access);
-    if (live(hour, 3_600_000, now) && hour.count + kept.length > recipientsPerMemberHour * audience) return send(response, 429, { error: "quota_exceeded" }, wait(hour, 3_600_000, now));
     const full = kept.map(id => days.get(id)).filter((w): w is Window => live(w, 86_400_000, now) && w!.count >= itemsPerDay);
     if (full.length > 0) return send(response, 429, { error: "quota_exceeded" }, wait(full.reduce((a, b) => a.start > b.start ? a : b), 86_400_000, now));
-    count(hour, 3_600_000, now, kept.length);
     for (const id of kept) {
       if (!days.has(id)) days.set(id, { start: 0, count: 0 });
       count(days.get(id)!, 86_400_000, now, 1);
