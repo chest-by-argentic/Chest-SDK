@@ -19,20 +19,26 @@
 //   room.presence.on(list => showOnline(list));
 //   live.on("closed", reason => reason === "access_removed" ? showAccessRemoved() : location.reload());
 //
-// It reconnects by itself — at once when the page comes back to the
-// foreground or the network returns, then 0.5 s to 30 s apart —, joins its
-// channels again with the last number each saw, and the Chest replays what
-// was missed, or says resync. It stops for good when access was removed
-// (closed "access_removed") or the session ended (closed "signed_out": a
-// reload signs in again, silently while the provider's session lasts).
-// Content is the tool's: render it as text, never as HTML.
+// It reconnects by itself, unseen: a cut is told (status false) only once
+// it lasts 3 s; it tries again 0.5 s to 30 s apart — at once when the page
+// comes back to the foreground, from the cache or to the network, never
+// while the browser is offline, and no sooner than the Chest asks when it
+// is full —, joins its channels again with where each stood, and the Chest
+// gives what was missed however long the page was away: the tool's events
+// of the last 2 minutes, the feeds' rows of the last 7 days — or says
+// resync. While connected it renews the member's session every 5 minutes.
+// It stops for good when access was removed (closed "access_removed") or
+// the session ended (closed "signed_out": a reload signs in again, silently
+// while the provider's session lasts). Content is the tool's: render it as
+// text, never as HTML.
 
 // The subprotocol of the Chest's realtime, and where it is.
 const protocol = "chest-realtime.v1";
 const path = "/_chest/realtime";
-// The rhythm: the backoff's first and last delay, the ping that finds a
-// dead network, how long its answer may take.
-const firstDelay = 500, lastDelay = 30000, pingEvery = 25000, pingWait = 10000;
+// The rhythm: the backoff's first and last delay; the ping that finds a
+// dead network, how long its answer may take, and how long when the page
+// wakes; how often the session is renewed; how long a cut stays untold.
+const firstDelay = 500, lastDelay = 30000, pingEvery = 25000, pingWait = 10000, wakeWait = 5000, renewEvery = 300000, quietFor = 3000;
 
 // Someone present in a channel, and the state their page tracks.
 export type Present = { id: string; state: Record<string, unknown> };
@@ -75,7 +81,8 @@ export interface Live {
   // channel joins a channel, once: the same name is the same channel.
   channel(name: string): Channel;
   // on listens to the tool's direct events (realtime.send), to "status"
-  // (connected or not) and to "closed" (for good).
+  // (true once connected; false only when a cut lasts 3 s, then true when
+  // connected again) and to "closed" (for good).
   on(event: "direct", listener: (event: string, payload: unknown) => void): () => void;
   on(event: "status", listener: (connected: boolean) => void): () => void;
   on(event: "closed", listener: (reason: ClosedReason) => void): () => void;
@@ -85,10 +92,14 @@ export interface Live {
 }
 
 // What the page offers, where it runs in a browser.
-type Page = {
+type Listening = {
+  addEventListener(type: string, listener: (event: { persisted?: boolean }) => void): void;
+  removeEventListener(type: string, listener: (event: { persisted?: boolean }) => void): void;
+};
+type Page = Partial<Listening> & {
   location?: { protocol: string; host: string };
-  document?: { visibilityState?: string; addEventListener(type: string, listener: () => void): void };
-  addEventListener?(type: string, listener: () => void): void;
+  document?: Listening & { visibilityState?: string };
+  navigator?: { onLine?: boolean };
 };
 
 type ChannelState = {
@@ -97,10 +108,13 @@ type ChannelState = {
   presenceListeners: Set<(list: Present[]) => void>;
   present: Map<string, Record<string, unknown>>;
   tracked?: Record<string, unknown>;
-  // seq is the last number seen, epoch the Chest's then: what a re-join
-  // asks to be replayed from.
-  seq: number | undefined;
+  // Where the page stands, what a re-join asks to be given from: the
+  // Chest's epoch and the last number seen in it (its memory), and the
+  // highest position of a feed's row seen (the tool's change log; 0 for
+  // none). epoch is undefined until joined once.
   epoch: string | undefined;
+  seq: number;
+  pos: number;
   joined: boolean;
   kicked: boolean;
 };
@@ -116,9 +130,12 @@ export function connect(options: { url?: string } = {}): Live {
   const status = new Set<(connected: boolean) => void>();
   const closed = new Set<(reason: ClosedReason) => void>();
   const answers = new Map<number, (m: Record<string, unknown>) => void>();
-  let socket: WebSocket | undefined, ref = 0, attempts = 0, ended = false;
-  let epoch: string | undefined, member: string | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined, pinger: ReturnType<typeof setInterval> | undefined;
+  // connected: the Chest said hello on the socket; asking: a question before
+  // connecting is on its way; told: the status the page was last told.
+  let socket: WebSocket | undefined, ref = 0, attempts = 0, ended = false, connected = false, asking = false;
+  let epoch: string | undefined, member: string | undefined, told: boolean | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined, quiet: ReturnType<typeof setTimeout> | undefined, silence: ReturnType<typeof setTimeout> | undefined;
+  let pinger: ReturnType<typeof setInterval> | undefined, renewer: ReturnType<typeof setInterval> | undefined;
 
   const emit = <T extends unknown[]>(listeners: Set<(...args: T) => void>, ...args: T) => {
     for (const listener of [...listeners]) {
@@ -128,6 +145,10 @@ export function connect(options: { url?: string } = {}): Live {
   const fire = (ch: ChannelState, event: string, payload: unknown, from?: string, partial = false) => {
     const listeners = ch.listeners.get(event);
     if (listeners) emit(listeners, payload, from, partial);
+  };
+  const tell = (up: boolean) => {
+    told = up;
+    emit(status, up);
   };
   const presenceChanged = (ch: ChannelState) => emit(ch.presenceListeners, [...ch.present].map(([id, state]) => ({ id, state })));
   const write = (message: Record<string, unknown>, answer?: (m: Record<string, unknown>) => void): boolean => {
@@ -141,23 +162,27 @@ export function connect(options: { url?: string } = {}): Live {
     return true;
   };
 
+  // join joins a channel — again, from where it stood: the Chest gives
+  // what was missed, then what comes; or says resync.
   const join = (ch: ChannelState) => {
-    const since = ch.seq !== undefined && ch.epoch !== undefined ? { since: { epoch: ch.epoch, seq: ch.seq } } : {};
-    const seen = ch.seq;
-    write({ op: "join", ch: ch.name, ...since }, answer => {
+    const since = ch.epoch === undefined ? undefined : { epoch: ch.epoch, seq: ch.seq, ...(ch.pos > 0 ? { pos: ch.pos } : {}) };
+    write({ op: "join", ch: ch.name, ...(since ? { since } : {}) }, answer => {
       if (answer["op"] !== "ok") {
         ch.joined = false;
         fire(ch, "refused", answer["code"]);
         return;
       }
       ch.joined = true;
+      const replayed = since !== undefined && answer["resync"] !== true;
+      // Replayed in the same epoch, the numbers go on from the page's own;
+      // otherwise from the Chest's.
+      if (!replayed || since.epoch !== epoch) ch.seq = answer["seq"] as number;
       ch.epoch = epoch;
-      const replayed = since.since !== undefined && answer["resync"] !== true;
-      ch.seq = replayed ? seen : answer["seq"] as number;
+      if (typeof answer["pos"] === "number") ch.pos = answer["pos"];
       ch.present = new Map((Array.isArray(answer["presence"]) ? answer["presence"] as Present[] : []).map(p => [p.id, p.state]));
       if (ch.tracked && member !== undefined) ch.present.set(member, ch.tracked);
       if (ch.tracked) write({ op: "track", ch: ch.name, state: ch.tracked });
-      if (answer["presence"] !== undefined || since.since !== undefined) presenceChanged(ch);
+      if (answer["presence"] !== undefined || since !== undefined) presenceChanged(ch);
       fire(ch, "joined", { replayed });
       if (answer["resync"] === true) fire(ch, "resync", undefined);
     });
@@ -176,17 +201,23 @@ export function connect(options: { url?: string } = {}): Live {
         epoch = m["epoch"] as string;
         member = m["member"] as string;
         attempts = 0;
-        emit(status, true);
+        connected = true;
+        clearTimeout(quiet);
+        quiet = undefined;
+        if (told !== true) tell(true);
+        pinger = setInterval(() => check(pingWait), pingEvery);
+        renewer = setInterval(() => void ask(), renewEvery);
         for (const c of channels.values()) if (!c.kicked) join(c);
         return;
       case "msg":
         if (!ch || !ch.joined) return;
-        if (typeof m["seq"] === "number") {
-          if (ch.seq !== undefined && m["seq"] <= ch.seq) return;
-          const gap = ch.seq !== undefined && m["seq"] !== ch.seq + 1;
-          ch.seq = m["seq"];
-          if (gap) fire(ch, "resync", undefined);
+        // A feed's row: its position in the tool's change log says whether
+        // the page has it already (given again by a replay).
+        if (typeof m["pos"] === "number") {
+          if (m["pos"] <= ch.pos) return;
+          ch.pos = m["pos"];
         }
+        if (typeof m["seq"] === "number") ch.seq = m["seq"];
         fire(ch, m["event"] as string, m["payload"], m["from"] as string | undefined, m["partial"] === true);
         return;
       case "presence":
@@ -206,89 +237,125 @@ export function connect(options: { url?: string } = {}): Live {
     }
   };
 
+  // check pings the Chest: no answer within wait, the connection is dead
+  // and another is opened at once.
+  const check = (wait: number) => {
+    const s = socket;
+    if (!s || !connected) return;
+    clearTimeout(silence);
+    silence = setTimeout(() => lost(s, true), wait);
+    write({ op: "ping" }, () => clearTimeout(silence));
+  };
+  // unwatch stops what runs while connected.
+  const unwatch = () => {
+    clearInterval(pinger);
+    clearInterval(renewer);
+    clearTimeout(silence);
+  };
+  // lost forgets a connection that closed or went silent, tells the page
+  // only if no other comes within quietFor, and connects again: at once, or
+  // after the backoff.
+  const lost = (s: WebSocket, now: boolean) => {
+    if (socket !== s) return;
+    socket = undefined;
+    connected = false;
+    unwatch();
+    if (s.readyState <= 1) s.close(4000);
+    answers.clear();
+    for (const c of channels.values()) c.joined = false;
+    if (told === true && quiet === undefined) quiet = setTimeout(() => { quiet = undefined; tell(false); }, quietFor);
+    reconnect(now ? 0 : backoff());
+  };
+  // stop stops everything, for good.
+  const stop = () => {
+    ended = true;
+    unwatch();
+    clearTimeout(timer);
+    clearTimeout(quiet);
+    if (socket && socket.readyState <= 1) socket.close(1000);
+    socket = undefined;
+    page.removeEventListener?.("online", wake);
+    page.removeEventListener?.("pageshow", restored);
+    page.document?.removeEventListener("visibilitychange", visible);
+  };
   // end ends for good, and says why.
   const end = (reason: ClosedReason) => {
     if (ended) return;
-    ended = true;
     stop();
     emit(closed, reason);
   };
-  const stop = () => {
-    clearTimeout(timer);
-    clearInterval(pinger);
-    if (socket && socket.readyState <= 1) socket.close(1000);
-    socket = undefined;
-  };
 
-  // reconnect waits, the longer the more attempts failed — none when the
-  // page or the network comes back —, then opens again; a connection that
-  // never opened asks the Chest whether the session still holds.
-  const reconnect = (now = false) => {
-    if (ended || timer !== undefined) return;
-    const delay = now ? 0 : Math.random() * Math.min(lastDelay, firstDelay * 2 ** attempts);
-    attempts++;
-    timer = setTimeout(async () => {
-      timer = undefined;
-      if (attempts > 2 && await signedOut()) return;
-      open();
-    }, delay);
+  // backoff is the wait before the next attempt, the longer the more failed.
+  const backoff = () => Math.random() * Math.min(lastDelay, firstDelay * 2 ** attempts++);
+  // reconnect attempts again after delay (none: at once), unless an
+  // attempt is already on its way.
+  const reconnect = (delay: number) => {
+    if (ended || socket || asking || timer !== undefined) return;
+    if (delay === 0) return void attempt();
+    timer = setTimeout(attempt, delay);
   };
-  // signedOut asks the Chest, without upgrading, whether the member still
-  // may connect: 401 ends as signed out, 403 as access removed.
-  const signedOut = async (): Promise<boolean> => {
+  // attempt asks the Chest before opening: whether the member still may
+  // connect, and whether it has room — when full, it waits as long as the
+  // Chest asks. Offline, it waits for the network ("online").
+  const attempt = async () => {
+    timer = undefined;
+    if (page.navigator?.onLine === false) return;
+    asking = true;
+    const answer = await ask();
+    asking = false;
+    if (ended || socket) return;
+    if (answer?.status === 503) return reconnect(Math.max(backoff(), answer.retryAfter * 1000));
+    open();
+  };
+  // ask asks the Chest over HTTPS, without upgrading, whether the member
+  // may connect — which renews their session: 401 ends as signed out, 403
+  // as access removed, 503 says when there is room again (Retry-After, in
+  // seconds). A network down gives no answer.
+  const ask = async (): Promise<{ status: number; retryAfter: number } | undefined> => {
     try {
       const answer = await fetch(url.replace(/^ws/u, "http"), { credentials: "same-origin", cache: "no-store" });
+      await answer.body?.cancel();
       if (answer.status === 401) end("signed_out");
       if (answer.status === 403) end("access_removed");
+      return { status: answer.status, retryAfter: Number(answer.headers.get("Retry-After")) || 0 };
     } catch {
-      // The network is down: try again later.
+      return undefined;
     }
-    return ended;
   };
 
   const open = () => {
-    if (ended) return;
     const s = new WebSocket(url, protocol);
     socket = s;
-    let waiting: ReturnType<typeof setTimeout> | undefined;
     s.onmessage = event => {
       let m: unknown;
       try { m = JSON.parse(String(event.data)); } catch { return; }
       if (m !== null && typeof m === "object" && !Array.isArray(m)) receive(m as Record<string, unknown>);
     };
-    s.onopen = () => {
-      clearInterval(pinger);
-      pinger = setInterval(() => {
-        clearTimeout(waiting);
-        waiting = setTimeout(() => s.close(4000), pingWait);
-        write({ op: "ping" }, () => clearTimeout(waiting));
-      }, pingEvery);
-    };
+    // Every close but access removed is a cut: a session that ended
+    // (1008 session_ended) is told by the question before connecting again.
     s.onclose = event => {
-      clearInterval(pinger);
-      clearTimeout(waiting);
-      if (socket !== s) return;
-      socket = undefined;
-      answers.clear();
-      for (const c of channels.values()) c.joined = false;
-      emit(status, false);
-      if (event.code === 1008 && event.reason === "access_removed") return end("access_removed");
-      if (event.code === 1008 && event.reason === "session_ended") return end("signed_out");
-      reconnect();
+      if (socket === s && event.code === 1008 && event.reason === "access_removed") return end("access_removed");
+      lost(s, false);
     };
   };
 
-  const back = () => {
-    if (!ended && !socket) {
-      clearTimeout(timer);
-      timer = undefined;
-      reconnect(true);
-    }
+  // wake: the page is back — in the foreground, on the network, from the
+  // browser's cache. A connection is checked at once; without one, one is
+  // opened at once.
+  const wake = () => {
+    if (ended) return;
+    if (connected) return check(wakeWait);
+    if (socket || asking) return;
+    clearTimeout(timer);
+    timer = undefined;
+    attempts = 0;
+    reconnect(0);
   };
-  page.addEventListener?.("online", back);
-  page.document?.addEventListener("visibilitychange", () => {
-    if (page.document?.visibilityState === "visible") back();
-  });
+  const visible = () => { if (page.document?.visibilityState === "visible") wake(); };
+  const restored = (event: { persisted?: boolean }) => { if (event.persisted) wake(); };
+  page.addEventListener?.("online", wake);
+  page.addEventListener?.("pageshow", restored);
+  page.document?.addEventListener("visibilitychange", visible);
   open();
 
   return {
@@ -296,9 +363,9 @@ export function connect(options: { url?: string } = {}): Live {
     channel(name: string): Channel {
       let ch = channels.get(name);
       if (!ch) {
-        ch = { name, listeners: new Map(), presenceListeners: new Set(), present: new Map(), seq: undefined, epoch: undefined, joined: false, kicked: false };
+        ch = { name, listeners: new Map(), presenceListeners: new Set(), present: new Map(), epoch: undefined, seq: 0, pos: 0, joined: false, kicked: false };
         channels.set(name, ch);
-        if (member !== undefined) join(ch);
+        if (connected) join(ch);
       }
       const state = ch;
       return {
@@ -339,9 +406,6 @@ export function connect(options: { url?: string } = {}): Live {
       set.add(listener);
       return () => { set.delete(listener); };
     },
-    close() {
-      ended = true;
-      stop();
-    },
+    close: stop,
   };
 }

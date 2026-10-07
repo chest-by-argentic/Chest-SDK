@@ -929,6 +929,7 @@ room.send("typing");
 room.presence.track({ active: true });
 room.presence.on(list => showOnline(list));
 live.on("direct", (event, payload) => …);           // realtime.send
+live.on("status", connected => showOffline(!connected)); // false only after 3 s away
 live.on("closed", reason => reason === "access_removed" ? showAccessRemoved() : location.reload());
 ```
 
@@ -950,18 +951,27 @@ const { members } = await realtime.presence("everyone");
 | `online(memberIds)` | `{online}`: those with a page of the tool open now — the others are told by `notify` |
 | `presence(channel)` | `{members: [{id, state}]}` |
 
-- **At most once, with backfill.** The database is the truth; an event says
-  something changed. A page that reconnects (a phone back from the
-  background, a network that returns) is replayed what it missed within 2
-  minutes, or told `resync`: fetch from the tool what came after the last id.
+- **Nothing missed, however long away.** The database is the truth; an
+  event says something changed. A page that reconnects (a phone back from
+  sleep, a network that returns, a laptop opened the next morning) is given
+  what it missed: the feeds' rows from the Chest's change log of the tool
+  (7 days), each once and in commit order, the tool's events from its memory
+  (2 minutes) — or told `resync` beyond: fetch from the tool what came after
+  the last id. No reload, no polling.
 - **Joined, then fetch.** Fetch a channel's data on `joined` — but when its
-  payload says `replayed` (a reconnect within 2 minutes: what was missed came
-  again, the tool may stay asleep): an event after it is never missed.
-  Deduplicate by id: the author's own row comes back too.
+  payload says `replayed` (what was missed came again, the tool may stay
+  asleep): an event after it is never missed. Deduplicate by id: the
+  author's own row comes back too.
+- **Reconnection is unseen.** The client reconnects by itself — at once when
+  the page comes back to the foreground, from the browser's cache or to the
+  network, never while offline, after a quiet wait when the Chest is full —
+  and says `status` false only when it stays away 3 seconds: a server
+  restart or a network switch shows nothing.
 - **Never trust content as HTML.** Render payloads and rows as text.
 - **Revocation is the Chest's.** A member whose access is taken back is
   closed `access_removed` at once; `closed` says it. `signed_out`: the
-  session ended (an hour at most): reload the page.
+  member signed out (an open page renews their session every 5 minutes, so
+  it never ends under them): reload the page.
 - **Bounds are the server's.** Payloads 64 KiB (`TooLarge`), ephemeral sends
   4 KiB and 20 a second per page, presence 1 KiB; `RateLimited` when pages
   fall behind: wait a second. A page that falls too far behind is closed and
@@ -1005,7 +1015,7 @@ await chest.close();
 | `chest.members`, `chest.groups`, `chest.files` | What the fake Chest holds, to change or assert on; its `members` are those who have the tool |
 | `chest.notifications`, `chest.badges` | What the tool sent: the items kept, `{member, title, body?, path, key?}` in the member's language (their translation, the tool's own words otherwise) cleaned as the Chest cleans them — one for each member a broadcast reached —, in the order sent (a replaced item removed, the new one last; `withdraw` removes; beyond the pace, a member's notices folded into one item with `grouped`, the latest's text, last), and each member's badge (`Map` member → count; 0 removes it) |
 | `realtime: {channels?, feeds?, membership?}` | The fake Chest's realtime, under the `realtime` key of the tool's `chest.json` (`channels`, `feeds`) and `membership(table, key, member)`, who is in a membership table (nobody by default); capability `realtime` in `capabilities`. Its API answers `publish`, `send`, `online`, `presence` with the Chest's errors; a page of a member connects with `connect({ url: chest.realtime.url(memberId) })`, the Chest's protocol and rules (a presence leaves at once) |
-| `chest.realtime` | `published` and `sent`, what the tool published and sent in order; `url(memberId)`; `commit(table, op, row)`, a feed's row committed — published as the Chest's trigger would —; `removed(table, key, member)`, a membership row that went; `drop(memberId)`, that member's pages cut as a network would (they reconnect and are replayed); `revoke(memberId)`, closed as access removed |
+| `chest.realtime` | `published` and `sent`, what the tool published and sent in order; `url(memberId)`; `commit(table, op, row)`, a feed's row committed — the next position of the change log, published as the Chest's trigger would; that position —; `removed(table, key, member)`, a membership row that went; `drop(memberId, code?, reason?)`, that member's pages cut as a network would, or closed with a code (1001, 1013, 1008 `session_ended`): they reconnect and are given what they missed; `revoke(memberId)`, closed as access removed; `signOut(memberId)`, their session ended: the next renewal answers 401; `full(seconds)`, no room for that long (503 with `Retry-After`); `advance(ms)`, the Chest's clock moved: its memory (2 minutes) and change log (7 days) age — a page's own timers are the test's (`mock.timers`); `renewals`, how many times pages renewed their session or asked before reconnecting |
 | `chest.close()` | Stops it and restores the environment |
 
 ## Version

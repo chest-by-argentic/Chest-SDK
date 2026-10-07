@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { afterEach, mock, test } from "node:test";
 import { CapabilityNotGranted, ChestError, TooLarge } from "../src/errors.js";
 import type { Member } from "../src/member.js";
 import * as realtime from "../src/realtime.js";
@@ -8,7 +8,9 @@ import { fakeChest, type FakeChest } from "../src/testing.js";
 
 // The server module against a fake Chest's API, and the browser client
 // against its hub: the protocol the Chest speaks (chest/realtime), its
-// rules, its replays and its closes.
+// rules, its replays and its closes. The page's timers are mocked for the
+// whole file — minutes pass on mock.timers.tick, a page away stays away
+// until the test moves its clock —, the Chest's clock is its own (advance).
 const person = (name: string, role: string | null = null): Member => ({ id: "mbr_" + name + "a".repeat(26 - name.length), firstName: name, lastName: "Test", name: name + " Test", photo: null, role, isAdmin: false, isBuilder: false, groups: [], language: "en", timeZone: "UTC" });
 const camille = person("camille", "manager"), dan = person("dan", "member");
 
@@ -22,12 +24,46 @@ const rules = {
   feeds: [{ table: "messages", channel: "room:{room_id}", columns: ["id", "room_id", "text"] }],
 };
 const rooms = new Map([["42", [camille.id, dan.id]]]);
+// The page's sockets as a test sees them: what each sent and heard, and
+// whether it closed (seen once the client handled it). A deaf one hears
+// nothing more, as on a network that died silently.
+class Recorded extends WebSocket {
+  sent: Record<string, unknown>[] = [];
+  heard: Record<string, unknown>[] = [];
+  closed = false;
+  deaf = false;
+  constructor(url: string | URL, protocols?: string | string[]) {
+    super(url, protocols);
+    sockets.push(this);
+    this.addEventListener("close", () => { this.closed = true; });
+    this.addEventListener("message", event => {
+      if (this.deaf) return event.stopImmediatePropagation();
+      this.heard.push(JSON.parse(String(event.data)) as Record<string, unknown>);
+    });
+  }
+  override send(data: Parameters<WebSocket["send"]>[0]): void {
+    this.sent.push(JSON.parse(String(data)) as Record<string, unknown>);
+    super.send(data);
+  }
+  // answered: every ping it sent was answered.
+  get answered(): boolean {
+    return this.sent.every(m => m["op"] !== "ping" || this.heard.some(h => h["ref"] === m["ref"]));
+  }
+}
+const sockets: Recorded[] = [];
+globalThis.WebSocket = Recorded;
+// The real timers, kept from the mocks (enabled once: a timer of the
+// runtime made under one mock must not meet another).
+const realTimeout = globalThis.setTimeout;
+mock.timers.enable({ apis: ["setTimeout", "setInterval"] });
+
 let chest: FakeChest | undefined;
 const lives: Live[] = [];
 afterEach(async () => {
   for (const live of lives.splice(0)) live.close();
   await chest?.close();
   chest = undefined;
+  sockets.length = 0;
 });
 const start = async (capabilities = ["members", "realtime"]) => {
   chest = await fakeChest({ members: [camille, dan], capabilities, realtime: { ...rules, membership: (table, key, member) => table === "room_members" && (rooms.get(key) ?? []).includes(member) } });
@@ -40,8 +76,35 @@ const open = (c: FakeChest, member: Member): Live => {
 };
 // until waits for a condition, a few seconds at most.
 const until = async (what: string, ok: () => boolean) => {
-  for (let i = 0; i < 300 && !ok(); i++) await new Promise(resolve => setTimeout(resolve, 10));
+  for (let i = 0; i < 300 && !ok(); i++) await new Promise(resolve => realTimeout(resolve, 10));
   assert.ok(ok(), what);
+};
+// elapse moves the page's mocked clock forward, 5 s at a time, each ping
+// answered before the next step (as on a live network).
+const elapse = async (ms: number) => {
+  for (let done = 0; done < ms; done += 5000) {
+    mock.timers.tick(Math.min(5000, ms - done));
+    const socket = sockets.at(-1);
+    await until("pings answered", () => !socket || socket.readyState !== WebSocket.OPEN || socket.answered);
+  }
+};
+const minutes = 60 * 1000;
+// away cuts the member's page, as a network would; back lets its first
+// wait pass (under 0.5 s after a connection that held).
+const away = async (c: FakeChest, member: Member) => {
+  c.realtime.drop(member.id);
+  await until("the cut seen", () => sockets.at(-1)!.closed);
+};
+const back = () => mock.timers.tick(500);
+// heard listens to a channel's rows (their ids) and notes, its joins and resyncs.
+const listen = (live: Live, name: string) => {
+  const room = live.channel(name), heard: unknown[] = [], joins: unknown[] = [];
+  let resyncs = 0;
+  room.on("messages.insert", row => heard.push((row as { id: number }).id));
+  room.on("note", payload => heard.push(payload));
+  room.on("joined", joined => joins.push(joined));
+  room.on("resync", () => resyncs++);
+  return { room, heard, joins, resyncs: () => resyncs };
 };
 
 test("publish, send, online and presence answer as the Chest does, and refuse what it refuses", async () => {
@@ -130,27 +193,206 @@ test("a membership row that goes takes its member out at once", async () => {
   assert.deepEqual(events.slice(2), ["room kicked", "note"]);
 });
 
-test("a page that reconnects is replayed what it missed; access removed stops it for good", async () => {
+test("a page back within 2 minutes is replayed what it missed from the memory, a row given twice heard once; access removed stops it", async () => {
   const c = await start();
   const b = open(c, dan);
-  const rows: number[] = [], statuses: boolean[] = [], ends: ClosedReason[] = [];
-  b.on("status", connected => statuses.push(connected));
+  const ends: ClosedReason[] = [];
   b.on("closed", reason => ends.push(reason));
-  const room = b.channel("room:42");
-  room.on("messages.insert", row => rows.push((row as { id: number }).id));
-  const joins: unknown[] = [];
-  room.on("joined", payload => joins.push(payload));
+  const { heard, joins, resyncs } = listen(b, "room:42");
   await until("joined", () => joins.length === 1);
   c.realtime.commit("messages", "insert", { id: 1, room_id: 42 });
-  await until("first row", () => rows.length === 1);
-  c.realtime.drop(dan.id);
-  await until("disconnected", () => statuses.includes(false));
+  await until("first row", () => heard.length === 1);
+  await away(c, dan);
+  await realtime.publish("room:42", "note", "away");
   c.realtime.commit("messages", "insert", { id: 2, room_id: 42 });
+  c.realtime.advance(1 * minutes);
   c.realtime.commit("messages", "insert", { id: 3, room_id: 42 });
-  await until("replayed after reconnecting", () => rows.length === 3);
-  assert.deepEqual(rows, [1, 2, 3]);
+  back();
+  await until("replayed after reconnecting", () => heard.length === 4);
+  assert.deepEqual(heard, [1, "away", 2, 3]);
   assert.deepEqual(joins, [{ replayed: false }, { replayed: true }]);
+  // A row given again (a replay racing a live commit) is heard once.
+  sockets.at(-1)!.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ op: "msg", ch: "room:42", event: "messages.insert", payload: { id: 3, room_id: 42 }, pos: 3 }) }));
+  c.realtime.commit("messages", "insert", { id: 4, room_id: 42 });
+  await until("the next row", () => heard.length === 5);
+  assert.deepEqual(heard, [1, "away", 2, 3, 4]);
+  assert.equal(resyncs(), 0);
   c.realtime.revoke(dan.id);
   await until("closed for good", () => ends.length === 1);
   assert.deepEqual(ends, ["access_removed"]);
+});
+
+test("a page away 10 minutes is given every row it missed from the change log, once and in order, without a reload", async () => {
+  const c = await start();
+  const b = open(c, dan);
+  const { heard, joins, resyncs } = listen(b, "room:42");
+  await until("joined", () => joins.length === 1);
+  c.realtime.commit("messages", "insert", { id: 1, room_id: 42 });
+  c.realtime.commit("messages", "insert", { id: 2, room_id: 42 });
+  await until("the first rows", () => heard.length === 2);
+  await away(c, dan);
+  await realtime.publish("room:42", "note", "away");
+  c.realtime.commit("messages", "insert", { id: 3, room_id: 42 });
+  c.realtime.advance(10 * minutes);
+  c.realtime.commit("messages", "insert", { id: 4, room_id: 42 });
+  c.realtime.commit("messages", "insert", { id: 5, room_id: 42 });
+  back();
+  await until("joined again", () => joins.length === 2);
+  await realtime.publish("room:42", "note", "live");
+  c.realtime.commit("messages", "insert", { id: 6, room_id: 42 });
+  await until("the live row", () => heard.includes(6));
+  // Every row once, in order; the tool's event of 10 minutes ago is not
+  // kept (an event is a hint), the live one comes.
+  assert.deepEqual(heard, [1, 2, 3, 4, 5, "live", 6]);
+  assert.deepEqual(joins, [{ replayed: false }, { replayed: true }]);
+  assert.equal(resyncs(), 0);
+});
+
+test("a page away beyond the change log's 7 days is told resync", async () => {
+  const c = await start();
+  const b = open(c, dan);
+  const { heard, joins, resyncs } = listen(b, "room:42");
+  await until("joined", () => joins.length === 1);
+  c.realtime.commit("messages", "insert", { id: 1, room_id: 42 });
+  await until("the first row", () => heard.length === 1);
+  await away(c, dan);
+  c.realtime.commit("messages", "insert", { id: 2, room_id: 42 });
+  c.realtime.advance(8 * 24 * 60 * minutes);
+  back();
+  await until("joined again", () => joins.length === 2);
+  assert.deepEqual(joins, [{ replayed: false }, { replayed: false }]);
+  assert.equal(resyncs(), 1);
+  c.realtime.commit("messages", "insert", { id: 3, room_id: 42 });
+  await until("the next row", () => heard.length === 2);
+  assert.deepEqual(heard, [1, 3]);
+});
+
+test("the session is renewed every 5 minutes while connected; signed out, the page stops", async () => {
+  const c = await start();
+  const b = open(c, dan);
+  const statuses: boolean[] = [], ends: ClosedReason[] = [];
+  b.on("status", connected => statuses.push(connected));
+  b.on("closed", reason => ends.push(reason));
+  const { joins } = listen(b, "room:42");
+  await until("joined", () => joins.length === 1);
+  await elapse(4 * minutes);
+  assert.equal(c.realtime.renewals, 0);
+  await elapse(1 * minutes);
+  await until("renewed", () => c.realtime.renewals === 1);
+  await elapse(5 * minutes);
+  await until("renewed again", () => c.realtime.renewals === 2);
+  c.realtime.signOut(dan.id);
+  await elapse(5 * minutes);
+  await until("signed out", () => ends.length === 1);
+  assert.deepEqual(ends, ["signed_out"]);
+  assert.deepEqual(statuses, [true]);
+  assert.equal(sockets.length, 1);
+  assert.equal(sockets[0]!.readyState, WebSocket.CLOSED);
+});
+
+test("a full Chest is waited for quietly, as long as it asks", async () => {
+  const c = await start();
+  const b = open(c, dan);
+  const statuses: boolean[] = [], ends: ClosedReason[] = [];
+  b.on("status", connected => statuses.push(connected));
+  b.on("closed", reason => ends.push(reason));
+  const { joins } = listen(b, "room:42");
+  await until("joined", () => joins.length === 1);
+  c.realtime.full(10);
+  await away(c, dan);
+  await elapse(500);
+  await until("asked", () => c.realtime.renewals === 1);
+  await elapse(2400);
+  assert.deepEqual(statuses, [true]);
+  await elapse(200);
+  assert.deepEqual(statuses, [true, false]);
+  assert.equal(sockets.length, 1);
+  c.realtime.advance(10 * 1000);
+  for (let i = 0; i < 60 && joins.length < 2; i++) {
+    mock.timers.tick(1000);
+    await new Promise(resolve => realTimeout(resolve, 10));
+  }
+  await until("connected again", () => joins.length === 2);
+  assert.deepEqual(statuses, [true, false, true]);
+  assert.deepEqual(ends, []);
+  assert.equal(c.realtime.renewals, 2);
+});
+
+test("a quick reconnect is not told: a cut, going away, try later, a session to renew", async () => {
+  const c = await start();
+  const b = open(c, dan);
+  const statuses: boolean[] = [], ends: ClosedReason[] = [];
+  b.on("status", connected => statuses.push(connected));
+  b.on("closed", reason => ends.push(reason));
+  const { joins } = listen(b, "room:42");
+  await until("joined", () => joins.length === 1);
+  const closes: [number?, string?][] = [[], [1001, "going_away"], [1013, "try_later"], [1008, "session_ended"]];
+  for (const [i, [code, reason]] of closes.entries()) {
+    c.realtime.drop(dan.id, code, reason);
+    await until("the close seen", () => sockets.at(-1)!.closed);
+    back();
+    await until("joined again", () => joins.length === i + 2);
+  }
+  await elapse(10 * 1000);
+  assert.deepEqual(statuses, [true]);
+  assert.deepEqual(ends, []);
+  assert.equal(sockets.length, 5);
+});
+
+test("a page back in the foreground, on the network or from the cache reconnects at once; offline, it waits", async () => {
+  // The browser, as the client sees it: the window, its document, its navigator.
+  const target = () => {
+    const listeners = new Map<string, Set<(event: unknown) => void>>();
+    return {
+      listeners,
+      addEventListener: (type: string, listener: (event: unknown) => void) => { listeners.set(type, (listeners.get(type) ?? new Set()).add(listener)); },
+      removeEventListener: (type: string, listener: (event: unknown) => void) => { listeners.get(type)?.delete(listener); },
+      dispatch: (type: string, event: unknown = {}) => { for (const listener of listeners.get(type) ?? []) listener(event); },
+    };
+  };
+  const window = target(), document = { ...target(), visibilityState: "visible" }, navigator = { onLine: true };
+  const page = globalThis as unknown as Record<string, unknown>, saved = Object.getOwnPropertyDescriptor(globalThis, "navigator");
+  Object.assign(page, { addEventListener: window.addEventListener, removeEventListener: window.removeEventListener, document });
+  Object.defineProperty(globalThis, "navigator", { value: navigator, configurable: true, writable: true });
+  try {
+    const c = await start();
+    const b = open(c, dan);
+    const statuses: boolean[] = [];
+    b.on("status", connected => statuses.push(connected));
+    const { joins } = listen(b, "room:42");
+    await until("joined", () => joins.length === 1);
+    // Back in the foreground: a ping; answered, nothing more.
+    document.dispatch("visibilitychange");
+    await until("pinged and answered", () => sockets[0]!.sent.some(m => m["op"] === "ping") && sockets[0]!.answered);
+    await elapse(10 * 1000);
+    assert.equal(sockets.length, 1);
+    // Unanswered within 5 s (the network died silently): another at once.
+    sockets[0]!.deaf = true;
+    document.dispatch("visibilitychange");
+    await elapse(5 * 1000);
+    await until("joined again", () => joins.length === 2);
+    // Offline: no attempt, however long; online: at once.
+    navigator.onLine = false;
+    await away(c, dan);
+    const asked = c.realtime.renewals;
+    await elapse(10 * minutes);
+    assert.equal(sockets.length, 2);
+    assert.equal(c.realtime.renewals, asked);
+    navigator.onLine = true;
+    window.dispatch("online");
+    await until("joined at once", () => joins.length === 3);
+    // Restored from the cache: at once, without waiting the backoff.
+    await away(c, dan);
+    window.dispatch("pageshow", { persisted: true });
+    await until("joined at once", () => joins.length === 4);
+    assert.deepEqual(statuses, [true, false, true]);
+    b.close();
+    assert.deepEqual([...window.listeners.values(), ...document.listeners.values()].map(set => set.size), [0, 0, 0]);
+  } finally {
+    delete page["addEventListener"];
+    delete page["removeEventListener"];
+    delete page["document"];
+    if (saved) Object.defineProperty(globalThis, "navigator", saved);
+    else delete page["navigator"];
+  }
 });

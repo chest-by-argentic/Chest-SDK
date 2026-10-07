@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { IncomingMessage, ServerResponse } from "node:http";
+import { STATUS_CODES, type IncomingMessage, type ServerResponse } from "node:http";
 import type { Duplex } from "node:stream";
 import { memberIdPattern } from "./member.js";
 import { channelPattern, eventPattern, type Present } from "./realtime.js";
@@ -9,8 +9,10 @@ import { channelPattern, eventPattern, type Present } from "./realtime.js";
 // fake Chest's own origin, which @argentic/chest-sdk/realtime/client
 // connects to with connect({ url: chest.realtime.url(member) }) — under the
 // rules of the tool's chest.json. Rows of feeds are committed by the test
-// (commit), membership rows removed by it (removed): there is no database.
-// Not a published module.
+// (commit), membership rows removed by it (removed): there is no database,
+// but the Chest's change log of the tool (each committed row's position,
+// kept 7 days) and its memory of each channel (2 minutes), on a clock the
+// test moves (advance). Not a published module.
 
 // A channel as chest.json declares it (its "realtime" key).
 export type FakeChannelRule = { name: string; join?: string[] | { table: string; key: string; member: string }; send?: boolean; presence?: boolean };
@@ -26,27 +28,51 @@ export type FakeSent = { members: string[]; event: string; payload: unknown };
 export type FakeRealtime = {
   published: FakePublished[];
   sent: FakeSent[];
+  // renewals counts the pages' questions to the Chest without upgrading:
+  // each renews the member's session (every 5 minutes while connected, and
+  // before connecting again).
+  renewals: number;
   // url is where a page of that member connects (the fake Chest has no
   // session: the member is in the address).
   url(memberId: string): string;
   // commit is a row of a feed committed, as the Chest's trigger tells it:
-  // published to its channel with the feed's columns; null when no feed
-  // names the table, or the row has no channel.
+  // the next position of the tool's change log, published to its channel
+  // with the feed's columns; that position, or null when no feed names the
+  // table, or the row has no channel.
   commit(table: string, op: "insert" | "update" | "delete", row: Record<string, unknown>): number | null;
   // removed is a row of a membership table that went: its member leaves
   // the channels it gave them, at once.
   removed(table: string, key: string, member: string): void;
-  // drop cuts the member's pages as a network would: they reconnect.
-  drop(memberId: string): void;
+  // drop cuts the member's pages as a network would, or closes them with a
+  // code and reason (1001 going away, 1013 try later, 1008 session_ended):
+  // they reconnect.
+  drop(memberId: string, code?: number, reason?: string): void;
   // revoke closes the member's pages as the Chest does when their access is
   // taken back: they stop.
   revoke(memberId: string): void;
+  // signOut ends the member's session: the next renewal of their pages
+  // answers 401 (they stop), and they connect no more.
+  signOut(memberId: string): void;
+  // full makes the Chest without room for that many seconds: connections
+  // are refused, and the question before connecting answers 503 with
+  // Retry-After.
+  full(seconds: number): void;
+  // advance moves the Chest's clock forward: its memory (2 minutes), its
+  // change log (7 days) and a full Chest's wait age as much.
+  advance(ms: number): void;
 };
 
 const protocol = "chest-realtime.v1", maxPayload = 64 << 10, maxSend = 4 << 10, maxState = 1 << 10, maxJoined = 100;
+// How long the Chest keeps a channel's frames in memory, and the tool's
+// committed rows in its change log.
+const memoryFor = 2 * 60 * 1000, logFor = 7 * 24 * 60 * 60 * 1000;
 
 type Page = { member: string; joined: Set<string>; tracked: Set<string>; write(value: unknown): void; close(code: number, reason: string): void; cut(): void };
-type ChannelState = { seq: number; kept: { seq: number; frame: unknown }[]; present: Map<string, { state: unknown; tracked: number }> };
+// A channel: its last number, the frames its memory keeps (forgotten: the
+// last number it no longer keeps), who is present.
+type ChannelState = { seq: number; kept: { seq: number; at: number; frame: unknown }[]; forgotten: number; present: Map<string, { state: unknown; tracked: number }> };
+// A row of the tool's change log, as a replay gives it.
+type Logged = { pos: number; at: number; channel: string; frame: { op: "msg"; ch: string; event: string; payload: unknown; pos: number } };
 
 // prefixOf splits a pattern into its fixed part and its variable last
 // segment ("" for an exact name).
@@ -66,8 +92,13 @@ export function fakeRealtime(options: FakeRealtimeOptions, origin: () => string,
   const channels = new Map<string, ChannelState>();
   const pages = new Set<Page>();
   const epoch = randomBytes(9).toString("base64url");
+  // The change log: its rows, the last position given, the last one no
+  // longer kept. The clock: the test's advance on top of the real one.
+  const log: Logged[] = [], signedOut = new Set<string>();
+  let head = 0, logForgotten = 0, skew = 0, fullUntil = 0;
+  const now = () => Date.now() + skew;
   const realtime: FakeRealtime = {
-    published: [], sent: [],
+    published: [], sent: [], renewals: 0,
     url: member => origin().replace(/^http/u, "ws") + "/_chest/realtime?member=" + encodeURIComponent(member),
     commit(table, op, row) {
       const feed = options.feeds?.find(f => f.table === table);
@@ -75,7 +106,11 @@ export function fakeRealtime(options: FakeRealtimeOptions, origin: () => string,
       const [prefix, column] = ((c: string): [string, string] => { const [p, v] = prefixOf(c); return [p, v ? v.slice(1, -1) : ""]; })(feed.channel);
       const suffix = column ? row[column] : "";
       if (suffix === null || suffix === undefined) return null;
-      return publish(prefix + String(suffix), table + "." + op, Object.fromEntries(feed.columns.map(c => [c, row[c] ?? null])));
+      const channel = prefix + String(suffix), event = table + "." + op, payload = Object.fromEntries(feed.columns.map(c => [c, row[c] ?? null]));
+      const pos = ++head;
+      log.push({ pos, at: now(), channel, frame: { op: "msg", ch: channel, event, payload, pos } });
+      publish(channel, event, payload, pos);
+      return pos;
     },
     removed(table, key, member) {
       for (const rule of options.channels ?? []) {
@@ -84,21 +119,32 @@ export function fakeRealtime(options: FakeRealtimeOptions, origin: () => string,
         for (const page of pages) if (page.member === member && page.joined.has(name)) kick(page, name);
       }
     },
-    drop(member) { for (const page of [...pages]) if (page.member === member) page.cut(); },
+    drop(member, code, reason = "") { for (const page of [...pages]) if (page.member === member) code === undefined ? page.cut() : page.close(code, reason); },
     revoke(member) { for (const page of [...pages]) if (page.member === member) page.close(1008, "access_removed"); },
+    signOut(member) { signedOut.add(member); },
+    full(seconds) { fullUntil = now() + seconds * 1000; },
+    advance(ms) { skew += ms; },
   };
   const rule = (name: string, member: string) => name.length <= 128 && channelPattern.test(name) ? (options.channels ?? []).find(r => matches(r, name, member)) : undefined;
   const declared = (name: string) => rule(name, name.slice(name.lastIndexOf(":") + 1)) !== undefined;
   const allows = (r: FakeChannelRule, member: string) => !Array.isArray(r.join) || r.join.includes(roleOf(member) ?? "");
+  // fed says whether a feed's rows go to the channel.
+  const fed = (name: string) => (options.feeds ?? []).some(f => {
+    const [prefix, variable] = prefixOf(f.channel);
+    return variable ? name.startsWith(prefix) && !name.slice(prefix.length).includes(":") : name === prefix;
+  });
+  // state is a channel, its memory and the change log aged to now.
   const state = (name: string): ChannelState => {
     let ch = channels.get(name);
-    if (!ch) channels.set(name, ch = { seq: 0, kept: [], present: new Map() });
+    if (!ch) channels.set(name, ch = { seq: 0, kept: [], forgotten: 0, present: new Map() });
+    while (ch.kept[0] && ch.kept[0].at <= now() - memoryFor) ch.forgotten = ch.kept.shift()!.seq;
+    while (log[0] && log[0].at <= now() - logFor) logForgotten = log.shift()!.pos;
     return ch;
   };
-  function publish(channel: string, event: string, payload: unknown): number {
+  function publish(channel: string, event: string, payload: unknown, pos?: number): number {
     const ch = state(channel);
-    const frame = { op: "msg", ch: channel, event, payload, seq: ++ch.seq };
-    ch.kept.push({ seq: ch.seq, frame });
+    const frame = { op: "msg", ch: channel, event, payload, seq: ++ch.seq, ...(pos === undefined ? {} : { pos }) };
+    ch.kept.push({ seq: ch.seq, at: now(), frame });
     realtime.published.push({ channel, event, payload, seq: ch.seq });
     for (const page of pages) if (page.joined.has(channel)) page.write(frame);
     return ch.seq;
@@ -145,10 +191,20 @@ export function fakeRealtime(options: FakeRealtimeOptions, origin: () => string,
     send(response, 200, { seq: publish(channel, event, payload) });
   }
 
-  // A page's question without upgrading: may its member connect?
-  function probe(response: ServerResponse, url: URL, send: (response: ServerResponse, status: number) => void): void {
-    const member = url.searchParams.get("member") ?? "";
-    send(response, roleOf(member) === undefined ? 403 : 204);
+  // refusal is why a member's page may not connect now: no access (403),
+  // a session ended (401), no room (503, and in how many seconds).
+  const refusal = (member: string): { status: 401 | 403 | 503; retryAfter?: number } | undefined => {
+    if (roleOf(member) === undefined) return { status: 403 };
+    if (signedOut.has(member)) return { status: 401 };
+    if (fullUntil > now()) return { status: 503, retryAfter: Math.ceil((fullUntil - now()) / 1000) };
+    return undefined;
+  };
+  // A page's question without upgrading, which renews its member's session:
+  // may they connect now?
+  function probe(response: ServerResponse, url: URL, send: (response: ServerResponse, status: number, value?: unknown, headers?: Record<string, string>) => void): void {
+    realtime.renewals++;
+    const refused = refusal(url.searchParams.get("member") ?? "");
+    send(response, refused?.status ?? 204, undefined, refused?.retryAfter ? { "Retry-After": String(refused.retryAfter) } : {});
   }
 
   // A page's connection: the handshake, then the protocol's frames.
@@ -156,8 +212,9 @@ export function fakeRealtime(options: FakeRealtimeOptions, origin: () => string,
     const member = url.searchParams.get("member") ?? "";
     const key = request.headers["sec-websocket-key"];
     const offered = String(request.headers["sec-websocket-protocol"] ?? "").split(",").map(s => s.trim());
-    if (typeof key !== "string" || !offered.includes(protocol) || roleOf(member) === undefined) {
-      socket.end("HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n");
+    const status = typeof key !== "string" || !offered.includes(protocol) ? 403 : refusal(member)?.status;
+    if (status !== undefined) {
+      socket.end(`HTTP/1.1 ${status} ${STATUS_CODES[status]}\r\nContent-Length: 0\r\n\r\n`);
       return;
     }
     const accept = createHash("sha1").update(key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
@@ -226,14 +283,20 @@ export function fakeRealtime(options: FakeRealtimeOptions, origin: () => string,
         const table = typeof r.join === "object" && !Array.isArray(r.join) ? r.join : undefined;
         if (table && !(options.membership?.(table.table, name.slice(prefixOf(r.name)[0].length), page.member) ?? false)) return answer("forbidden");
         page.joined.add(name);
-        const ch = state(name), since = q["since"] as { epoch?: unknown; seq?: unknown } | undefined;
-        let missed: unknown[] = [], resync = false;
+        // A re-join is given what it missed: from the memory when it keeps
+        // all of it (the tool's events too), else from the change log (the
+        // feeds' rows), else told resync. A channel fed by a feed says the
+        // position the page is at: the one it gave, or the head.
+        const ch = state(name), since = q["since"] as { epoch?: unknown; seq?: unknown; pos?: unknown } | undefined;
+        let missed: unknown[] = [], resync = false, pos = fed(name) ? head : undefined;
         if (since !== undefined) {
-          const seq = Number(since.seq);
-          resync = since.epoch !== epoch || seq > ch.seq || (ch.kept[0] !== undefined && ch.kept[0].seq > seq + 1);
-          if (!resync) missed = ch.kept.filter(k => k.seq > seq).map(k => k.frame);
+          const seq = Number(since.seq), given = Number(since.pos ?? 0);
+          if (since.epoch === epoch && seq >= ch.forgotten && seq <= ch.seq) missed = ch.kept.filter(k => k.seq > seq).map(k => k.frame);
+          else if (pos !== undefined && given > 0 && given >= logForgotten && given <= head) missed = log.filter(l => l.channel === name && l.pos > given).map(l => l.frame);
+          else resync = true;
+          if (!resync && pos !== undefined) pos = given;
         }
-        answer(undefined, { seq: ch.seq, ...(r.presence ? { presence: [...ch.present].map(([id, p]) => ({ id, state: p.state })) } : {}), ...(resync ? { resync } : {}) });
+        answer(undefined, { seq: ch.seq, ...(pos === undefined ? {} : { pos }), ...(r.presence ? { presence: [...ch.present].map(([id, p]) => ({ id, state: p.state })) } : {}), ...(resync ? { resync } : {}) });
         for (const frame of missed) page.write(frame);
         return;
       }

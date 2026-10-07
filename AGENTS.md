@@ -282,13 +282,19 @@ await realtime.publish("inbox:" + id, "rooms.changed", { room: 42 });
   someone in, delete it to take them out (at once).
 - A feed's columns are sent to everyone in the channel: never list a column
   some of them may not read; put rows on channels whose members may see them.
-- Events are hints, at most once: the database is the truth. Fetch on
-  `joined` and `resync`; render text, never HTML.
+- The database is the truth. A page that comes back is given every row it
+  missed (7 days) and the tool's events of the last 2 minutes, by itself:
+  fetch on `joined` unless `replayed`, and on `resync`; render text, never
+  HTML.
+- The client hides cuts: `status` false only after 3 s away, `closed` only
+  for a member signed out or without access (reload, or say so).
 - Write through the tool's own HTTP routes (`POST /chest/api/…`), which
   check `member()`; the socket only reads, but for ephemeral `send`.
 - Test with `fakeChest({ capabilities: [..., "realtime"], realtime: { channels, feeds, membership } })`:
   `chest.realtime.commit("messages", "insert", row)`, `chest.realtime.published`,
-  and a page as `connect({ url: chest.realtime.url(memberId) })`.
+  a page as `connect({ url: chest.realtime.url(memberId) })`, a page away
+  with `drop(memberId)` and `advance(ms)` (the Chest's clock), `signOut`,
+  `full(seconds)`, `renewals`.
 
 ## Let a member upload a file
 
