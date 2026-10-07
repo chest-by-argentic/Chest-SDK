@@ -101,10 +101,26 @@
         }
       },
       {
+        "key": "emits",
+        "rule": "The events the tool tells the other tools of the Chest, by type: two to four dotted words of lowercase letters, digits and dashes (64 characters at most; never member.* nor access.*), each {\"description\", \"data\"} — what happened in a sentence of 1 to 80 printable characters, and every field its data carries with its kind: id, text, number, boolean, time, date, member, members, ? after the kind for an optional field (camelCase names; {} for none). Data with any other field is refused, 16 KiB at most. Each type approved as a permission, with the tools it reaches; a type's data only grows from one version to the next: a field is never removed, retyped nor made optional — a new shape is a new type.",
+        "example": {
+          "task.done": {
+            "description": "A task is done",
+            "data": {
+              "task": "id",
+              "project": "id",
+              "doneBy": "member",
+              "note": "text?"
+            }
+          }
+        }
+      },
+      {
         "key": "receives",
-        "rule": "[\"member.*\"]: the members' lifecycle events, posted to POST /chest-events. Requires the capability members; approved as a permission.",
+        "rule": "The events posted to POST /chest-events: \"member.*\", the members' lifecycle (requires the capability members), and event types, from whichever other tool emits them — never the tool's own events. Each approved as a permission, with the tools it comes from.",
         "example": [
-          "member.*"
+          "member.*",
+          "quote.accepted"
         ]
       },
       {

@@ -1,5 +1,6 @@
 import { ask as chest, json, refusal } from "./api.js";
 import { ChestError, Unavailable } from "./errors.js";
+import { rolePattern } from "./eventrules.js";
 import { groupIdPattern, languagePattern, memberIdPattern } from "./member.js";
 
 // Counters and notifications inside the Chest, for a server tool whose
@@ -58,7 +59,7 @@ export type BadgeWrite = { set: string[]; skipped: string[] };
 // declares. No count bounds the members a call names: the Chest takes as
 // many as its team holds, and refuses a body beyond (invalid_body).
 const maxTitle = 80, maxBody = 280, maxPath = 512, maxCount = 9999, toolRoles = 16;
-const keyPattern = /^[a-z0-9._:-]{1,64}$/u, rolePattern = /^[a-z][a-z0-9-]{0,47}$/u;
+const keyPattern = /^[a-z0-9._:-]{1,64}$/u;
 // What the Chest removes from a title before keeping it: control characters
 // and the characters that reorder text.
 const removed = /[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;

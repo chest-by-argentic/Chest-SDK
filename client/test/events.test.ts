@@ -58,12 +58,12 @@ test("an event delivered is handled once by its handler, whatever the times it c
     const seen = events.memorySeen();
     const tool = async (request: Request) => new Response(null, { status: await events.handle(request, { "access.revoked": e => { told.push(e); } }, { seen }) });
     const event = { id: "evt_" + "c".repeat(26), type: "access.revoked" as const, data: { id: camille.id } };
-    assert.equal(await chest.emit(event, tool), 204);
-    assert.equal(await chest.emit(event, tool), 204);
+    assert.equal(await chest.deliver(event, tool), 204);
+    assert.equal(await chest.deliver(event, tool), 204);
     assert.equal(told.length, 1);
     assert.deepEqual({ ...told[0], occurredAt: "" }, { id: event.id, type: "access.revoked", occurredAt: "", data: { id: camille.id } });
     // A type without a handler is accepted and ignored.
-    assert.equal(await chest.emit({ type: "member.removed", data: { id: camille.id } }, tool), 204);
+    assert.equal(await chest.deliver({ type: "member.removed", data: { id: camille.id } }, tool), 204);
     assert.equal(told.length, 1);
   } finally {
     await chest.close();
@@ -74,8 +74,8 @@ test("each event is typed by its type", async () => {
   const chest = await fakeChest({ members: [camille] });
   const { requests, tool } = capture();
   try {
-    await chest.emit({ type: "member.updated", data: { id: camille.id, changed: ["name", "role", "language", "timeZone"] } }, tool);
-    await chest.emit({ type: "member.erased", data: { id: camille.id, erasure, deadline: "2026-10-28T10:00:00Z" } }, tool);
+    await chest.deliver({ type: "member.updated", data: { id: camille.id, changed: ["name", "role", "language", "timeZone"] } }, tool);
+    await chest.deliver({ type: "member.erased", data: { id: camille.id, erasure, deadline: "2026-10-28T10:00:00Z" } }, tool);
     const [updated, erased] = [await events.verify(requests[0]!), await events.verify(requests[1]!)];
     assert.ok(updated?.type === "member.updated" && erased?.type === "member.erased");
     assert.deepEqual(updated.data.changed, ["name", "role", "language", "timeZone"]);
@@ -91,7 +91,7 @@ test("a delivery that is not the Chest's for this tool is refused", async () => 
   const chest = await fakeChest({ members: [camille] });
   const { requests, tool } = capture();
   try {
-    await chest.emit({ type: "access.revoked", data: { id: camille.id } }, tool);
+    await chest.deliver({ type: "access.revoked", data: { id: camille.id } }, tool);
     const original = requests[0]!;
     const signature = original.headers.get("chest-event")!;
     const body = await original.clone().text();
@@ -114,12 +114,12 @@ test("a delivery that is not the Chest's for this tool is refused", async () => 
     assert.notEqual(await events.verify(post({ "chest-event": signature })), null);
     // A signed envelope that says what an event of its type cannot say.
     const bad = capture();
-    await chest.emit({ type: "member.updated", data: { id: camille.id, changed: ["password" as "name"] } }, bad.tool);
-    await chest.emit({ type: "member.erased", data: { id: camille.id, erasure: "era_x", deadline: "soon" } }, bad.tool);
+    await chest.deliver({ type: "member.updated", data: { id: camille.id, changed: ["password" as "name"] } }, bad.tool);
+    await chest.deliver({ type: "member.erased", data: { id: camille.id, erasure: "era_x", deadline: "soon" } }, bad.tool);
     for (const request of bad.requests) assert.equal(await events.handle(request, {}), 401);
     // A type of a later Chest, signed: accepted, and ignored.
     const later = capture();
-    await chest.emit({ type: "member.aliased", data: { id: camille.id } } as unknown as Parameters<typeof chest.emit>[0], later.tool);
+    await chest.deliver({ type: "member.aliased", data: { id: camille.id } } as unknown as Parameters<typeof chest.deliver>[0], later.tool);
     assert.equal(await events.handle(later.requests[0]!.clone(), {}), 204);
     assert.equal(await events.verify(later.requests[0]!), null);
   } finally {
@@ -132,8 +132,8 @@ test("a handler that throws leaves the event to be delivered again", async () =>
   const { requests, tool } = capture();
   try {
     const event = { id: "evt_" + "d".repeat(26), type: "member.removed" as const, data: { id: camille.id } };
-    await chest.emit(event, tool);
-    await chest.emit(event, tool);
+    await chest.deliver(event, tool);
+    await chest.deliver(event, tool);
     const seen = events.memorySeen();
     let calls = 0;
     const handlers = { "member.removed": () => { calls++; if (calls === 1) throw new Error("database down"); } };
@@ -156,7 +156,7 @@ test("a node:http server handles events at /chest-events; what lookup kept is fo
     // Dan's data is erased: the lookup, kept a minute, is asked again once the event comes.
     chest.members.splice(0);
     const address = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
-    assert.equal(await chest.emit({ type: "member.erased", data: { id: id("dan"), erasure, deadline: new Date().toISOString() } }, address), 204);
+    assert.equal(await chest.deliver({ type: "member.erased", data: { id: id("dan"), erasure, deadline: new Date().toISOString() } }, address), 204);
     assert.deepEqual((await members.lookup([camille.id])).unknown, [camille.id]);
   } finally {
     server.close();
@@ -168,7 +168,7 @@ test("a tool acknowledges the erasures it was told of", async () => {
   const chest = await fakeChest({ members: [camille] });
   try {
     await assert.rejects(events.acknowledgeErasure(erasure), (error: unknown) => error instanceof ChestError && error.code === "erasure_not_found" && error.status === 404);
-    await chest.emit({ type: "member.erased", data: { id: camille.id, erasure, deadline: new Date().toISOString() } }, capture().tool);
+    await chest.deliver({ type: "member.erased", data: { id: camille.id, erasure, deadline: new Date().toISOString() } }, capture().tool);
     await events.acknowledgeErasure(erasure);
     await events.acknowledgeErasure(erasure);
     assert.deepEqual(chest.acknowledged, [erasure]);

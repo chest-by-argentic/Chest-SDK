@@ -21,11 +21,12 @@ server-side:
 | The tool's private files | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` (and `"files": {"quota", "maxObject"}` beyond 1 GiB, 32 MiB per object) |
 | Who else has the tool | `list`, `get`, `lookup`, `groups.list` from `@argentic/chest-sdk/members` | `"capabilities": ["members"]` (`"members.email"` too for addresses, `"members.groups"` for every group of the Chest — a tool open to everyone that offers “the Sales team”) |
 | Be told when members change, lose access, leave or ask to be erased | `handle`, `verify`, `acknowledgeErasure` from `@argentic/chest-sdk/events` | `"capabilities": ["members"]` and `"receives": ["member.*"]` |
+| Tell other tools what happened (a quote accepted), and be told what they tell | `emit`, `handle` from `@argentic/chest-sdk/events` | `"emits": {"quote.accepted": {"description", "data": {field: kind}}}` to tell; `"receives": ["quote.accepted"]` to be told |
 | Do work by itself at set times (digests, reminders, purges) | `handle`, `verify` from `@argentic/chest-sdk/schedules` | `"schedules": [{"name", "cron"}]` in `chest.json` |
 | Tell members what needs their attention — some, or everyone who has the tool, or some groups or roles | `notify`, `broadcast`, `withdraw`, `badge.set`, `badge.setMany` from `@argentic/chest-sdk/notifications` | `"capabilities": ["notifications"]` |
 | Call AI models (chat, streamed or not, tools, embeddings) | `chat`, `embed`, `models`, `usage` from `@argentic/chest-sdk/ai` | `"capabilities": ["ai"]` and `"ai": {"monthly", "models", "purpose"}` |
 | Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `Unavailable`, `MemberRequired`, `NotAllowed`, `SealedInvalid`, `SealedLocked`, `SealedLost`, `AiCapReached`, `AiUnavailable`, `AiModelNotAllowed`, `AiRefused` from `@argentic/chest-sdk/errors` | — |
-| Tests without a Chest | `fakeChest` (its `emit`, `run`, its links and uploads, `chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
+| Tests without a Chest | `fakeChest` (its `deliver`, `emitted`, `emits`, `run`, its links and uploads, `chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
 
 ## Install
 
@@ -153,6 +154,50 @@ export async function POST(request: Request) {
   then `acknowledgeErasure(erasure)`: the owner sees it done per tool.
 - Never put the route behind your own session or under `/chest`, and never
   read the body before `handle` (it verifies the signature over it).
+
+## Tell other tools, and be told
+
+One tool reacts to what happens in another: a quote accepted in Quotes
+creates a project in Tasks. The publisher declares each type it tells, in a
+sentence, with the fields of its data; the receiver names the types it
+wants, never a tool. The owner approves each link at installation.
+
+```jsonc
+// chest.json of Quotes
+{ "emits": { "quote.accepted": { "description": "A quote is accepted",
+    "data": { "quote": "id", "client": "text", "total": "number", "acceptedBy": "member", "note": "text?" } } } }
+// chest.json of Tasks
+{ "receives": ["member.*", "quote.accepted"] }
+```
+
+```ts
+// Quotes, once the quote is accepted in the database:
+await events.emit("quote.accepted", { quote: q.id, client: q.client, total: q.total, acceptedBy: who.id },
+  { subject: q.id, key: `accepted:${q.id}`, audience: { groups: q.groups } });
+
+// Tasks, in the same POST /chest-events handler as the members' events:
+"quote.accepted": async e => { await createProject(String(e.data["quote"]), e.audience === "all" ? null : e.audience); },
+```
+
+- Data is the declared fields only (kinds `id`, `text`, `number`,
+  `boolean`, `time`, `date`, `member`, `members`, `?` when optional), 16 KiB
+  at most; people as member ids, never names nor addresses.
+- **Honour the audience.** `e.audience` is `"all"` or the list of your
+  members who may see the item in the publisher: show it to them only. Give
+  `audience` to `emit` whenever the item is not for everyone who has your
+  tool.
+- **Key every emit about a thing** (`key`): emit again with the same key
+  after `Unavailable`, never a new one — the Chest tells nobody twice.
+  `subject` keeps a thing's events in order for each receiver.
+- **Read `e.data` defensively**: a publisher's next version may add fields;
+  check each value you use (`String(...)`, `Number(...)`).
+- Emitting from a handler is fine: the cause goes with it by itself and the
+  Chest cuts loops. A tool never receives its own events.
+- A type's data only grows: a new shape is a new type
+  (`quote.accepted.v2`), emitted alongside the old one while receivers move.
+- Test with `fakeChest({ emits })`: `chest.emitted` lists what the tool
+  told, checked as the Chest checks it; `chest.deliver({ type, source,
+  data, audience?, subject? }, tool)` delivers another tool's event.
 
 ## Do work at set times
 
@@ -405,10 +450,13 @@ at install and at every update.
 | The Chest refuses the repository: `manifest` | A key the contract does not have (a typo, or a key of a later contract), a missing `"chest"`, or a value outside its rule: `npx chest check` says which. |
 | The Chest refuses the repository: `migrations` | A file of `migrations/` not named `NNNN_name.sql`, not SQL text, or migrations without the capability `database`. |
 | `ChestError` with `invalid_path` | `path` is not `/chest` or under it (a full URL, `//`, `..`, a space or non-ASCII character). |
-| `events.handle` always answers 401 | The body was read before `handle` (a body parser), or the environment is not the Chest's (`CHEST_TOKEN`, `CHEST_TOOL`; in a test, deliver with `fakeChest().emit`). |
+| `events.handle` always answers 401 | The body was read before `handle` (a body parser), or the environment is not the Chest's (`CHEST_TOKEN`, `CHEST_TOOL`; in a test, deliver with `fakeChest().deliver`). |
 | `schedules.handle` always answers 401 | The body was read before `handle`, or the environment is not the Chest's (in a test, deliver with `fakeChest().run`). |
 | A schedule never runs | The route is not `POST /chest-schedules` at the root, the version was not approved, or its handler is missing (the tool's page says “the tool has no handler for this schedule (404)”). |
-| No event ever comes | `chest.json` does not declare `"receives": ["member.*"]` (with `members`), the version was not approved, or the route is not `POST /chest-events` at the root. |
+| No event ever comes | `chest.json` does not declare `"receives": ["member.*"]` (with `members`) or the tool event's type, the version was not approved, an admin switched the link off, the route is not `POST /chest-events` at the root, or — for a tool event — none of your members may see the item (its audience). |
+| `ChestError` `invalid_data` from `emit` | A field not declared in `"emits"`, a required one missing or `null`, a value of another kind (text with a control or format character, a date that does not exist), or a member the tool never had. |
+| `ChestError` `key_reused` from `emit` | The key went with other content within 72 hours: a key names one event; use another for another event. |
+| `CapabilityNotGranted` from `emit` | The version declares no `"emits"`, or was not approved. |
 | `ChestError` `erasure_not_found` from `acknowledgeErasure` | The erasure was not sent to this tool: acknowledge the `erasure` of the `member.erased` event you received. |
 | `RateLimited` from `members` | More than 600 calls a minute: use `lookup` (200 ids a call, kept a minute) instead of one `get` per row. |
 | `AiModelNotAllowed` from `ai` | The alias is not in `"ai": {"models"}` of `chest.json` (or is not one of `default`, `fast`, `smart`, `embedding`). |
