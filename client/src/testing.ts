@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import type { Duplex } from "node:stream";
 import type { Alias, Provider } from "./ai.js";
 import type { AiUnavailableReason } from "./errors.js";
 import { clockSkew, eventWindow, fieldNamePattern, fieldOf, instantOf, isAudience, isDeclaredData, isToolEventType, itemIdPattern, maxData, rolePattern } from "./eventrules.js";
@@ -8,6 +9,9 @@ import type { ChestEvent, EmitAudience, ToolEvent } from "./events.js";
 import { groupIdPattern, languagePattern, memberIdPattern, type Member } from "./member.js";
 import { forget } from "./members.js";
 import { eventChannel, json, object, scheduleChannel, sign, signClaims, type Channel } from "./signed.js";
+import { fakeRealtime, type FakeRealtime, type FakeRealtimeOptions } from "./testing-realtime.js";
+
+export type { FakeChannelRule, FakeFeed, FakePublished, FakeRealtime, FakeRealtimeOptions, FakeSent } from "./testing-realtime.js";
 
 // For a tool's own tests, never imported by its production code: a member's
 // assertion signed as the Chest signs it, and a Chest's API in the test's
@@ -18,11 +22,13 @@ import { eventChannel, json, object, scheduleChannel, sign, signClaims, type Cha
 // for the members and roles it keeps; withMember carries the member's
 // ticket), badges, notifications and broadcasts, AI (chat,
 // streamed or not, embeddings, models, usage: deterministic answers, no
-// provider), the acknowledgment of an erasure and the events the tool emits
+// provider), the acknowledgment of an erasure, the events the tool emits
 // (checked against the "emits" of its chest.json, as the Chest checks them,
-// and kept in order) with the Chest's bounds, quotas and errors; and that
-// delivers an event — of the members' lifecycle, or of another tool — or a
-// run of a schedule to the tool, signed as the Chest signs them.
+// and kept in order) and realtime (the tool's publishes and sends, and the
+// Chest's side of its pages, which the browser client connects to) with the
+// Chest's bounds, quotas and errors; and that delivers an event — of the
+// members' lifecycle, or of another tool — or a run of a schedule to the
+// tool, signed as the Chest signs them.
 //
 //   import { fakeChest, withMember } from "@argentic/chest-sdk/testing";
 //   const chest = await fakeChest({ members: [camille], capabilities: ["members", "files", "notifications"], emits: { "task.done": { description: "A task is done", data: { task: "id" } } } });
@@ -88,7 +94,8 @@ export type FakeOpen = { member: string; opened: number; refused: number };
 // none by default, which answers an emit 403), the files it keeps, its AI, and what the Chest is
 // (the chest module: "Test organization", UTC, English and euros by default;
 // the tool at https://<tool>-chest.chest.test, its public part at
-// https://<tool>.chest.test).
+// https://<tool>.chest.test), and its realtime: the channels and feeds of
+// its chest.json, and who is in its membership tables.
 export type FakeChestOptions = {
   members?: Member[];
   former?: FakeFormer[];
@@ -99,6 +106,7 @@ export type FakeChestOptions = {
   emits?: Record<string, FakeEmits>;
   files?: Record<string, { data: Uint8Array | string; type?: string }>;
   ai?: FakeAi;
+  realtime?: FakeRealtimeOptions;
   chest?: { organization?: string; timeZone?: string; language?: string; currency?: string; teamUrl?: string; publicUrl?: string | null };
 };
 
@@ -136,7 +144,9 @@ export type FakeRun = { id?: string; scheduledAt?: string; attempt?: number };
 // changes or reads; the notifications the tool sent, in the order sent, a
 // replaced one last; each member's badge; the erasures the tool
 // acknowledged; its calls to AI, in order; its opens of sealed values, in
-// order; the events it emitted, in order), deliver, which delivers an event to the tool — POST
+// order; the events it emitted, in order; its realtime: what the tool
+// published and sent, where a member's page connects, a feed's row
+// committed, a membership row removed), deliver, which delivers an event to the tool — POST
 // /chest-events of its address, or a handler of Web Requests — and says the
 // status it answered, run, which delivers a run of a schedule the same way
 // on /chest-schedules, and close, which stops it and restores the
@@ -154,6 +164,7 @@ export type FakeChest = {
   acknowledged: string[];
   ai: FakeAiCall[];
   opens: FakeOpen[];
+  realtime: FakeRealtime;
   emitted: FakeEmitted[];
   deliver(event: FakeEvent, to: string | ((request: Request) => Response | Promise<Response>)): Promise<number>;
   run(name: string, to: string | ((request: Request) => Response | Promise<Response>), run?: FakeRun): Promise<number>;
@@ -343,7 +354,11 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   }
   // The erasures the tool was told of, by deliver: those it may acknowledge.
   const erasures = new Set<string>();
-  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], ai: [], opens: [], emitted: [], deliver: async () => 0, run: async () => 0, close: async () => {} };
+  const realtime = fakeRealtime(options.realtime ?? {}, () => chest.api, id => {
+    const m = chest.members.find(x => x.id === id);
+    return m ? m.role : undefined;
+  });
+  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], ai: [], opens: [], realtime: realtime.realtime, emitted: [], deliver: async () => 0, run: async () => 0, close: async () => {} };
   const former = [...(options.former ?? [])];
   let window = 0, calls = 0;
   // The groups the tool sees: those that give it, or all with members.groups;
@@ -814,6 +829,14 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     send(response, 204);
   }
 
+  // Realtime: the tool's API, and the probe of a page that asks whether its
+  // member may connect.
+  async function realtimeRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    if (!capabilities.has("realtime")) return send(response, url.pathname === "/_chest/realtime" ? 404 : 403, url.pathname === "/_chest/realtime" ? undefined : { error: "capability_not_granted" });
+    if (url.pathname === "/_chest/realtime") return realtime.probe(response, url, send);
+    return realtime.api(request, response, url, body, send);
+  }
+
   // The events the tool emits (POST /events), checked against its "emits"
   // as the Chest checks them: a member it never had, a group it does not
   // know, are refused; an idempotency key used within 72 hours answers its
@@ -850,7 +873,8 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
 
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
-    const route = url.pathname.startsWith("/_chest/files/") ? front
+    const route = url.pathname === "/_chest/realtime" || url.pathname.startsWith("/realtime/") ? realtimeRoute
+      : url.pathname.startsWith("/_chest/files/") ? front
       : url.pathname.startsWith("/erasures/") ? erasuresRoute
       : url.pathname === "/events" ? eventsRoute
       : url.pathname.startsWith("/ai/") ? aiRoute
@@ -860,6 +884,12 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       : url.pathname === "/badges" || url.pathname.startsWith("/badges/") || url.pathname.startsWith("/notifications") ? notificationsRoute : null;
     if (!route) return send(response, 404, { error: "not_found" });
     route(request, response, url).catch(() => { if (!response.headersSent) send(response, 503, { error: "unavailable" }); else response.destroy(); });
+  });
+  // A page's connection: the Chest's side of the browser client.
+  server.on("upgrade", (request: IncomingMessage, socket: Duplex) => {
+    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (url.pathname !== "/_chest/realtime" || !capabilities.has("realtime")) return void socket.end("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n");
+    realtime.upgrade(request, socket, url);
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
   const saved = Object.fromEntries(["CHEST_API", "CHEST_TOKEN", "CHEST_TOOL", "CHEST_ORGANIZATION", "CHEST_TIME_ZONE", "CHEST_LANGUAGE", "CHEST_CURRENCY", "CHEST_TEAM_URL", "CHEST_PUBLIC_URL"].map(name => [name, process.env[name]]));
@@ -895,6 +925,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     return post("/chest-schedules", scheduleChannel, id, body, to);
   };
   chest.close = async () => {
+    realtime.close();
     ticketOf = null;
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));

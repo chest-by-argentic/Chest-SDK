@@ -30,10 +30,12 @@ const expected = {
   events: ["acknowledgeErasure", "emit", "erasureIdPattern", "handle", "memorySeen", "verify"],
   schedules: ["handle", "verify"],
   ai: ["chat", "embed", "models", "usage"],
+  realtime: ["channelPattern", "eventPattern", "online", "presence", "publish", "send"],
+  "realtime/client": ["connect", "peerEventPattern"],
   testing: ["fakeChest", "signAssertion", "withMember"],
 };
-const namespaces = ["sealed", "files", "members", "notifications", "events", "schedules", "ai"];
-const rootExports = [...Object.entries(expected).filter(([sub]) => !namespaces.includes(sub) && sub !== "testing").flatMap(([, names]) => names), ...namespaces].sort();
+const namespaces = ["sealed", "files", "members", "notifications", "events", "schedules", "ai", "realtime"];
+const rootExports = [...Object.entries(expected).filter(([sub]) => !namespaces.includes(sub) && sub !== "testing" && sub !== "realtime/client").flatMap(([, names]) => names), ...namespaces].sort();
 
 const subpaths = Object.keys(manifest.exports).filter(key => key !== "./package.json");
 assert.deepEqual(subpaths.sort(), [".", ...Object.keys(expected).map(sub => "./" + sub)].sort(), "the exports map and this check name the same subpaths");
@@ -58,14 +60,14 @@ try {
   console.log(`${packed.filename}: ${shipped.length} files, ${packed.size} bytes`);
   for (const path of shipped) console.log("  " + path);
   for (const path of shipped) {
-    assert.ok(/^(package\.json|README\.md|LICENSE|dist\/.+\.(js|d\.ts)(\.map)?|client\/index\.ts|client\/src\/[a-z]+\.ts)$/u.test(path), `unexpected file in the package: ${path}`);
+    assert.ok(/^(package\.json|README\.md|LICENSE|dist\/.+\.(js|d\.ts)(\.map)?|client\/index\.ts|client\/src\/[a-z]+(-[a-z]+)?\.ts)$/u.test(path), `unexpected file in the package: ${path}`);
   }
   for (const target of Object.values(manifest.exports).flatMap(entry => typeof entry === "string" ? [entry] : Object.values(entry))) {
     assert.ok(shipped.includes(target.slice(2)), `export target missing from the package: ${target}`);
   }
 
   // The runtime client stays small: the checker is its own package.
-  assert.ok(packed.size < 200 * 1024, `${name} packs ${packed.size} bytes: the runtime client must stay small`);
+  assert.ok(packed.size < 256 * 1024, `${name} packs ${packed.size} bytes: the runtime client must stay small`);
   step("npm pack @argentic/chest-check");
   const [checkPacked] = JSON.parse(run(npm, ["pack", "--json", "--pack-destination", work], join(root, "check")).replace(/^[^[]*/su, ""));
   console.log(`${checkPacked.filename}: ${checkPacked.files.length} files, ${checkPacked.size} bytes (unpacked ${checkPacked.unpackedSize})`);
@@ -96,10 +98,11 @@ try {
     `try { database.databaseUrl(); } catch (error) { refused = error instanceof errors.CapabilityNotGranted && error instanceof root.ChestError; }`,
     `const nobody = modules[${JSON.stringify(name + "/member")}].member(new Request("http://tool.test/chest", { headers: { "chest-member": "a.b.c" } }));`,
     `const testing = modules[${JSON.stringify(name + "/testing")}];`,
-    `const chest = await testing.fakeChest({ members: [{ id: "mbr_" + "a".repeat(26), firstName: "Ada", lastName: "L", name: "Ada L", photo: null, role: null, isAdmin: false, isBuilder: false, groups: [], language: "en", timeZone: "Europe/Paris" }] });`,
+    `const chest = await testing.fakeChest({ members: [{ id: "mbr_" + "a".repeat(26), firstName: "Ada", lastName: "L", name: "Ada L", photo: null, role: null, isAdmin: false, isBuilder: false, groups: [], language: "en", timeZone: "Europe/Paris" }], capabilities: ["members", "files", "notifications", "ai", "realtime"], realtime: { channels: [{ name: "everyone" }] } });`,
     `const listed = (await root.members.list()).members.map(m => m.name);`,
     `const delivered = (await root.notifications.notify([chest.members[0].id], { title: "Hello" })).delivered;`,
     `const kept = chest.notifications.map(n => n.title);`,
+    `const published = (await root.realtime.publish("everyone", "hello", { n: 1 })).seq;`,
     `const signed = modules[${JSON.stringify(name + "/member")}].member(testing.withMember(new Request("http://tool.test/chest"), chest.members[0]))?.id;`,
     `const told = [];`,
     `const said = (await root.ai.chat({ model: "default", messages: [{ role: "user", content: "Hi" }] })).text;`,
@@ -108,7 +111,7 @@ try {
     `const calls = chest.ai.map(c => c.path);`,
     `const answered = await chest.deliver({ type: "access.revoked", data: { id: chest.members[0].id } }, request => root.events.handle(request, { "access.revoked": e => { told.push(e.data.id); } }).then(status => new Response(null, { status })));`,
     `await chest.close();`,
-    `console.log(JSON.stringify({ names, sameClass: root.ChestError === errors.ChestError, sameFiles: root.files.put === modules[${JSON.stringify(name + "/files")}].put, sameMembers: root.members.list === modules[${JSON.stringify(name + "/members")}].list, sameAi: root.ai.chat === modules[${JSON.stringify(name + "/ai")}].chat, refused, nobody, listed, delivered, kept, signed, said, streamed, calls, answered, told }));`,
+    `console.log(JSON.stringify({ names, sameClass: root.ChestError === errors.ChestError, sameFiles: root.files.put === modules[${JSON.stringify(name + "/files")}].put, sameMembers: root.members.list === modules[${JSON.stringify(name + "/members")}].list, sameAi: root.ai.chat === modules[${JSON.stringify(name + "/ai")}].chat, refused, nobody, listed, delivered, kept, published, signed, said, streamed, calls, answered, told }));`,
   ].join("\n") + "\n";
   function verify(output, how) {
     const result = JSON.parse(output);
@@ -122,6 +125,7 @@ try {
     assert.deepEqual(result.listed, ["Ada L"], `${how}: members listed from a fake Chest`);
     assert.deepEqual([result.delivered, result.kept], [["mbr_" + "a".repeat(26)], ["Hello"]], `${how}: a notification delivered by a fake Chest`);
     assert.equal(result.sameAi, true, `${how}: one ai module for the root and /ai`);
+    assert.equal(result.published, 1, `${how}: a live event published to a fake Chest`);
     assert.deepEqual([result.said, result.streamed, result.calls], ["Hi", "Hi there", ["/ai/chat", "/ai/chat"]], `${how}: a chat answered by a fake Chest, whole and streamed`);
     assert.equal(result.signed, "mbr_" + "a".repeat(26), `${how}: an assertion of the testing module reads as its member`);
     assert.deepEqual([result.answered, result.told], [204, ["mbr_" + "a".repeat(26)]], `${how}: an event delivered by a fake Chest handled once`);
