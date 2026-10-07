@@ -550,6 +550,6 @@ test("a commit runs every feed of its table: its channel from the row's column, 
 // served beside its own script, without a bundler.
 test("the browser client is one module, importing nothing", async () => {
   const { readFile } = await import("node:fs/promises");
-  const source = await readFile(new URL("../../../client/src/realtime-client.ts", import.meta.url), "utf8");
+  const source = await readFile(new URL("../src/realtime-client.js", import.meta.url), "utf8");
   assert.doesNotMatch(source, /^\s*(import|export)\s[^;]*\sfrom\s/mu);
 });
