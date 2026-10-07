@@ -156,6 +156,22 @@ previous version must keep working on the new schema.
   with a nonce per response: the Chest then adds beside it only its floor
   policy, which never blocks a script. An answer without a policy still gets
   the default one.
+- **Embedded in the company's website.** The owner or an admin may allow
+  sites (`https://acme.fr`) to frame the public part, in the tool's settings:
+  the Chest then writes them in `frame-ancestors` instead of `'none'` on the
+  public part only — its host and its custom domain —, never on `/chest`. A
+  page framed by one of them gets `<script src="/_chest/frame.js" async>`
+  right after its `<body>`, which tells the site the page's height; the
+  site's page loads `/_chest/embed.js` beside the frame (the snippet the
+  settings give). A tool with its own policy keeps it: `'self'` scripts (or
+  `strict-dynamic` with that script loaded by its own nonced code) let the
+  frame resize, and its own `frame-ancestors` still wins. Framed by another
+  site, a page is a third-party document: keep its state in the page — a
+  form's fields — rather than in cookies, which browsers block there unless
+  they are `SameSite=None; Secure; Partitioned`.
+- **`/_chest/` is the Chest's** on both hosts: the team host's sign-in, links
+  and uploads; the public part's visitors' uploads and embedding scripts.
+  The tool never receives a request under it.
 - **Inline styles.** React's `style={…}` writes style attributes, which
   `style-src` does not allow without `'unsafe-inline'`: add
   `style-src-attr 'unsafe-inline'` to the tool's own policy (attributes

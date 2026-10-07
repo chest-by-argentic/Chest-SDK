@@ -46,6 +46,15 @@ export class TooLarge extends ChestError {
   }
 }
 
+// The server of the Chest has no more disk for files, whatever the tool's
+// quota: nothing was kept. Its owner frees space or takes a larger server;
+// the tool says the file could not be kept, and may try again later.
+export class StorageFull extends ChestError {
+  constructor() {
+    super("storage_full", 507, "the Chest refused: its server's disk is full");
+  }
+}
+
 // The Chest did not answer, or not as it does: nothing is known of what was
 // asked — a write may or may not have happened.
 export class Unavailable extends ChestError {
