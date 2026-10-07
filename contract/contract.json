@@ -264,7 +264,7 @@
     "max": 256,
     "maxBytes": 1048576,
     "maxTotalBytes": 8388608,
-    "rule": "Played in the order of their names, each once, as one simple query in a transaction of its own, as the tool's database role: the owner of its database, not a superuser. Only with the capability database. UTF-8 SQL text without NUL; a migration played is never changed: a change is a new one.",
+    "rule": "Played in the order of their names, each once, as one simple query in a transaction of its own, as the tool's database role: the owner of its database, not a superuser. Only with the capability database. UTF-8 SQL text without NUL; a migration played is never changed: a change is a new one. Expand, then contract: the version in service runs on the new schema while the next one starts, and after a rollback without its data, so a migration only adds; what a version stops reading is dropped, renamed or retyped by the release after it, in a migration marked with the line \"-- chest: contract\" (chest check warns about any other).",
     "trustedExtensions": [
       "btree_gin",
       "btree_gist",

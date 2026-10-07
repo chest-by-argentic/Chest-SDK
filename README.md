@@ -803,8 +803,16 @@ repository's `migrations/NNNN_name.sql` files
 Chest, in order, each in its own transaction, at install and at every update,
 before the new version receives traffic; a failing file keeps the version in
 service. The Chest keeps the list of files run (table `chest_migrations`): a
-version that loses one or changes one is refused. A migration must leave the
-previous version working — going back to the previous version undoes nothing.
+version that loses one or changes one is refused. Before a version's
+migrations the Chest sets the tool's database aside (a copy, bounded by the
+server's disk): a version that does not become ready is put back with it, and
+a rollback to the version before brings that version's data back — what was
+written since is not in it, which the owner is told before deciding. Without
+a copy (none was needed, or the disk could not keep it) the previous version
+runs on the schema as it is. So a migration only adds — **expand, then
+contract**: a column or a table a version stops reading is dropped, renamed
+or retyped by the next release, in a migration marked with the line
+`-- chest: contract`; `chest check` warns about any other.
 
 ## `sealed` — sensitive values only members open
 

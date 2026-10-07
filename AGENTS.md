@@ -454,9 +454,23 @@ at install and at every update.
 - **Handle `CapabilityNotGranted`.** It is thrown when `chest.json` does not
   declare the capability or the version was not approved; show a clear message
   instead of crashing.
-- **Keep migrations backward compatible.** A rollback does not undo a
-  migration: the previous version must keep working on the new schema. Never
-  edit or delete a migration that already ran.
+- **Migrations only add: expand, then contract.** While a new version
+  starts, the version in service runs on the schema its migrations made; so
+  does a version put back without its data. Add tables, nullable columns or
+  columns with a default, indexes. To drop, rename or change the type of a
+  column or a table, release twice: first a version that no longer reads it
+  (expand), then — once no version that reads it can run — a migration that
+  drops it, with the line `-- chest: contract` (contract). `npx chest check`
+  warns about any other migration that drops, renames or retypes. Never
+  edit or delete a migration that already ran. The Chest sets the database
+  aside before a version's migrations: a version that fails to start is put
+  back with its data, and a rollback brings the data of that version back
+  (what was written since is lost, and the owner is told).
+- **Answer `/chest` without a member.** The Chest puts a version in service
+  once `GET /chest` asked by nobody answers 2xx, 3xx, 401, 403 or 404 — the
+  401 of `member(request) === null` is the usual one. A 5xx there, or no
+  answer within 60 s, and the version is never put in service: never let
+  that path throw.
 - **No network, no local disk.** The container has no outbound network and a
   read-only root; store files through `files`, data in the database.
 - **Give signed file links only to members.** A `files.url()` link opens

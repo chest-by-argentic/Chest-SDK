@@ -119,11 +119,18 @@ The Chest builds with `npm ci`, then `build.command`, and starts
 at run time but the hosts `network` declares. The container's root is
 read-only: store files through the SDK's `files`, data in the database.
 
+A version is put in service once it is **ready**: `GET /chest`, asked by
+nobody (no member, no session, redirects not followed), answers 2xx, 3xx,
+401, 403 or 404 within 60 s — the 401 of a members' part without a member is
+the usual answer, a 404 that of a tool without one. A 5xx or any other
+status is not ready: a new version is never put in service, and the version
+before it runs on. Never let that path fail.
+
 ## Migrations
 
 <!-- contract:migrations -->
 - Files of `migrations/` named `^[0-9]{4}_[a-z0-9_-]{1,64}\.sql$`: 256 at most, 1 MiB each, 8 MiB in all.
-- Played in the order of their names, each once, as one simple query in a transaction of its own, as the tool's database role: the owner of its database, not a superuser. Only with the capability database. UTF-8 SQL text without NUL; a migration played is never changed: a change is a new one.
+- Played in the order of their names, each once, as one simple query in a transaction of its own, as the tool's database role: the owner of its database, not a superuser. Only with the capability database. UTF-8 SQL text without NUL; a migration played is never changed: a change is a new one. Expand, then contract: the version in service runs on the new schema while the next one starts, and after a rollback without its data, so a migration only adds; what a version stops reading is dropped, renamed or retyped by the release after it, in a migration marked with the line "-- chest: contract" (chest check warns about any other).
 - Extensions a migration may create (`create extension if not exists …`): `btree_gin`, `btree_gist`, `citext`, `cube`, `dict_int`, `fuzzystrmatch`, `hstore`, `intarray`, `isn`, `lo`, `ltree`, `pg_trgm`, `pgcrypto`, `seg`, `tablefunc`, `tcn`, `tsm_system_rows`, `tsm_system_time`, `unaccent`, `uuid-ossp`.
 <!-- /contract:migrations -->
 
@@ -134,8 +141,27 @@ triggers in SQL or PL/pgSQL, schemas, text search configurations, and the
 extensions above. It may take row and table locks. Never a role, a database,
 another extension, an untrusted language or a server setting: PostgreSQL
 refuses them to the tool's role. A migration that has run is never edited:
-a change is a new file; a rollback does not undo a migration, so the
-previous version must keep working on the new schema.
+a change is a new file.
+
+Before a version's migrations, the Chest sets the tool's database aside (a
+copy, within the server's disk): a version that does not become ready is put
+back with it, and a rollback to the version before brings that version's
+data back — what was written since is lost, and the owner is told before
+deciding. Without a copy, the previous version runs on the schema as it is,
+and while a new version starts the one in service runs on its schema anyway:
+**expand, then contract**. Add tables, nullable columns or columns with a
+default, indexes; to drop, rename or retype a column or a table, release a
+version that no longer reads it first, then a migration that changes it,
+marked with a line of its own:
+
+```sql
+-- chest: contract
+-- Release 12 stopped reading notes.text (it reads notes.body).
+ALTER TABLE notes DROP COLUMN text;
+```
+
+`chest check` warns about a migration that drops, renames or retypes without
+that line.
 
 ## Content-Security-Policy
 
