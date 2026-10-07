@@ -308,18 +308,18 @@ events; no socket code, no token, no polling.
 // In the page's own script (the one SDK module made for the browser)
 import { connect } from "@argentic/chest-sdk/realtime/client";
 const room = connect().channel("room:42");
-room.on("joined", ({ replayed }) => replayed || load()); // fetch once joined, unless what was missed came again
-room.on("messages.insert", row => add(row));           // dedupe by id
-room.on("resync", () => load());
-room.on("typing", (_, from) => showTyping(from));
-room.send("typing");
+room.onJoined(({ replayed }) => replayed || load());   // fetch once joined, unless what was missed came again
+room.on("messages.insert", row => add(row));           // the Chest's events only: dedupe by id
+room.onResync(() => load());
+room.peers.on("typing", (_, from) => showTyping(from)); // other members' messages, apart
+room.peers.send("typing");                             // no dot in the name
 room.presence.track({ active: true });
 ```
 
 ```ts
 // On the server, for what is not a row
 import * as realtime from "@argentic/chest-sdk/realtime";
-const { online } = await realtime.online(memberIds);    // notify the others
+const { online, watching } = await realtime.online(memberIds, { channel: "room:42" }); // notify all but those watching
 await realtime.publish("inbox:" + id, "rooms.changed", { room: 42 });
 ```
 
@@ -335,12 +335,19 @@ await realtime.publish("inbox:" + id, "rooms.changed", { room: 42 });
 - The client hides cuts: `status` false only after 3 s away, `closed` only
   for a member signed out or without access (reload, or say so).
 - Write through the tool's own HTTP routes (`POST /chest/api/…`), which
-  check `member()`; the socket only reads, but for ephemeral `send`.
+  check `member()`; the socket only reads, but for ephemeral `peers.send`.
+- A member's message comes only through `peers.on`, with its sender, never
+  through `on` (the feeds' rows and the tool's publishes); the channel's
+  life is `onJoined`, `onResync`, `onKicked`, `onRefused`, never an event.
+- Call `live.focus(channel)` when a conversation is on screen (`null` when
+  none): `realtime.online(ids, { channel })` then says who is `watching`
+  it — notify the members online but not watching, and those not online.
 - Test with `fakeChest({ capabilities: [..., "realtime"], realtime: { channels, feeds, membership } })`:
   `chest.realtime.commit("messages", "insert", row)`, `chest.realtime.published`,
   a page as `connect({ url: chest.realtime.url(memberId) })`, a page away
   with `drop(memberId)` and `advance(ms)` (the Chest's clock), `signOut`,
-  `full(seconds)`, `renewals`.
+  `full(seconds)` (`full(seconds, "joins")`), `renewals`. `commit` takes the
+  whole row and runs every feed of its table, as the Chest's triggers.
 
 ## Let a member upload a file
 
@@ -516,6 +523,8 @@ at install and at every update.
 | `ChestError` with `invalid_path` | `path` is not `/chest` or under it (a full URL, `//`, `..`, a space or non-ASCII character). |
 | `realtime/client` never connects | The page is not on the tool's team host (`/chest`), the version lacks `"realtime"` in its capabilities or was not approved, or the connection is from another site. |
 | `ChestError` `invalid_channel` from `realtime.publish` | No pattern of `"realtime": {"channels"}` matches the name (a typo, an uppercase letter, a segment of more than 64 characters). |
+| `ChestError` `invalid_event` from `peers.send` | A member's message is named 1 to 64 of `a-z 0-9 _ -`, without a dot: dotted names are the feeds' rows and the tool's events (`typing`, not `room.typing`). |
+| A member's message never reaches `on` | It reaches `peers.on(event, (payload, from) => …)`: `on` hears only the Chest's events. |
 | `events.handle` always answers 401 | The body was read before `handle` (a body parser), or the environment is not the Chest's (`CHEST_TOKEN`, `CHEST_TOOL`; in a test, deliver with `fakeChest().deliver`). |
 | `schedules.handle` always answers 401 | The body was read before `handle`, or the environment is not the Chest's (in a test, deliver with `fakeChest().run`). |
 | A schedule never runs | The route is not `POST /chest-schedules` at the root, the version was not approved, or its handler is missing (the tool's page says “the tool has no handler for this schedule (404)”). |

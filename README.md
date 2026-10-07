@@ -37,7 +37,7 @@ client and the testing module are not in the root).
 | `@argentic/chest-sdk/schedules` | `handle`, `verify`, types `Run`, `Handlers`, `Seen`: the runs of the tool's schedules (`"schedules"` in `chest.json`) the Chest posts to its `/chest-schedules` at their times, verified, deduplicated by id |
 | `@argentic/chest-sdk/ai` | `chat`, `embed`, `models`, `usage`, types `Alias`, `Provider`, `ChatMessage`, `ChatTool`, `ToolChoice`, `ResponseFormat`, `ChatOptions`, `ChatResult`, `ChatChunk`, `ToolCall`, `ToolCallDelta`, `Usage`, `EmbedOptions`, `Embeddings`, `AiModel`, `AiUsage`: AI models through the Chest, on the owner's connectors, metered against the tool's monthly cap (capability `ai`) |
 | `@argentic/chest-sdk/realtime` | `publish`, `send`, `online`, `presence`, `channelPattern`, `eventPattern`, type `Present`: live updates of the members' pages, the Chest holding their connections (capability `realtime`, the key `realtime` of `chest.json`) |
-| `@argentic/chest-sdk/realtime/client` | `connect`, types `Live`, `Channel`, `Listener`, `Present`, `ClosedReason`: **the browser's side**, the one module that runs in a page — it joins the tool's channels on the Chest and hears its feeds' rows, its events, the other pages and who is present |
+| `@argentic/chest-sdk/realtime/client` | `connect`, `peerEventPattern`, types `Live`, `Channel`, `Listener`, `EventInfo`, `PeerListener`, `RefusedListener`, `Present`, `ClosedReason`: **the browser's side**, the one module that runs in a page — it joins the tool's channels on the Chest and hears its feeds' rows and its events, apart from the other members' messages, and who is present; it tells the Chest which channel the member has on screen |
 | `@argentic/chest-sdk/database` | `databaseUrl()`: the address of the tool's own PostgreSQL database (capability `database`) |
 | `@argentic/chest-sdk/sealed` | `seal`, `sealMany`, `open`, `openMany`, `isSealed`, types `SealOptions`, `SealItem`, `OpenItem`: sensitive values the Chest seals under a key of the tool and opens again only for the member of a request — and only one holding a role the value was sealed for (capability `sealed`) |
 | `@argentic/chest-sdk/files` | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl`, types `FileObject`, `FileData`, `FilePage`: the tool's private files (capability `files`), kept by the Chest, a 15-minute signed link to one (or to its thumbnail), and uploads straight from a member's or a visitor's browser |
@@ -1116,8 +1116,10 @@ and hears:
   `.delete` on its channel, carrying the declared columns (the Chest
   installs the triggers after the migrations: no SQL to write);
 - what the tool **publishes** (`realtime.publish`) — what is not a row;
-- the other pages' **ephemeral sends** (typing, cursors), with their sender
-  set by the Chest;
+- the other members' **ephemeral messages** (typing, cursors), with their
+  sender set by the Chest — apart: a member's message never arrives as the
+  Chest's event, and its name has no dot (dotted names are the feeds' and
+  the tool's), so no member can pass for a row or for the tool;
 - who is **present**, merged across each member's pages.
 
 ```jsonc
@@ -1150,14 +1152,17 @@ import { connect } from "@argentic/chest-sdk/realtime/client";
 
 const live = connect();
 const room = live.channel("room:42");
-room.on("joined", ({ replayed }) => replayed || refetchAfter(lastId));  // joined (again): fetch, unless replayed
+room.onJoined(({ replayed }) => replayed || refetchAfter(lastId));  // joined (again): fetch, unless replayed
 room.on("messages.insert", row => show(row));      // a row, as committed
-room.on("typing", (_, from) => showTyping(from));
-room.on("resync", () => refetchAfter(lastId));     // what was missed is not all kept
-room.on("kicked", () => leaveRoom());
-room.send("typing");
+room.on("rooms.changed", payload => …);            // realtime.publish
+room.onResync(() => refetchAfter(lastId));         // what was missed is not all kept
+room.onKicked(() => leaveRoom());
+room.onRefused(code => …);                         // "forbidden", "invalid_channel", "unavailable"
+room.peers.on("typing", (_, from) => showTyping(from));  // another member's message
+room.peers.send("typing");
 room.presence.track({ active: true });
 room.presence.on(list => showOnline(list));
+live.focus("room:42");                             // the conversation on screen (null: none)
 live.on("direct", (event, payload) => …);           // realtime.send
 live.on("status", connected => showOffline(!connected)); // false only after 3 s away
 live.on("closed", reason => reason === "access_removed" ? showAccessRemoved() : location.reload());
@@ -1169,7 +1174,7 @@ On the server:
 import * as realtime from "@argentic/chest-sdk/realtime";
 
 await realtime.publish("inbox:" + memberId, "rooms.changed", { id: 42 });
-const { online } = await realtime.online(roomMemberIds);   // notify the others
+const { online, watching } = await realtime.online(roomMemberIds, { channel: "room:42" });  // notify those not watching
 await realtime.send([memberId], "unread", { room: 42, count: 3 });
 const { members } = await realtime.presence("everyone");
 ```
@@ -1178,8 +1183,24 @@ const { members } = await realtime.presence("everyone");
 |---|---|
 | `publish(channel, event, payload?)` | To every page joined to a channel the tool declares: `{seq}`, its number. Kept 2 minutes for pages that reconnect |
 | `send(memberIds, event, payload?)` | To every page of these members, outside any channel: `{reached}`, those who had one |
-| `online(memberIds)` | `{online}`: those with a page of the tool open now — the others are told by `notify` |
+| `online(memberIds, {channel?})` | `{online, watching}`: those with a page of the tool open now, and those of them watching `channel` — a page focused on it (`live.focus`) and in the foreground; `[]` without a channel. A chat notifies the members online but not watching the conversation, and every member not online (`notify`): those watching see the message already |
 | `presence(channel)` | `{members: [{id, state}]}` |
+
+In the page, a channel gives:
+
+| Method | Does |
+|---|---|
+| `on(event, (payload, {pos?, partial?}) => …)` | The Chest's events only: a feed's row (`<table>.insert`…, its position in the change log; `partial` when too long to be carried whole: its first column only) or what the tool publishes |
+| `onJoined(({replayed}) => …)`, `onResync`, `onKicked`, `onRefused(code => …)` | The channel's life: joined (again), what was missed not all kept, the member taken out, the join refused — never an event name: a tool event named `joined` or `resync` is heard by `on` |
+| `peers.on(event, (payload, from) => …)`, `peers.send(event, payload?)` | The other members' messages, on a channel whose rule says `send`: 1 to 64 of `a-z 0-9 _ -`, no dot (`peerEventPattern`; another name throws `ChestError` `invalid_event`), 4 KiB of JSON |
+| `presence.track(state)`, `presence.list()`, `presence.on(list => …)` | Who is present, the member's own state kept across reconnects |
+| `leave()` | Leaves the channel |
+
+`live.focus(name | null)` says which joined channel the member has on screen;
+the Chest keeps it for the tool alone (`watching`), never shows it to other
+members, and forgets it when the channel is left; the client sends none
+while the page is hidden and sends it again when it is shown and after each
+reconnect.
 
 - **Nothing missed, however long away.** The database is the truth; an
   event says something changed. A page that reconnects (a phone back from
@@ -1197,7 +1218,9 @@ const { members } = await realtime.presence("everyone");
   network, never while offline (going offline drops the connection at
   once), after a quiet wait when the Chest is full —
   and says `status` false only when it stays away 3 seconds: a server
-  restart or a network switch shows nothing.
+  restart or a network switch shows nothing. A join the Chest's memory
+  cannot hold now is tried again with the same backoff, unseen; a page
+  joins as many channels as it needs.
 - **Never trust content as HTML.** Render payloads and rows as text.
 - **Revocation is the Chest's.** A member whose access is taken back is
   closed `access_removed` at once; `closed` says it. `signed_out`: the
@@ -1251,7 +1274,7 @@ await chest.close();
 | `chest.members`, `chest.groups`, `chest.files` | What the fake Chest holds, to change or assert on; its `members` are those who have the tool |
 | `chest.notifications`, `chest.badges` | What the tool sent: the items kept, `{member, title, body?, path, key?}` in the member's language (their translation, the tool's own words otherwise) cleaned as the Chest cleans them — one for each member a broadcast reached —, in the order sent (a replaced item removed, the new one last; `withdraw` removes; beyond the pace, a member's notices folded into one item with `grouped`, the latest's text, last), and each member's badge (`Map` member → count; 0 removes it) |
 | `realtime: {channels?, feeds?, membership?}` | The fake Chest's realtime, under the `realtime` key of the tool's `chest.json` (`channels`, `feeds`) and `membership(table, key, member)`, who is in a membership table (nobody by default); capability `realtime` in `capabilities`. Its API answers `publish`, `send`, `online`, `presence` with the Chest's errors; a page of a member connects with `connect({ url: chest.realtime.url(memberId) })`, the Chest's protocol and rules (a presence leaves at once) |
-| `chest.realtime` | `published` and `sent`, what the tool published and sent in order; `url(memberId)`; `commit(table, op, row)`, a feed's row committed — the next position of the change log, published as the Chest's trigger would; that position —; `removed(table, key, member)`, a membership row that went; `drop(memberId, code?, reason?)`, that member's pages cut as a network would, or closed with a code (1001, 1013, 1008 `session_ended`): they reconnect and are given what they missed; `revoke(memberId)`, closed as access removed; `signOut(memberId)`, their session ended: the next renewal answers 401; `full(seconds)`, no room for that long (503 with `Retry-After`); `advance(ms)`, the Chest's clock moved: its memory (2 minutes) and change log (7 days) age — a page's own timers are the test's (`mock.timers`); `renewals`, how many times pages renewed their session or asked before reconnecting |
+| `chest.realtime` | `published` and `sent`, what the tool published and sent in order; `url(memberId)`; `commit(table, op, row)`, a row committed, whole as the database holds it, as the Chest's triggers tell it — for each feed of the table in the order declared, the next position of the change log, published to the feed's channel filled from the row's column it names (which need not be carried) with the feed's columns only; the positions given, none for a feed whose column is null or absent —; `removed(table, key, member)`, a membership row that went; `drop(memberId, code?, reason?)`, that member's pages cut as a network would, or closed with a code (1001, 1013, 1008 `session_ended`): they reconnect and are given what they missed; `revoke(memberId)`, closed as access removed; `signOut(memberId)`, their session ended: the next renewal answers 401; `full(seconds)`, no room for that long (503 with `Retry-After`), `full(seconds, "joins")`, joins answered `full` for that long; `advance(ms)`, the Chest's clock moved: its memory (2 minutes) and change log (7 days) age — a page's own timers are the test's (`mock.timers`); `renewals`, how many times pages renewed their session or asked before reconnecting |
 | `chest.close()` | Stops it and restores the environment |
 
 ## Version

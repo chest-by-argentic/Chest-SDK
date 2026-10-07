@@ -13,7 +13,7 @@ import { memberIdPattern } from "./member.js";
 //   import * as realtime from "@argentic/chest-sdk/realtime";
 //   await realtime.publish("everyone", "rooms.changed", { id: 42 });  // to every page joined there
 //   const { reached } = await realtime.send([memberId], "unread", { room: 42, count: 3 });
-//   const { online } = await realtime.online(roomMemberIds);          // then notify the others
+//   const { online, watching } = await realtime.online(roomMemberIds, { channel: "room:42" });  // notify those not watching it
 //   const { members } = await realtime.presence("everyone");
 //
 // Delivery is at most once: the tool's database is the truth, an event a
@@ -90,11 +90,16 @@ export async function send(memberIds: Iterable<string>, event: string, payload?:
   return { reached: ids(answer["reached"]) };
 }
 
-// online says which of these members have a page of the tool open now:
-// what decides whether to notify them instead.
-export async function online(memberIds: Iterable<string>): Promise<{ online: string[] }> {
-  const answer = record(await call("POST", "/realtime/online", JSON.stringify({ members: checkIds(memberIds) })));
-  return { online: ids(answer["online"]) };
+// online says which of these members have a page of the tool open now,
+// and, given a channel, which of them watch it — a page focused on it
+// (live.focus) and in the foreground: what decides whom to notify. A chat
+// notifies the members online but not watching the conversation, and every
+// member not online: those watching it see the message already.
+export async function online(memberIds: Iterable<string>, options: { channel?: string } = {}): Promise<{ online: string[]; watching: string[] }> {
+  const members = checkIds(memberIds);
+  const channel = options.channel === undefined ? undefined : checkChannel(options.channel);
+  const answer = record(await call("POST", "/realtime/online", JSON.stringify({ members, ...(channel === undefined ? {} : { channel }) })));
+  return { online: ids(answer["online"]), watching: ids(answer["watching"]) };
 }
 
 // presence is who appears in a channel now — merged across their pages —,

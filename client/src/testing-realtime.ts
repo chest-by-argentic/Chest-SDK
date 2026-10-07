@@ -3,6 +3,7 @@ import { STATUS_CODES, type IncomingMessage, type ServerResponse } from "node:ht
 import type { Duplex } from "node:stream";
 import { memberIdPattern } from "./member.js";
 import { channelPattern, eventPattern, type Present } from "./realtime.js";
+import { peerEventPattern } from "./realtime-client.js";
 
 // The realtime of a fake Chest (testing.ts): the tool's API (/realtime/*)
 // with the Chest's bounds, and the Chest's side of the pages — a hub on the
@@ -35,11 +36,13 @@ export type FakeRealtime = {
   // url is where a page of that member connects (the fake Chest has no
   // session: the member is in the address).
   url(memberId: string): string;
-  // commit is a row of a feed committed, as the Chest's trigger tells it:
-  // the next position of the tool's change log, published to its channel
-  // with the feed's columns; that position, or null when no feed names the
-  // table, or the row has no channel.
-  commit(table: string, op: "insert" | "update" | "delete", row: Record<string, unknown>): number | null;
+  // commit is a row committed to a table, whole as the database holds it,
+  // as the Chest's triggers tell it: for each feed of the table, in the
+  // order declared, the next position of the tool's change log, published
+  // to the feed's channel — its template filled from the row's column it
+  // names, which need not be carried — with the feed's columns only. The
+  // positions given; none for a feed whose column is null or absent.
+  commit(table: string, op: "insert" | "update" | "delete", row: Record<string, unknown>): number[];
   // removed is a row of a membership table that went: its member leaves
   // the channels it gave them, at once.
   removed(table: string, key: string, member: string): void;
@@ -55,19 +58,22 @@ export type FakeRealtime = {
   signOut(memberId: string): void;
   // full makes the Chest without room for that many seconds: connections
   // are refused, and the question before connecting answers 503 with
-  // Retry-After.
-  full(seconds: number): void;
+  // Retry-After — or, for "joins", its memory holds no more: a join answers
+  // full (the page tries again later).
+  full(seconds: number, what?: "connections" | "joins"): void;
   // advance moves the Chest's clock forward: its memory (2 minutes), its
   // change log (7 days) and a full Chest's wait age as much.
   advance(ms: number): void;
 };
 
-const protocol = "chest-realtime.v1", maxPayload = 64 << 10, maxSend = 4 << 10, maxState = 1 << 10, maxJoined = 100;
+const protocol = "chest-realtime.v1", maxPayload = 64 << 10, maxSend = 4 << 10, maxState = 1 << 10;
 // How long the Chest keeps a channel's frames in memory, and the tool's
 // committed rows in its change log.
 const memoryFor = 2 * 60 * 1000, logFor = 7 * 24 * 60 * 60 * 1000;
 
-type Page = { member: string; joined: Set<string>; tracked: Set<string>; write(value: unknown): void; close(code: number, reason: string): void; cut(): void };
+// A page: its channels, those it is present in, the one it has on screen
+// ("" none).
+type Page = { member: string; joined: Set<string>; tracked: Set<string>; focus: string; write(value: unknown): void; close(code: number, reason: string): void; cut(): void };
 // A channel: its last number, the frames its memory keeps (forgotten: the
 // last number it no longer keeps), who is present.
 type ChannelState = { seq: number; kept: { seq: number; at: number; frame: unknown }[]; forgotten: number; present: Map<string, { state: unknown; tracked: number }> };
@@ -95,22 +101,25 @@ export function fakeRealtime(options: FakeRealtimeOptions, origin: () => string,
   // The change log: its rows, the last position given, the last one no
   // longer kept. The clock: the test's advance on top of the real one.
   const log: Logged[] = [], signedOut = new Set<string>();
-  let head = 0, logForgotten = 0, skew = 0, fullUntil = 0;
+  let head = 0, logForgotten = 0, skew = 0, fullUntil = 0, joinsFullUntil = 0;
   const now = () => Date.now() + skew;
   const realtime: FakeRealtime = {
     published: [], sent: [], renewals: 0,
     url: member => origin().replace(/^http/u, "ws") + "/_chest/realtime?member=" + encodeURIComponent(member),
     commit(table, op, row) {
-      const feed = options.feeds?.find(f => f.table === table);
-      if (!feed) return null;
-      const [prefix, column] = ((c: string): [string, string] => { const [p, v] = prefixOf(c); return [p, v ? v.slice(1, -1) : ""]; })(feed.channel);
-      const suffix = column ? row[column] : "";
-      if (suffix === null || suffix === undefined) return null;
-      const channel = prefix + String(suffix), event = table + "." + op, payload = Object.fromEntries(feed.columns.map(c => [c, row[c] ?? null]));
-      const pos = ++head;
-      log.push({ pos, at: now(), channel, frame: { op: "msg", ch: channel, event, payload, pos } });
-      publish(channel, event, payload, pos);
-      return pos;
+      const positions: number[] = [];
+      for (const feed of options.feeds ?? []) {
+        if (feed.table !== table) continue;
+        const [prefix, variable] = prefixOf(feed.channel);
+        const suffix = variable ? row[variable.slice(1, -1)] : "";
+        if (suffix === null || suffix === undefined) continue;
+        const channel = prefix + String(suffix), event = table + "." + op, payload = Object.fromEntries(feed.columns.map(c => [c, row[c] ?? null]));
+        const pos = ++head;
+        log.push({ pos, at: now(), channel, frame: { op: "msg", ch: channel, event, payload, pos } });
+        publish(channel, event, payload, pos);
+        positions.push(pos);
+      }
+      return positions;
     },
     removed(table, key, member) {
       for (const rule of options.channels ?? []) {
@@ -122,7 +131,10 @@ export function fakeRealtime(options: FakeRealtimeOptions, origin: () => string,
     drop(member, code, reason = "") { for (const page of [...pages]) if (page.member === member) code === undefined ? page.cut() : page.close(code, reason); },
     revoke(member) { for (const page of [...pages]) if (page.member === member) page.close(1008, "access_removed"); },
     signOut(member) { signedOut.add(member); },
-    full(seconds) { fullUntil = now() + seconds * 1000; },
+    full(seconds, what = "connections") {
+      if (what === "joins") joinsFullUntil = now() + seconds * 1000;
+      else fullUntil = now() + seconds * 1000;
+    },
     advance(ms) { skew += ms; },
   };
   const rule = (name: string, member: string) => name.length <= 128 && channelPattern.test(name) ? (options.channels ?? []).find(r => matches(r, name, member)) : undefined;
@@ -155,9 +167,14 @@ export function fakeRealtime(options: FakeRealtimeOptions, origin: () => string,
     ch.present.delete(page.member);
     for (const other of pages) if (other.joined.has(name) && other.member !== page.member) other.write({ op: "presence", ch: name, joins: [], leaves: [page.member] });
   }
-  function kick(page: Page, name: string) {
+  // part takes a page out of a channel, and forgets its focus there.
+  function part(page: Page, name: string) {
     untrack(page, name);
     page.joined.delete(name);
+    if (page.focus === name) page.focus = "";
+  }
+  function kick(page: Page, name: string) {
+    part(page, name);
     page.write({ op: "kicked", ch: name });
   }
 
@@ -177,8 +194,12 @@ export function fakeRealtime(options: FakeRealtimeOptions, origin: () => string,
     if (Buffer.byteLength(JSON.stringify(payload)) > maxPayload) return send(response, 413, { error: "too_large" });
     const members = command["members"];
     if (url.pathname !== "/realtime/publish" && (!Array.isArray(members) || members.length === 0 || !members.every(m => typeof m === "string" && memberIdPattern.test(m)))) return send(response, 400, { error: Array.isArray(members) && members.length > 0 ? "invalid_id" : "invalid_body" });
-    const online = (ids: string[]) => [...new Set(ids)].filter(id => [...pages].some(p => p.member === id));
-    if (url.pathname === "/realtime/online") return send(response, 200, { online: online(members as string[]) });
+    const online = (ids: string[], focus?: string) => [...new Set(ids)].filter(id => [...pages].some(p => p.member === id && (focus === undefined || p.focus === focus)));
+    if (url.pathname === "/realtime/online") {
+      const channel = command["channel"];
+      if (channel !== undefined && (typeof channel !== "string" || channel.length > 128 || !channelPattern.test(channel))) return send(response, 400, { error: "invalid_channel" });
+      return send(response, 200, { online: online(members as string[]), watching: channel === undefined ? [] : online(members as string[], channel) });
+    }
     const event = command["event"];
     if (typeof event !== "string" || !eventPattern.test(event)) return send(response, 400, { error: "invalid_event" });
     if (url.pathname === "/realtime/send") {
@@ -224,7 +245,7 @@ export function fakeRealtime(options: FakeRealtimeOptions, origin: () => string,
       return Buffer.concat([head, data]);
     };
     const page: Page = {
-      member, joined: new Set(), tracked: new Set(),
+      member, joined: new Set(), tracked: new Set(), focus: "",
       write: value => { if (!socket.destroyed) socket.write(frame(0x1, Buffer.from(JSON.stringify(value)))); },
       close: (code, reason) => {
         const data = Buffer.alloc(2 + Buffer.byteLength(reason));
@@ -278,10 +299,10 @@ export function fakeRealtime(options: FakeRealtimeOptions, origin: () => string,
         return answer();
       case "join": {
         if (!r) return answer("invalid_channel");
-        if (page.joined.size >= maxJoined && !page.joined.has(name)) return answer("too_many_channels");
         if (!allows(r, page.member)) return answer("forbidden");
         const table = typeof r.join === "object" && !Array.isArray(r.join) ? r.join : undefined;
         if (table && !(options.membership?.(table.table, name.slice(prefixOf(r.name)[0].length), page.member) ?? false)) return answer("forbidden");
+        if (joinsFullUntil > now()) return answer("full");
         page.joined.add(name);
         // A re-join is given what it missed: from the memory when it keeps
         // all of it (the tool's events too), else from the change log (the
@@ -301,14 +322,20 @@ export function fakeRealtime(options: FakeRealtimeOptions, origin: () => string,
         return;
       }
       case "leave":
-        untrack(page, name);
-        page.joined.delete(name);
+        part(page, name);
         return answer();
+      case "focus":
+        if (name !== "" && !page.joined.has(name)) return answer("forbidden");
+        page.focus = name;
+        return answer();
+      // A member's message is a peer frame, its name never dotted: never
+      // taken for the feeds' rows or the tool's events.
       case "send": {
         const payload = q["payload"] ?? null;
-        if (typeof q["event"] !== "string" || !eventPattern.test(q["event"]) || Buffer.byteLength(JSON.stringify(payload)) > maxSend) return answer("invalid_body");
+        if (typeof q["event"] !== "string" || !peerEventPattern.test(q["event"])) return answer("invalid_event");
+        if (Buffer.byteLength(JSON.stringify(payload)) > maxSend) return answer("invalid_body");
         if (!r || !page.joined.has(name) || !r.send || !allows(r, page.member)) return answer("forbidden");
-        for (const other of pages) if (other.member !== page.member && other.joined.has(name)) other.write({ op: "msg", ch: name, event: q["event"], payload, from: page.member });
+        for (const other of pages) if (other.member !== page.member && other.joined.has(name)) other.write({ op: "peer", ch: name, event: q["event"], payload, from: page.member });
         return answer();
       }
       case "track": {

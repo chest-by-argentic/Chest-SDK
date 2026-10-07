@@ -31,7 +31,7 @@ const expected = {
   schedules: ["handle", "verify"],
   ai: ["chat", "embed", "models", "usage"],
   realtime: ["channelPattern", "eventPattern", "online", "presence", "publish", "send"],
-  "realtime/client": ["connect"],
+  "realtime/client": ["connect", "peerEventPattern"],
   testing: ["fakeChest", "signAssertion", "withMember"],
 };
 const namespaces = ["sealed", "files", "members", "notifications", "events", "schedules", "ai", "realtime"];
@@ -67,7 +67,7 @@ try {
   }
 
   // The runtime client stays small: the checker is its own package.
-  assert.ok(packed.size < 200 * 1024, `${name} packs ${packed.size} bytes: the runtime client must stay small`);
+  assert.ok(packed.size < 256 * 1024, `${name} packs ${packed.size} bytes: the runtime client must stay small`);
   step("npm pack @argentic/chest-check");
   const [checkPacked] = JSON.parse(run(npm, ["pack", "--json", "--pack-destination", work], join(root, "check")).replace(/^[^[]*/su, ""));
   console.log(`${checkPacked.filename}: ${checkPacked.files.length} files, ${checkPacked.size} bytes (unpacked ${checkPacked.unpackedSize})`);

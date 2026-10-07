@@ -3,7 +3,7 @@ import { afterEach, mock, test } from "node:test";
 import { CapabilityNotGranted, ChestError, TooLarge } from "../src/errors.js";
 import type { Member } from "../src/member.js";
 import * as realtime from "../src/realtime.js";
-import { connect, type ClosedReason, type Live, type Present } from "../src/realtime-client.js";
+import { connect, type ClosedReason, type EventInfo, type Live, type Present } from "../src/realtime-client.js";
 import { fakeChest, type FakeChest } from "../src/testing.js";
 
 // The server module against a fake Chest's API, and the browser client
@@ -65,8 +65,8 @@ afterEach(async () => {
   chest = undefined;
   sockets.length = 0;
 });
-const start = async (capabilities = ["members", "realtime"]) => {
-  chest = await fakeChest({ members: [camille, dan], capabilities, realtime: { ...rules, membership: (table, key, member) => table === "room_members" && (rooms.get(key) ?? []).includes(member) } });
+const start = async (capabilities = ["members", "realtime"], feeds = rules.feeds) => {
+  chest = await fakeChest({ members: [camille, dan], capabilities, realtime: { ...rules, feeds, membership: (table, key, member) => table === "room_members" && (rooms.get(key) ?? []).includes(member) } });
   return chest;
 };
 const open = (c: FakeChest, member: Member): Live => {
@@ -96,14 +96,22 @@ const away = async (c: FakeChest, member: Member) => {
   await until("the cut seen", () => sockets.at(-1)!.closed);
 };
 const back = () => mock.timers.tick(500);
+// waitOut lets the page's clock run, a second at a time, until a condition.
+const waitOut = async (what: string, ok: () => boolean) => {
+  for (let i = 0; i < 60 && !ok(); i++) {
+    mock.timers.tick(1000);
+    await new Promise(resolve => realTimeout(resolve, 10));
+  }
+  assert.ok(ok(), what);
+};
 // heard listens to a channel's rows (their ids) and notes, its joins and resyncs.
 const listen = (live: Live, name: string) => {
   const room = live.channel(name), heard: unknown[] = [], joins: unknown[] = [];
   let resyncs = 0;
   room.on("messages.insert", row => heard.push((row as { id: number }).id));
   room.on("note", payload => heard.push(payload));
-  room.on("joined", joined => joins.push(joined));
-  room.on("resync", () => resyncs++);
+  room.onJoined(joined => joins.push(joined));
+  room.onResync(() => resyncs++);
   return { room, heard, joins, resyncs: () => resyncs };
 };
 
@@ -113,7 +121,8 @@ test("publish, send, online and presence answer as the Chest does, and refuse wh
   assert.deepEqual(await realtime.publish("inbox:" + dan.id, "hello"), { seq: 1 });
   assert.deepEqual(c.realtime.published, [{ channel: "everyone", event: "rooms.changed", payload: { id: 7 }, seq: 1 }, { channel: "inbox:" + dan.id, event: "hello", payload: null, seq: 1 }]);
   assert.deepEqual(await realtime.send([dan.id], "unread", { count: 3 }), { reached: [] });
-  assert.deepEqual(await realtime.online([camille.id, dan.id]), { online: [] });
+  assert.deepEqual(await realtime.online([camille.id, dan.id]), { online: [], watching: [] });
+  assert.deepEqual(await realtime.online([camille.id], { channel: "room:42" }), { online: [], watching: [] });
   assert.deepEqual(await realtime.presence("everyone"), { members: [] });
   const code = (expected: string) => (error: unknown) => error instanceof ChestError && error.code === expected;
   await assert.rejects(realtime.publish("nowhere", "x"), code("invalid_channel"));
@@ -122,6 +131,7 @@ test("publish, send, online and presence answer as the Chest does, and refuse wh
   await assert.rejects(realtime.publish("everyone", "big", "x".repeat(64 << 10)), TooLarge);
   await assert.rejects(realtime.send([], "x"), code("invalid_body"));
   await assert.rejects(realtime.send(["camille"], "x"), code("invalid_id"));
+  await assert.rejects(realtime.online([dan.id], { channel: "Room:1" }), code("invalid_channel"));
   await c.close();
   chest = undefined;
   await start(["members"]);
@@ -132,18 +142,18 @@ test("two members chat: rows of a feed, ephemeral sends with their sender, prese
   const c = await start();
   const a = open(c, camille), b = open(c, dan);
   const roomA = a.channel("room:42"), roomB = b.channel("room:42");
-  const rowsA: unknown[] = [], rowsB: unknown[] = [], typing: (string | undefined)[] = [];
+  const rowsA: unknown[] = [], rowsB: [unknown, EventInfo][] = [], typing: string[] = [];
   let joined = 0;
-  for (const room of [roomA, roomB]) room.on("joined", () => joined++);
+  for (const room of [roomA, roomB]) room.onJoined(() => joined++);
   roomA.on("messages.insert", row => rowsA.push(row));
-  roomB.on("messages.insert", row => rowsB.push(row));
-  roomB.on("typing", (_, from) => typing.push(from));
+  roomB.on("messages.insert", (row, info) => rowsB.push([row, info]));
+  roomB.peers.on("typing", (_, from) => typing.push(from));
   await until("both joined", () => joined === 2);
   assert.deepEqual([a.member, b.member], [camille.id, dan.id]);
-  assert.equal(c.realtime.commit("messages", "insert", { id: 1, room_id: 42, text: "hello", secret: "s" }), 1);
+  assert.deepEqual(c.realtime.commit("messages", "insert", { id: 1, room_id: 42, text: "hello", secret: "s" }), [1]);
   await until("the row reached both", () => rowsA.length === 1 && rowsB.length === 1);
-  assert.deepEqual(rowsB, [{ id: 1, room_id: 42, text: "hello" }]);
-  roomA.send("typing");
+  assert.deepEqual(rowsB, [[{ id: 1, room_id: 42, text: "hello" }, { pos: 1 }]]);
+  roomA.peers.send("typing");
   await until("typing told", () => typing.length === 1);
   assert.deepEqual(typing, [camille.id]);
   const seen: Present[][] = [];
@@ -158,14 +168,14 @@ test("two members chat: rows of a feed, ephemeral sends with their sender, prese
   assert.deepEqual(direct, [["unread", { count: 2 }]]);
   assert.deepEqual((await realtime.online([camille.id, dan.id])).online, [camille.id, dan.id]);
   // The rules: the desk for its role only, a lane of one's own only.
-  const refused: unknown[] = [];
-  b.channel("desk").on("refused", code => refused.push(code));
-  b.channel("inbox:" + camille.id).on("refused", code => refused.push(code));
+  const refused: string[] = [];
+  b.channel("desk").onRefused(code => refused.push(code));
+  b.channel("inbox:" + camille.id).onRefused(code => refused.push(code));
   const deskA: unknown[] = [];
   const desk = a.channel("desk");
   desk.on("note", payload => deskA.push(payload));
   let deskJoined = false;
-  desk.on("joined", () => { deskJoined = true; });
+  desk.onJoined(() => { deskJoined = true; });
   await until("refused twice, the desk joined", () => refused.length === 2 && deskJoined);
   assert.deepEqual(refused.sort(), ["forbidden", "invalid_channel"]);
   await realtime.publish("desk", "note", "for managers");
@@ -178,8 +188,8 @@ test("a membership row that goes takes its member out at once", async () => {
   const room = b.channel("room:42"), inbox = b.channel("inbox:" + dan.id);
   const events: string[] = [];
   for (const [channel, name] of [[room, "room"], [inbox, "inbox"]] as const) {
-    channel.on("joined", () => events.push(name + " joined"));
-    channel.on("kicked", () => events.push(name + " kicked"));
+    channel.onJoined(() => events.push(name + " joined"));
+    channel.onKicked(() => events.push(name + " kicked"));
   }
   room.on("messages.insert", () => events.push("row"));
   inbox.on("note", () => events.push("note"));
@@ -308,11 +318,7 @@ test("a full Chest is waited for quietly, as long as it asks", async () => {
   assert.deepEqual(statuses, [true, false]);
   assert.equal(sockets.length, 1);
   c.realtime.advance(10 * 1000);
-  for (let i = 0; i < 60 && joins.length < 2; i++) {
-    mock.timers.tick(1000);
-    await new Promise(resolve => realTimeout(resolve, 10));
-  }
-  await until("connected again", () => joins.length === 2);
+  await waitOut("connected again", () => joins.length === 2);
   assert.deepEqual(statuses, [true, false, true]);
   assert.deepEqual(ends, []);
   assert.equal(c.realtime.renewals, 2);
@@ -339,57 +345,15 @@ test("a quick reconnect is not told: a cut, going away, try later, a session to 
   assert.equal(sockets.length, 5);
 });
 
-test("a page back in the foreground, on the network or from the cache reconnects at once; offline, it drops its connection and waits", async () => {
-  // The browser, as the client sees it: the window, its document, its navigator.
-  const target = () => {
-    const listeners = new Map<string, Set<(event: unknown) => void>>();
-    return {
-      listeners,
-      addEventListener: (type: string, listener: (event: unknown) => void) => { listeners.set(type, (listeners.get(type) ?? new Set()).add(listener)); },
-      removeEventListener: (type: string, listener: (event: unknown) => void) => { listeners.get(type)?.delete(listener); },
-      dispatch: (type: string, event: unknown = {}) => { for (const listener of listeners.get(type) ?? []) listener(event); },
-    };
-  };
+// browser plays the browser around the client — the window, its document,
+// its navigator — for the time of run.
+const browser = async (run: (window: Target, document: Target & { visibilityState: string }, navigator: { onLine: boolean }) => Promise<void>) => {
   const window = target(), document = { ...target(), visibilityState: "visible" }, navigator = { onLine: true };
   const page = globalThis as unknown as Record<string, unknown>, saved = Object.getOwnPropertyDescriptor(globalThis, "navigator");
   Object.assign(page, { addEventListener: window.addEventListener, removeEventListener: window.removeEventListener, document });
   Object.defineProperty(globalThis, "navigator", { value: navigator, configurable: true, writable: true });
   try {
-    const c = await start();
-    const b = open(c, dan);
-    const statuses: boolean[] = [];
-    b.on("status", connected => statuses.push(connected));
-    const { joins } = listen(b, "room:42");
-    await until("joined", () => joins.length === 1);
-    // Back in the foreground: a ping; answered, nothing more.
-    document.dispatch("visibilitychange");
-    await until("pinged and answered", () => sockets[0]!.sent.some(m => m["op"] === "ping") && sockets[0]!.answered);
-    await elapse(10 * 1000);
-    assert.equal(sockets.length, 1);
-    // Unanswered within 5 s (the network died silently): another at once.
-    sockets[0]!.deaf = true;
-    document.dispatch("visibilitychange");
-    await elapse(5 * 1000);
-    await until("joined again", () => joins.length === 2);
-    // Offline: the connection dropped at once, no attempt however long;
-    // online: at once.
-    navigator.onLine = false;
-    window.dispatch("offline");
-    await until("dropped", () => sockets[1]!.closed);
-    const asked = c.realtime.renewals;
-    await elapse(10 * minutes);
-    assert.equal(sockets.length, 2);
-    assert.equal(c.realtime.renewals, asked);
-    navigator.onLine = true;
-    window.dispatch("online");
-    await until("joined at once", () => joins.length === 3);
-    // Restored from the cache: at once, without waiting the backoff.
-    await away(c, dan);
-    window.dispatch("pageshow", { persisted: true });
-    await until("joined at once", () => joins.length === 4);
-    assert.deepEqual(statuses, [true, false, true]);
-    b.close();
-    assert.deepEqual([...window.listeners.values(), ...document.listeners.values()].map(set => set.size), [0, 0, 0, 0]);
+    await run(window, document, navigator);
   } finally {
     delete page["addEventListener"];
     delete page["removeEventListener"];
@@ -397,4 +361,188 @@ test("a page back in the foreground, on the network or from the cache reconnects
     if (saved) Object.defineProperty(globalThis, "navigator", saved);
     else delete page["navigator"];
   }
+};
+type Target = ReturnType<typeof target>;
+const target = () => {
+  const listeners = new Map<string, Set<(event: unknown) => void>>();
+  return {
+    listeners,
+    addEventListener: (type: string, listener: (event: unknown) => void) => { listeners.set(type, (listeners.get(type) ?? new Set()).add(listener)); },
+    removeEventListener: (type: string, listener: (event: unknown) => void) => { listeners.get(type)?.delete(listener); },
+    dispatch: (type: string, event: unknown = {}) => { for (const listener of listeners.get(type) ?? []) listener(event); },
+  };
+};
+
+test("a page back in the foreground, on the network or from the cache reconnects at once; offline, it drops its connection and waits", () => browser(async (window, document, navigator) => {
+  const c = await start();
+  const b = open(c, dan);
+  const statuses: boolean[] = [];
+  b.on("status", connected => statuses.push(connected));
+  const { joins } = listen(b, "room:42");
+  await until("joined", () => joins.length === 1);
+  // Back in the foreground: a ping; answered, nothing more.
+  document.dispatch("visibilitychange");
+  await until("pinged and answered", () => sockets[0]!.sent.some(m => m["op"] === "ping") && sockets[0]!.answered);
+  await elapse(10 * 1000);
+  assert.equal(sockets.length, 1);
+  // Unanswered within 5 s (the network died silently): another at once.
+  sockets[0]!.deaf = true;
+  document.dispatch("visibilitychange");
+  await elapse(5 * 1000);
+  await until("joined again", () => joins.length === 2);
+  // Offline: the connection dropped at once, no attempt however long;
+  // online: at once.
+  navigator.onLine = false;
+  window.dispatch("offline");
+  await until("dropped", () => sockets[1]!.closed);
+  const asked = c.realtime.renewals;
+  await elapse(10 * minutes);
+  assert.equal(sockets.length, 2);
+  assert.equal(c.realtime.renewals, asked);
+  navigator.onLine = true;
+  window.dispatch("online");
+  await until("joined at once", () => joins.length === 3);
+  // Restored from the cache: at once, without waiting the backoff.
+  await away(c, dan);
+  window.dispatch("pageshow", { persisted: true });
+  await until("joined at once", () => joins.length === 4);
+  assert.deepEqual(statuses, [true, false, true]);
+  b.close();
+  assert.deepEqual([...window.listeners.values(), ...document.listeners.values()].map(set => set.size), [0, 0, 0, 0]);
+}));
+
+test("a member's message comes through peers with its sender, never as the Chest's event; a dotted name is refused", async () => {
+  const c = await start();
+  const a = open(c, camille), b = open(c, dan);
+  const roomA = listen(a, "room:42"), roomB = listen(b, "room:42");
+  const peers: [string, unknown, string][] = [];
+  for (const event of ["note", "messages_insert"]) roomB.room.peers.on(event, (payload, from) => peers.push([event, payload, from]));
+  roomB.room.on("messages_insert", payload => roomB.heard.push(payload));
+  await until("both joined", () => roomA.joins.length === 1 && roomB.joins.length === 1);
+  // Named as the tool's event, or as a feed's without its dot: a peer.
+  roomA.room.peers.send("note", "from camille");
+  roomA.room.peers.send("messages_insert", { id: 9 });
+  await realtime.publish("room:42", "note", "from the tool");
+  await until("all heard", () => peers.length === 2 && roomB.heard.length === 1);
+  assert.deepEqual(peers, [["note", "from camille", camille.id], ["messages_insert", { id: 9 }, camille.id]]);
+  assert.deepEqual(roomB.heard, ["from the tool"]);
+  // A dotted name, refused by the client before it leaves, and by the Chest.
+  const code = (expected: string) => (error: unknown) => error instanceof ChestError && error.code === expected;
+  assert.throws(() => roomA.room.peers.send("messages.insert", { id: 10 }), code("invalid_event"));
+  assert.throws(() => roomA.room.peers.send("Typing"), code("invalid_event"));
+  const socket = sockets.find(s => s.heard[0]?.["member"] === camille.id)!;
+  socket.send(JSON.stringify({ op: "send", ref: 9999, ch: "room:42", event: "messages.insert", payload: { id: 10 } }));
+  await until("refused", () => socket.heard.some(h => h["ref"] === 9999));
+  assert.deepEqual(socket.heard.find(h => h["ref"] === 9999), { op: "error", ref: 9999, code: "invalid_event" });
+  assert.ok(sockets.every(s => !s.heard.some(h => h["op"] === "msg" && (h["payload"] as { id?: number } | null)?.id === 10)));
+});
+
+test("the tool's event named joined or resync is an event, not the channel's lifecycle", async () => {
+  const c = await start();
+  const b = open(c, dan);
+  const { room, joins, resyncs } = listen(b, "room:42");
+  const heard: [string, unknown][] = [];
+  for (const event of ["joined", "resync", "kicked", "refused"]) room.on(event, payload => heard.push([event, payload]));
+  let kicked = 0;
+  const refused: string[] = [];
+  room.onKicked(() => kicked++);
+  room.onRefused(code => refused.push(code));
+  await until("joined", () => joins.length === 1);
+  for (const event of ["joined", "resync", "kicked", "refused"]) await realtime.publish("room:42", event, event);
+  await until("heard", () => heard.length === 4);
+  assert.deepEqual(heard, [["joined", "joined"], ["resync", "resync"], ["kicked", "kicked"], ["refused", "refused"]]);
+  assert.deepEqual(joins, [{ replayed: false }]);
+  assert.equal(resyncs(), 0);
+  assert.deepEqual([kicked, refused], [0, []]);
+});
+
+test("a join the Chest has no room for is tried again quietly, then joins", async () => {
+  const c = await start();
+  const b = open(c, dan);
+  const statuses: boolean[] = [];
+  b.on("status", connected => statuses.push(connected));
+  c.realtime.full(10, "joins");
+  const { room, heard, joins } = listen(b, "room:42");
+  const refused: string[] = [];
+  room.onRefused(code => refused.push(code));
+  const fulls = () => sockets[0]!.heard.filter(h => h["code"] === "full").length;
+  await waitOut("tried again", () => fulls() >= 3);
+  c.realtime.advance(10 * 1000);
+  await waitOut("joined", () => joins.length === 1);
+  assert.deepEqual(refused, []);
+  assert.deepEqual(statuses, [true]);
+  assert.equal(sockets.length, 1);
+  c.realtime.commit("messages", "insert", { id: 1, room_id: 42 });
+  await until("a row", () => heard.length === 1);
+});
+
+test("focus: the members watching a channel are those whose page is focused on it and shown", () => browser(async (_, document) => {
+  const c = await start();
+  const a = open(c, camille), b = open(c, dan);
+  const roomA = listen(a, "room:42"), everyone = listen(b, "everyone");
+  // watching waits until the Chest says those watching a channel are these.
+  const watching = async (channel: string | undefined, expected: string[]) => {
+    let got: { online: string[]; watching: string[] } | undefined;
+    for (let i = 0; i < 300; i++) {
+      got = await realtime.online([camille.id, dan.id], channel === undefined ? {} : { channel });
+      if (JSON.stringify(got.watching) === JSON.stringify(expected)) break;
+      await new Promise(resolve => realTimeout(resolve, 10));
+    }
+    assert.deepEqual(got, { online: [camille.id, dan.id], watching: expected });
+  };
+  // Focused before joining: told once joined.
+  a.focus("room:42");
+  b.focus("everyone");
+  await until("joined", () => roomA.joins.length === 1 && everyone.joins.length === 1);
+  await watching("room:42", [camille.id]);
+  await watching("everyone", [dan.id]);
+  await watching(undefined, []);
+  // Hidden, none; shown again, the same.
+  document.visibilityState = "hidden";
+  document.dispatch("visibilitychange");
+  await watching("room:42", []);
+  document.visibilityState = "visible";
+  document.dispatch("visibilitychange");
+  await watching("room:42", [camille.id]);
+  // Again after a reconnect.
+  c.realtime.drop(camille.id);
+  await until("the cut seen", () => sockets.some(s => s.closed && s.heard[0]?.["member"] === camille.id));
+  back();
+  await until("joined again", () => roomA.joins.length === 2);
+  await watching("room:42", [camille.id]);
+  // Unfocused, and left.
+  a.focus(null);
+  await watching("room:42", []);
+  a.focus("room:42");
+  await watching("room:42", [camille.id]);
+  roomA.room.leave();
+  await watching("room:42", []);
+  // The Chest refuses a focus on a channel not joined.
+  const socket = sockets.find(s => s.heard[0]?.["member"] === dan.id)!;
+  socket.send(JSON.stringify({ op: "focus", ref: 9999, ch: "room:42" }));
+  await until("refused", () => socket.heard.some(h => h["ref"] === 9999));
+  assert.deepEqual(socket.heard.find(h => h["ref"] === 9999), { op: "error", ref: 9999, code: "forbidden" });
+}));
+
+test("a commit runs every feed of its table: its channel from the row's column, its columns only, nothing for a null column", async () => {
+  const c = await start(["members", "realtime"], [
+    { table: "messages", channel: "room:{room_id}", columns: ["id", "text"] },
+    { table: "messages", channel: "inbox:{author}", columns: ["id"] },
+  ]);
+  const b = open(c, dan);
+  const { room, joins } = listen(b, "room:42");
+  const rows: [unknown, EventInfo][] = [];
+  room.on("messages.insert", (row, info) => rows.push([row, info]));
+  await until("joined", () => joins.length === 1);
+  assert.deepEqual(c.realtime.commit("messages", "insert", { id: 1, room_id: 42, author: dan.id, text: "hi" }), [1, 2]);
+  assert.deepEqual(c.realtime.commit("messages", "update", { id: 1, room_id: 42, author: null, text: "hello" }), [3]);
+  assert.deepEqual(c.realtime.commit("messages", "delete", { id: 1 }), []);
+  assert.deepEqual(c.realtime.commit("rooms", "insert", { id: 42 }), []);
+  assert.deepEqual(c.realtime.published, [
+    { channel: "room:42", event: "messages.insert", payload: { id: 1, text: "hi" }, seq: 1 },
+    { channel: "inbox:" + dan.id, event: "messages.insert", payload: { id: 1 }, seq: 1 },
+    { channel: "room:42", event: "messages.update", payload: { id: 1, text: "hello" }, seq: 2 },
+  ]);
+  await until("the row", () => rows.length === 1);
+  assert.deepEqual(rows, [[{ id: 1, text: "hi" }, { pos: 1 }]]);
 });
