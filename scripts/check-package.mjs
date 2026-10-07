@@ -19,7 +19,7 @@ const name = manifest.name;
 // all, sealed, files, members, notifications, events, schedules and ai as namespaces, never
 // testing.
 const expected = {
-  errors: ["AiCapReached", "AiModelNotAllowed", "AiRefused", "AiUnavailable", "CapabilityNotGranted", "ChestError", "MemberRequired", "NotAllowed", "QuotaExceeded", "RateLimited", "SealedInvalid", "SealedLocked", "SealedLost", "TooLarge", "Unavailable"],
+  errors: ["AiCapReached", "AiModelNotAllowed", "AiRefused", "AiUnavailable", "CapabilityNotGranted", "ChestError", "MemberRequired", "NotAllowed", "QuotaExceeded", "RateLimited", "SealedInvalid", "SealedLocked", "SealedLost", "StorageFull", "TooLarge", "Unavailable"],
   member: ["groupIdPattern", "languagePattern", "member", "memberIdPattern", "timeZonePattern"],
   chest: ["chest"],
   database: ["databaseUrl"],
