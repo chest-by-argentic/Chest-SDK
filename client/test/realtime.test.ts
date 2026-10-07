@@ -427,9 +427,8 @@ test("a member's message comes through peers with its sender, never as the Chest
   assert.deepEqual(peers, [["note", "from camille", camille.id], ["messages_insert", { id: 9 }, camille.id]]);
   assert.deepEqual(roomB.heard, ["from the tool"]);
   // A dotted name, refused by the client before it leaves, and by the Chest.
-  const code = (expected: string) => (error: unknown) => error instanceof ChestError && error.code === expected;
-  assert.throws(() => roomA.room.peers.send("messages.insert", { id: 10 }), code("invalid_event"));
-  assert.throws(() => roomA.room.peers.send("Typing"), code("invalid_event"));
+  assert.throws(() => roomA.room.peers.send("messages.insert", { id: 10 }), /^TypeError: invalid_event/u);
+  assert.throws(() => roomA.room.peers.send("Typing"), /^TypeError: invalid_event/u);
   const socket = sockets.find(s => s.heard[0]?.["member"] === camille.id)!;
   socket.send(JSON.stringify({ op: "send", ref: 9999, ch: "room:42", event: "messages.insert", payload: { id: 10 } }));
   await until("refused", () => socket.heard.some(h => h["ref"] === 9999));
@@ -545,4 +544,12 @@ test("a commit runs every feed of its table: its channel from the row's column, 
   ]);
   await until("the row", () => rows.length === 1);
   assert.deepEqual(rows, [[{ id: 1, text: "hi" }, { pos: 1 }]]);
+});
+
+// The browser's module imports nothing: a page may load it as it is,
+// served beside its own script, without a bundler.
+test("the browser client is one module, importing nothing", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../../../client/src/realtime-client.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /^\s*(import|export)\s[^;]*\sfrom\s/mu);
 });

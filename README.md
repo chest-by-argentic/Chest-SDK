@@ -1192,7 +1192,7 @@ In the page, a channel gives:
 |---|---|
 | `on(event, (payload, {pos?, partial?}) => …)` | The Chest's events only: a feed's row (`<table>.insert`…, its position in the change log; `partial` when too long to be carried whole: its first column only) or what the tool publishes |
 | `onJoined(({replayed}) => …)`, `onResync`, `onKicked`, `onRefused(code => …)` | The channel's life: joined (again), what was missed not all kept, the member taken out, the join refused — never an event name: a tool event named `joined` or `resync` is heard by `on` |
-| `peers.on(event, (payload, from) => …)`, `peers.send(event, payload?)` | The other members' messages, on a channel whose rule says `send`: 1 to 64 of `a-z 0-9 _ -`, no dot (`peerEventPattern`; another name throws `ChestError` `invalid_event`), 4 KiB of JSON |
+| `peers.on(event, (payload, from) => …)`, `peers.send(event, payload?)` | The other members' messages, on a channel whose rule says `send`: 1 to 64 of `a-z 0-9 _ -`, no dot (`peerEventPattern`; another name throws a `TypeError` `invalid_event`), 4 KiB of JSON |
 | `presence.track(state)`, `presence.list()`, `presence.on(list => …)` | Who is present, the member's own state kept across reconnects |
 | `leave()` | Leaves the channel |
 

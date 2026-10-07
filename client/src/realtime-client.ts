@@ -35,7 +35,6 @@
 // while the provider's session lasts). Content is the tool's: render it as
 // text, never as HTML.
 
-import { ChestError } from "./errors.js";
 
 // The subprotocol of the Chest's realtime, and where it is.
 const protocol = "chest-realtime.v1";
@@ -91,7 +90,8 @@ export interface Channel {
     on(event: string, listener: PeerListener): () => void;
     // send sends a message to the other pages of the channel, 4 KiB of JSON
     // at most; nothing is sent while disconnected. A name the Chest refuses
-    // (a dot, an uppercase letter) throws ChestError invalid_event.
+    // (a dot, an uppercase letter) throws a TypeError "invalid_event": a
+    // fault of the page's code.
     send(event: string, payload?: unknown): void;
   };
   presence: {
@@ -478,7 +478,7 @@ export function connect(options: { url?: string } = {}): Live {
         peers: {
           on: (event, listener) => listenTo(state.peerListeners, event, listener),
           send(event, payload) {
-            if (typeof event !== "string" || !peerEventPattern.test(event)) throw new ChestError("invalid_event", 400, "a member's message is 1 to 64 of a-z 0-9 _ -, without a dot");
+            if (typeof event !== "string" || !peerEventPattern.test(event)) throw new TypeError("invalid_event: a member's message is 1 to 64 of a-z 0-9 _ -, without a dot");
             if (state.joined) write({ op: "send", ch: state.name, event, payload: payload ?? null });
           },
         },

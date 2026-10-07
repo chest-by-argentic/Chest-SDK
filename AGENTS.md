@@ -523,7 +523,7 @@ at install and at every update.
 | `ChestError` with `invalid_path` | `path` is not `/chest` or under it (a full URL, `//`, `..`, a space or non-ASCII character). |
 | `realtime/client` never connects | The page is not on the tool's team host (`/chest`), the version lacks `"realtime"` in its capabilities or was not approved, or the connection is from another site. |
 | `ChestError` `invalid_channel` from `realtime.publish` | No pattern of `"realtime": {"channels"}` matches the name (a typo, an uppercase letter, a segment of more than 64 characters). |
-| `ChestError` `invalid_event` from `peers.send` | A member's message is named 1 to 64 of `a-z 0-9 _ -`, without a dot: dotted names are the feeds' rows and the tool's events (`typing`, not `room.typing`). |
+| `TypeError` `invalid_event` from `peers.send` | A member's message is named 1 to 64 of `a-z 0-9 _ -`, without a dot: dotted names are the feeds' rows and the tool's events (`typing`, not `room.typing`). |
 | A member's message never reaches `on` | It reaches `peers.on(event, (payload, from) => …)`: `on` hears only the Chest's events. |
 | `events.handle` always answers 401 | The body was read before `handle` (a body parser), or the environment is not the Chest's (`CHEST_TOKEN`, `CHEST_TOOL`; in a test, deliver with `fakeChest().deliver`). |
 | `schedules.handle` always answers 401 | The body was read before `handle`, or the environment is not the Chest's (in a test, deliver with `fakeChest().run`). |
