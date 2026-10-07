@@ -22,8 +22,8 @@
 // It reconnects by itself, unseen: a cut is told (status false) only once
 // it lasts 3 s; it tries again 0.5 s to 30 s apart — at once when the page
 // comes back to the foreground, from the cache or to the network, never
-// while the browser is offline, and no sooner than the Chest asks when it
-// is full —, joins its channels again with where each stood, and the Chest
+// while the browser is offline (going offline drops the connection at
+// once), and no sooner than the Chest asks when it is full —, joins its channels again with where each stood, and the Chest
 // gives what was missed however long the page was away: the tool's events
 // of the last 2 minutes, the feeds' rows of the last 7 days — or says
 // resync. While connected it renews the member's session every 5 minutes.
@@ -275,6 +275,7 @@ export function connect(options: { url?: string } = {}): Live {
     if (socket && socket.readyState <= 1) socket.close(1000);
     socket = undefined;
     page.removeEventListener?.("online", wake);
+    page.removeEventListener?.("offline", gone);
     page.removeEventListener?.("pageshow", restored);
     page.document?.removeEventListener("visibilitychange", visible);
   };
@@ -351,9 +352,14 @@ export function connect(options: { url?: string } = {}): Live {
     attempts = 0;
     reconnect(0);
   };
+  // gone: the browser says the network is gone — a Wi-Fi left, a cable
+  // pulled —: the connection is dropped at once, and the page waits for it
+  // to come back ("online") rather than for a ping to go unanswered.
+  const gone = () => { if (!ended && socket) lost(socket, false); };
   const visible = () => { if (page.document?.visibilityState === "visible") wake(); };
   const restored = (event: { persisted?: boolean }) => { if (event.persisted) wake(); };
   page.addEventListener?.("online", wake);
+  page.addEventListener?.("offline", gone);
   page.addEventListener?.("pageshow", restored);
   page.document?.addEventListener("visibilitychange", visible);
   open();

@@ -339,7 +339,7 @@ test("a quick reconnect is not told: a cut, going away, try later, a session to 
   assert.equal(sockets.length, 5);
 });
 
-test("a page back in the foreground, on the network or from the cache reconnects at once; offline, it waits", async () => {
+test("a page back in the foreground, on the network or from the cache reconnects at once; offline, it drops its connection and waits", async () => {
   // The browser, as the client sees it: the window, its document, its navigator.
   const target = () => {
     const listeners = new Map<string, Set<(event: unknown) => void>>();
@@ -371,9 +371,11 @@ test("a page back in the foreground, on the network or from the cache reconnects
     document.dispatch("visibilitychange");
     await elapse(5 * 1000);
     await until("joined again", () => joins.length === 2);
-    // Offline: no attempt, however long; online: at once.
+    // Offline: the connection dropped at once, no attempt however long;
+    // online: at once.
     navigator.onLine = false;
-    await away(c, dan);
+    window.dispatch("offline");
+    await until("dropped", () => sockets[1]!.closed);
     const asked = c.realtime.renewals;
     await elapse(10 * minutes);
     assert.equal(sockets.length, 2);
@@ -387,7 +389,7 @@ test("a page back in the foreground, on the network or from the cache reconnects
     await until("joined at once", () => joins.length === 4);
     assert.deepEqual(statuses, [true, false, true]);
     b.close();
-    assert.deepEqual([...window.listeners.values(), ...document.listeners.values()].map(set => set.size), [0, 0, 0]);
+    assert.deepEqual([...window.listeners.values(), ...document.listeners.values()].map(set => set.size), [0, 0, 0, 0]);
   } finally {
     delete page["addEventListener"];
     delete page["removeEventListener"];

@@ -1076,7 +1076,8 @@ const { members } = await realtime.presence("everyone");
   author's own row comes back too.
 - **Reconnection is unseen.** The client reconnects by itself — at once when
   the page comes back to the foreground, from the browser's cache or to the
-  network, never while offline, after a quiet wait when the Chest is full —
+  network, never while offline (going offline drops the connection at
+  once), after a quiet wait when the Chest is full —
   and says `status` false only when it stays away 3 seconds: a server
   restart or a network switch shows nothing.
 - **Never trust content as HTML.** Render payloads and rows as text.
