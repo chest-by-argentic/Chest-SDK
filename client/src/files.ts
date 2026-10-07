@@ -11,12 +11,14 @@ import { ChestError, TooLarge, Unavailable } from "./errors.js";
 //   await files.put("photos/cat.png", bytes, "image/png");
 //   const { url } = await files.url("photos/cat.png");   // 15 min, team host
 //   const up = await files.uploadUrl("photos/", { types: ["image/*"] }); // a member's browser sends it
+//   const cv = await files.uploadUrl("applications/", { public: true, types: ["application/pdf"] }); // a visitor's
 //
 // Names: up to 8 segments of 1–100 letters, digits, '.', '_' or '-',
 // separated by '/', none starting with '.' or '-'. Errors: CapabilityNotGranted
-// (403), TooLarge (413), QuotaExceeded (429), Unavailable (503, or the Chest
-// not reached), ChestError otherwise (invalid_name, invalid_type,
-// no_thumbnail 400, not_found 404…).
+// (403), TooLarge (413), QuotaExceeded (429), StorageFull (507: the server's
+// disk, whatever the quota), Unavailable (503, or the Chest not reached),
+// ChestError otherwise (invalid_name, invalid_type, no_thumbnail 400,
+// not_found 404, no_public_part 409…).
 
 // sha256: the digest of the content, in hex, as the Chest took it; width and
 // height: of a JPEG, PNG, GIF or WebP image the Chest measured.
@@ -170,18 +172,46 @@ export async function url(name: string, options: { thumbnail?: 256 | 1024; downl
 // (up to 8, "image/*" for a family; any when not said), within expiresIn
 // seconds (1–900, 900 when not said), once. Call it from a /chest route,
 // after member(); then stat the name before recording it.
-export async function uploadUrl(name: string, options: { maxSize?: number; types?: string[]; expiresIn?: number } = {}): Promise<{ url: string; method: "PUT"; expiresIn: number }> {
+//
+// public authorises an upload from a visitor of the tool's public part (a
+// tool with "public": true; ChestError no_public_part otherwise): call it
+// from a public route. It goes into a folder, where the Chest names the
+// file — a visitor never replaces one —, of the types said, which the
+// Chest recognises by their content, whatever the file's name or the type
+// the browser says (images, application/pdf, Office and OpenDocument
+// documents, archives; invalid_type for another); the file is of the type
+// its content is. url is a path: the visitor's page sends the file to its
+// own address — the tool's public address, its custom domain, or a page
+// framed by the company's website:
+//   fetch(up.url, { method: "PUT", body: file })
+// The file is private like any other: only the tool's members see it,
+// through the tool. The Chest paces each visitor (10 uploads a minute, a
+// twentieth of the quota an hour; 429 slow_down with Retry-After) and
+// answers 201 {name, type, size} to the browser, which gives the name back
+// to the tool; stat it before recording it.
+export async function uploadUrl(name: string, options: { maxSize?: number; types?: string[]; expiresIn?: number; public?: boolean } = {}): Promise<{ url: string; method: "PUT"; expiresIn: number }> {
   if (typeof name !== "string" || !(name.endsWith("/") ? namePattern.test(name.slice(0, -1)) && name.split("/").length <= 8 : namePattern.test(name))) throw new ChestError("invalid_name", 400, "invalid file or folder name");
-  const { maxSize, types, expiresIn } = options;
+  const { maxSize, types, expiresIn, public: visitor } = options;
+  if (visitor !== undefined && typeof visitor !== "boolean") throw new TypeError("public must be true or false");
+  if (visitor && !name.endsWith("/")) throw new ChestError("invalid_name", 400, "a visitor uploads into a folder, ending in '/'");
+  if (visitor && (types === undefined || types.length === 0)) throw new ChestError("invalid_type", 400, "a visitor's upload names the types it accepts");
   if (maxSize !== undefined && (typeof maxSize !== "number" || !Number.isSafeInteger(maxSize) || maxSize < 1)) throw new ChestError("invalid_body", 400, "maxSize is a number of bytes");
   if (maxSize !== undefined && maxSize > maxObject) throw new TooLarge();
   if (types !== undefined && (!Array.isArray(types) || types.length > 8 || types.some((t, i) => typeof t !== "string" || t.length > 100 || !typePattern.test(t) || types.indexOf(t) !== i))) throw new ChestError("invalid_type", 400, "invalid media types");
   if (expiresIn !== undefined && (typeof expiresIn !== "number" || !Number.isInteger(expiresIn) || expiresIn < 1 || expiresIn > uploadLife)) throw new ChestError("invalid_body", 400, "expiresIn is 1 to 900 seconds");
-  const command = { name, ...(maxSize !== undefined ? { max_size: maxSize } : {}), ...(types !== undefined ? { types } : {}), ...(expiresIn !== undefined ? { expires_in: expiresIn } : {}) };
+  const command = { name, ...(maxSize !== undefined ? { max_size: maxSize } : {}), ...(types !== undefined ? { types } : {}), ...(expiresIn !== undefined ? { expires_in: expiresIn } : {}), ...(visitor ? { public: true } : {}) };
   const response = await ask("POST", "/files/upload-url", { body: JSON.stringify(command), type: "application/json" });
   if (response.status !== 200) throw await refusal(response);
   const body = (await json(response)) as { url?: unknown; method?: unknown; expires_in?: unknown } | null;
-  const token = body ? chestLink(body.url, uploadPath) : undefined;
+  const token = !body ? undefined : visitor ? uploadToken(body.url) : chestLink(body.url, uploadPath);
   if (!body || token === undefined || token.length > 2048 || body.method !== "PUT" || typeof body.expires_in !== "number" || !Number.isInteger(body.expires_in) || body.expires_in < 1 || body.expires_in > uploadLife) throw new Unavailable();
   return { url: body.url as string, method: "PUT", expiresIn: body.expires_in };
+}
+
+// uploadToken reads the path of a visitor's upload the Chest answered: the
+// token it carries, or undefined for anything else.
+function uploadToken(url: unknown): string | undefined {
+  if (typeof url !== "string" || !url.startsWith(uploadPath)) return undefined;
+  const token = url.slice(uploadPath.length);
+  return token.length <= 2048 && /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u.test(token) ? token : undefined;
 }

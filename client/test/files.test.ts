@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
 import { after, afterEach, before, test } from "node:test";
-import { CapabilityNotGranted, ChestError, QuotaExceeded, TooLarge, Unavailable } from "../src/errors.js";
+import { CapabilityNotGranted, ChestError, QuotaExceeded, StorageFull, TooLarge, Unavailable } from "../src/errors.js";
 import * as files from "../src/files.js";
 
 // A Chest's API as the broker answers it (chest/toolfiles of the Chest
@@ -16,6 +16,8 @@ let forged: { value: unknown } | null = null;
 let seen: { method: string; url: string; type: string | undefined; body: string }[] = [];
 const link = "https://web-chest.atelier.example/_chest/files/eyJ0b29sIjoid2ViIn0.c2lnbmF0dXJl";
 const upload = "https://web-chest.atelier.example/_chest/files/upload/eyJ0b29sIjoid2ViIiwidXAiOjF9.c2lnbmF0dXJl";
+// A visitor's: a path, on whichever address of the public part its page is.
+const visitorUpload = "/_chest/files/upload/eyJ0b29sIjoid2ViIiwicHVibGljIjp0cnVlfQ.c2lnbmF0dXJl";
 
 function answer(response: ServerResponse, status: number, value?: unknown): void {
   if (value === undefined) return void response.writeHead(status).end();
@@ -57,10 +59,10 @@ const server: Server = createServer(async (request, response) => {
     return answer(response, 200, describe(to, object));
   }
   if (request.method === "POST" && url.pathname === "/files/upload-url") {
-    const command = JSON.parse(raw.toString()) as { max_size?: number; expires_in?: number };
+    const command = JSON.parse(raw.toString()) as { max_size?: number; expires_in?: number; public?: boolean };
     // The tool's largest object: 32 MiB, as without a "files" key in its manifest.
     if ((command.max_size ?? 0) > 32 << 20) return answer(response, 413, { error: "too_large" });
-    return answer(response, 200, { url: upload, method: "PUT", expires_in: command.expires_in ?? 900 });
+    return answer(response, 200, { url: command.public ? visitorUpload : upload, method: "PUT", expires_in: command.expires_in ?? 900 });
   }
   const name = url.pathname.slice("/files/".length);
   const object = kept.get(name);
@@ -170,6 +172,34 @@ test("uploadUrl authorises one upload of a name or into a folder, within its bou
   for (const maxSize of [0, -1, 1.5]) await assert.rejects(files.uploadUrl("a", { maxSize }), (error: unknown) => error instanceof ChestError && error.code === "invalid_body", String(maxSize));
   await assert.rejects(files.uploadUrl("a", { maxSize: (512 << 20) + 1 }), TooLarge);
   assert.deepEqual(seen, []);
+});
+
+test("uploadUrl authorises a visitor's upload into a folder, of the types it names, as a path", async () => {
+  assert.deepEqual(await files.uploadUrl("applications/", { public: true, types: ["application/pdf", "image/*"] }), { url: visitorUpload, method: "PUT", expiresIn: 900 });
+  assert.deepEqual(JSON.parse(seen.at(-1)!.body), { name: "applications/", types: ["application/pdf", "image/*"], public: true });
+  seen = [];
+  await assert.rejects(files.uploadUrl("applications/cv.pdf", { public: true, types: ["application/pdf"] }), (e: unknown) => e instanceof ChestError && e.code === "invalid_name");
+  for (const types of [undefined, []]) await assert.rejects(files.uploadUrl("applications/", { public: true, ...(types ? { types } : {}) }), (e: unknown) => e instanceof ChestError && e.code === "invalid_type");
+  await assert.rejects(files.uploadUrl("applications/", { public: "yes" as unknown as boolean, types: ["application/pdf"] }), TypeError);
+  assert.deepEqual(seen, []);
+  // A tool without a public part, a type the Chest does not recognise.
+  for (const [status, code] of [[409, "no_public_part"], [400, "invalid_type"]] as const) {
+    refuse = { status, code };
+    await assert.rejects(files.uploadUrl("applications/", { public: true, types: ["text/plain"] }), (e: unknown) => e instanceof ChestError && e.code === code && e.status === status);
+  }
+  refuse = null;
+  // A visitor's upload is a path of the Chest's, nothing else; a member's never one.
+  for (const url of [upload, "/_chest/files/upload/a", "/_chest/files/a.b", "//evil.example/_chest/files/upload/a.b", "/_chest/files/upload/a.b?x=1", "/_chest/files/upload/" + "a".repeat(2047) + ".b"]) {
+    forged = { value: { url, method: "PUT", expires_in: 900 } };
+    await assert.rejects(files.uploadUrl("applications/", { public: true, types: ["application/pdf"] }), Unavailable, url);
+  }
+  forged = { value: { url: visitorUpload, method: "PUT", expires_in: 900 } };
+  await assert.rejects(files.uploadUrl("photos/"), Unavailable);
+});
+
+test("a full disk is StorageFull, whatever the quota", async () => {
+  refuse = { status: 507, code: "storage_full" };
+  await assert.rejects(files.put("a.txt", "a"), (e: unknown) => e instanceof StorageFull && e.code === "storage_full" && e.status === 507);
 });
 
 test("an answer that is not the Chest's is Unavailable", async () => {

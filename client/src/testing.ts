@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
@@ -15,8 +15,11 @@ export type { FakeChannelRule, FakeFeed, FakePublished, FakeRealtime, FakeRealti
 // For a tool's own tests, never imported by its production code: a member's
 // assertion signed as the Chest signs it, and a Chest's API in the test's
 // process that answers members, groups, files (stat, move, links and
-// uploads, which it serves and takes itself as the team host would, on its
-// own origin), badges, notifications and broadcasts, AI (chat,
+// uploads — its members' and its visitors' —, which it serves and takes
+// itself as the team host and the public part would, on its own origin),
+// sealed values (sealed and opened under a key of its own,
+// for the members and roles it keeps; withMember carries the member's
+// ticket), badges, notifications and broadcasts, AI (chat,
 // streamed or not, embeddings, models, usage: deterministic answers, no
 // provider), the acknowledgment of an erasure and realtime (the tool's
 // publishes and sends, and the Chest's side of its pages, which the browser
@@ -70,11 +73,18 @@ export type FakeAi = { models?: FakeAiModel[]; reply?: (request: Record<string, 
 // sent (null for a GET).
 export type FakeAiCall = { path: string; body: unknown };
 
+// An open of sealed values the tool asked of a fake Chest, as the Chest
+// journals it: the member on whose behalf, how many opened, how many
+// refused — never a value.
+export type FakeOpen = { member: string; opened: number; refused: number };
+
 // What a fake Chest is given: the members who have the tool, those it had
 // who no longer have it (FakeFormer), its groups, the
 // capabilities its version holds (a capability left out answers 403;
 // members, files, notifications and ai by default, members.email to read the
-// addresses, members.groups to see every group), the events it receives (["member.*"] by default, [] to answer
+// addresses, members.groups to see every group, sealed to seal and open
+// values), the roles the tool declares (any role of the grammar a value is
+// sealed for, when not said), the events it receives (["member.*"] by default, [] to answer
 // an acknowledgment 403), the files it keeps, its AI, and what the Chest is
 // (the chest module: "Test organization", UTC, English and euros by default;
 // the tool at https://<tool>-chest.chest.test, its public part at
@@ -85,6 +95,7 @@ export type FakeChestOptions = {
   former?: FakeFormer[];
   groups?: FakeGroup[];
   capabilities?: string[];
+  roles?: string[];
   receives?: string[];
   files?: Record<string, { data: Uint8Array | string; type?: string }>;
   ai?: FakeAi;
@@ -107,9 +118,10 @@ export type FakeRun = { id?: string; scheduledAt?: string; attempt?: number };
 // the tool it set in the environment, what it keeps (members, groups and files a test
 // changes or reads; the notifications the tool sent, in the order sent, a
 // replaced one last; each member's badge; the erasures the tool
-// acknowledged; its calls to AI, in order; its realtime: what the tool
-// published and sent, where a member's page connects, a feed's row
-// committed, a membership row removed), emit, which delivers an event to the tool — POST
+// acknowledged; its calls to AI, in order; its opens of sealed values, in
+// order; its realtime: what the tool published and sent, where a member's
+// page connects, a feed's row committed, a membership row removed), emit,
+// which delivers an event to the tool — POST
 // /chest-events of its address, or a handler of Web Requests — and says the
 // status it answered, run, which delivers a run of a schedule the same way
 // on /chest-schedules, and close, which stops it and restores the
@@ -126,6 +138,7 @@ export type FakeChest = {
   badges: Map<string, number>;
   acknowledged: string[];
   ai: FakeAiCall[];
+  opens: FakeOpen[];
   realtime: FakeRealtime;
   emit(event: FakeEvent, to: string | ((request: Request) => Response | Promise<Response>)): Promise<number>;
   run(name: string, to: string | ((request: Request) => Response | Promise<Response>), run?: FakeRun): Promise<number>;
@@ -159,17 +172,26 @@ export function signAssertion(member: Member, options: AssertionOptions = {}): s
 }
 
 
+// ticketOf makes the ticket of a member's request to open sealed values
+// (Chest-Opener), under the key of the fake Chest running; null when none
+// runs. The tool never holds that key: only the Chest makes tickets.
+let ticketOf: ((id: string) => string) | null = null;
+
 // withMember is the request carrying that member's assertion, signed with
-// the options of signAssertion: a new Web Request, or the same Node request
-// with its header set.
+// the options of signAssertion, and — while a fake Chest runs — the
+// member's ticket to open sealed values: a new Web Request, or the same
+// Node request with its headers set.
 export function withMember<R extends Request | IncomingMessage>(request: R, member: Member, options: AssertionOptions = {}): R {
   const assertion = signAssertion(member, options);
+  const ticket = ticketOf?.(member.id);
   if (request instanceof Request) {
     const headers = new Headers(request.headers);
     headers.set("Chest-Member", assertion);
+    if (ticket) headers.set("Chest-Opener", ticket);
     return new Request(request, { headers }) as R;
   }
   (request as IncomingMessage).headers["chest-member"] = assertion;
+  if (ticket) (request as IncomingMessage).headers["chest-opener"] = ticket;
   return request;
 }
 
@@ -178,17 +200,45 @@ const maxLimit = 500, defaultLimit = 100, maxLookup = 200, callsPerMinute = 600;
 const maxObject = 32 << 20, maxObjects = 10000, maxTotal = 1 << 30;
 const namePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,7}$/u;
 // Its links and uploads: their paths on the team host, their lives in
-// seconds, the images it makes thumbnails of, the first bytes an upload of
-// a type must start with, the endings of the names it chooses (chest/toolfiles).
+// seconds, the images it makes thumbnails of, the types it recognises by
+// their content — a member's upload of one must hold it, a visitor's is of
+// the one its content is —, the endings of the names it chooses
+// (chest/toolfiles). An office document is told by the names of its parts,
+// read in its bytes rather than in its archive's directory.
 const linkPath = "/_chest/files/", uploadPath = "/_chest/files/upload/", linkLife = 900, uploadLife = 900;
 const mediaPattern = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,62}\/(\*|[a-z0-9][a-z0-9!#$&^_.+-]{0,62})$/u;
 const thumbnailed = ["image/jpeg", "image/png", "image/gif", "image/webp"];
 const starts = (...heads: string[]) => (data: Buffer): boolean => heads.some(head => data.subarray(0, head.length).equals(Buffer.from(head, "latin1")));
-const signatures: Record<string, (data: Buffer) => boolean> = {
+const text = (data: Buffer, from: number, to: number): string => data.subarray(from, to).toString("latin1");
+const brands = (...said: string[]) => (data: Buffer): boolean => text(data, 4, 8) === "ftyp" && Array.from({ length: Math.max(0, Math.min(data.readUInt32BE(0), data.length) - 8) / 4 }, (_, i) => text(data, 8 + 4 * i, 12 + 4 * i)).some((brand, i) => i !== 1 && said.includes(brand));
+const zip = starts("PK\x03\x04", "PK\x05\x06");
+const office = (main: string) => (data: Buffer): boolean => zip(data) && data.includes("[Content_Types].xml") && data.includes(main);
+const openDocument = (type: string) => (data: Buffer): boolean => zip(data) && text(data, 30, 38) === "mimetype" && text(data, 38, 38 + type.length) === type;
+const recognisers: Record<string, (data: Buffer) => boolean> = {
   "image/jpeg": starts("\xff\xd8\xff"), "image/png": starts("\x89PNG\r\n\x1a\n"), "image/gif": starts("GIF87a", "GIF89a"),
-  "image/webp": data => data.subarray(0, 4).toString("latin1") === "RIFF" && data.subarray(8, 12).toString("latin1") === "WEBP", "application/pdf": starts("%PDF-"),
+  "image/webp": data => text(data, 0, 4) === "RIFF" && text(data, 8, 12) === "WEBP", "image/avif": brands("avif", "avis"), "image/heic": brands("heic", "heix", "heim", "heis", "hevc", "hevx"),
+  "image/bmp": starts("BM"), "image/tiff": starts("II*\x00", "MM\x00*"), "application/pdf": starts("%PDF-"),
+  "application/zip": zip, "application/gzip": starts("\x1f\x8b"), "application/x-7z-compressed": starts("7z\xbc\xaf\x27\x1c"), "application/vnd.rar": starts("Rar!\x1a\x07"),
+  "application/x-tar": data => text(data, 257, 262) === "ustar", "application/x-bzip2": starts("BZh"), "application/x-xz": starts("\xfd7zXZ\x00"), "application/vnd.ms-cab-compressed": starts("MSCF"),
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": office("word/document.xml"),
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": office("xl/workbook.xml"),
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": office("ppt/presentation.xml"),
+  "application/vnd.oasis.opendocument.text": openDocument("application/vnd.oasis.opendocument.text"),
+  "application/vnd.oasis.opendocument.spreadsheet": openDocument("application/vnd.oasis.opendocument.spreadsheet"),
+  "application/vnd.oasis.opendocument.presentation": openDocument("application/vnd.oasis.opendocument.presentation"),
 };
-const extensions: Record<string, string> = { "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp", "image/avif": ".avif", "image/heic": ".heic", "application/pdf": ".pdf", "text/plain": ".txt", "text/csv": ".csv", "application/json": ".json", "application/zip": ".zip", "video/mp4": ".mp4", "audio/mpeg": ".mp3" };
+// The types recognised, an office document before the archive it also is.
+const precise = (type: string): boolean => type.includes("officedocument") || type.includes("opendocument");
+const recognised = Object.keys(recognisers).sort((a, b) => Number(precise(b)) - Number(precise(a)) || (a < b ? -1 : a > b ? 1 : 0));
+const accepted = (types: string[], type: string): boolean => types.some(t => t === type || (t.endsWith("/*") && type.startsWith(t.slice(0, -1))));
+const extensions: Record<string, string> = {
+  "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp", "image/avif": ".avif", "image/heic": ".heic", "image/bmp": ".bmp", "image/tiff": ".tiff",
+  "application/pdf": ".pdf", "text/plain": ".txt", "text/csv": ".csv", "application/json": ".json", "application/zip": ".zip",
+  "application/gzip": ".gz", "application/x-7z-compressed": ".7z", "application/vnd.rar": ".rar", "application/x-tar": ".tar", "application/x-bzip2": ".bz2", "application/x-xz": ".xz", "application/vnd.ms-cab-compressed": ".cab",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx", "application/vnd.oasis.opendocument.text": ".odt",
+  "application/vnd.oasis.opendocument.spreadsheet": ".ods", "application/vnd.oasis.opendocument.presentation": ".odp", "video/mp4": ".mp4", "audio/mpeg": ".mp3",
+};
 const newToken = (): string => randomBytes(18).toString("base64url") + "." + randomBytes(12).toString("base64url");
 // Its notifications: recipients and badges a call, text, quotas.
 // No count bounds a call but the team's size: a body takes the texts and an
@@ -219,6 +269,11 @@ function vectorOf(text: string, dimensions: number): number[] {
   const kept = values.slice(0, dimensions), norm = Math.hypot(...kept) || 1;
   return kept.map(x => x / norm);
 }
+
+// Its sealed values: a call's body, one value, a context, a ticket's life
+// in seconds (chest/toolseal).
+const sealedBody = 4 << 20, sealedValue = 512 << 10, sealedContext = 256, ticketLife = 60;
+const sealedText = /^chest:sealed:1:((?:[a-z][a-z0-9-]{0,47}(?:,[a-z][a-z0-9-]{0,47}){0,15})?):([A-Za-z0-9_-]+)$/u;
 
 const fold = (s: string): string => s.normalize("NFD").replace(/\p{Mn}/gu, "").toLowerCase();
 
@@ -259,7 +314,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     const m = chest.members.find(x => x.id === id);
     return m ? m.role : undefined;
   });
-  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], ai: [], realtime: realtime.realtime, emit: async () => 0, run: async () => 0, close: async () => {} };
+  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], ai: [], opens: [], realtime: realtime.realtime, emit: async () => 0, run: async () => 0, close: async () => {} };
   const former = [...(options.former ?? [])];
   let window = 0, calls = 0;
   // The groups the tool sees: those that give it, or all with members.groups;
@@ -347,15 +402,17 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
         return send(response, 200, { url: `${chest.api}${linkPath}${token}`, expires_in: linkLife });
       }
       if (url.pathname === "/files/upload-url") {
-        const { name, max_size: maxSize, types, expires_in: expiresIn } = command;
+        const { name, max_size: maxSize, types, expires_in: expiresIn, public: visitor } = command;
         const folder = typeof name === "string" && name.endsWith("/");
-        if (typeof name !== "string" || !namePattern.test(folder ? name.slice(0, -1) : name)) return send(response, 400, { error: "invalid_name" });
+        if (typeof name !== "string" || !namePattern.test(folder ? name.slice(0, -1) : name) || (visitor === true && !folder)) return send(response, 400, { error: "invalid_name" });
         if (!(types === undefined || (Array.isArray(types) && types.length <= 8 && types.every(t => typeof t === "string" && mediaPattern.test(t))))) return send(response, 400, { error: "invalid_type" });
-        if (!(maxSize === undefined || (typeof maxSize === "number" && Number.isSafeInteger(maxSize) && maxSize > 0)) || !(expiresIn === undefined || (typeof expiresIn === "number" && Number.isInteger(expiresIn) && expiresIn > 0 && expiresIn <= uploadLife))) return send(response, 400, { error: "invalid_body" });
+        if (visitor === true && (!Array.isArray(types) || types.length === 0 || !types.every(t => recognised.some(r => accepted([t as string], r))))) return send(response, 400, { error: "invalid_type" });
+        if (!(maxSize === undefined || (typeof maxSize === "number" && Number.isSafeInteger(maxSize) && maxSize > 0)) || !(expiresIn === undefined || (typeof expiresIn === "number" && Number.isInteger(expiresIn) && expiresIn > 0 && expiresIn <= uploadLife)) || !(visitor === undefined || typeof visitor === "boolean")) return send(response, 400, { error: "invalid_body" });
+        if (visitor === true && process.env["CHEST_PUBLIC_URL"] === undefined) return send(response, 409, { error: "no_public_part" });
         if ((maxSize ?? 0) > maxObject) return send(response, 413, { error: "too_large" });
         const token = newToken(), life = (expiresIn as number | undefined) ?? uploadLife;
-        uploads.set(token, { name, maxSize: (maxSize as number | undefined) ?? maxObject, types: (types as string[] | undefined) ?? [], until: Date.now() + life * 1000 });
-        return send(response, 200, { url: `${chest.api}${uploadPath}${token}`, method: "PUT", expires_in: life });
+        uploads.set(token, { name, maxSize: (maxSize as number | undefined) ?? maxObject, types: (types as string[] | undefined) ?? [], until: Date.now() + life * 1000, visitor: visitor === true });
+        return send(response, 200, { url: visitor === true ? uploadPath + token : `${chest.api}${uploadPath}${token}`, method: "PUT", expires_in: life });
       }
       const from = command["from"], to = command["to"];
       if (typeof from !== "string" || typeof to !== "string" || !namePattern.test(from) || !namePattern.test(to)) return send(response, 400, { error: "invalid_name" });
@@ -387,15 +444,17 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     send(response, 404, { error: "not_found" });
   }
 
-  // The team host's part of the files, on the fake's own origin: a link it
-  // signed opens the content it was signed for, for its life, as long as
-  // the file is that content — a thumbnail is the image itself, a fake does
-  // not reduce it —; an upload token takes one file, once, within its life,
-  // of the types it names and up to its size, whose first bytes are those of
-  // its type, named by the Chest in a folder. Nobody's session is checked:
+  // The team host's and the public part's files, on the fake's own origin:
+  // a link it signed opens the content it was signed for, for its life, as
+  // long as the file is that content — a thumbnail is the image itself, a
+  // fake does not reduce it —; an upload token takes one file, once, within
+  // its life, up to its size, named by the Chest in a folder: a member's of
+  // the types it names, holding the type it says when the fake recognises
+  // it; a visitor's of the type its content is among those it names,
+  // whatever it says. Nobody's session is checked, nor a visitor's pace:
   // the Chest's own front does that.
   const links = new Map<string, { name: string; object: FakeFile; until: number; download: boolean }>();
-  const uploads = new Map<string, { name: string; maxSize: number; types: string[]; until: number }>();
+  const uploads = new Map<string, { name: string; maxSize: number; types: string[]; until: number; visitor: boolean }>();
   async function front(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     if (request.method === "GET" && url.pathname.startsWith(linkPath) && !url.pathname.startsWith(uploadPath)) {
       const link = links.get(url.pathname.slice(linkPath.length));
@@ -408,11 +467,15 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     const token = url.pathname.slice(uploadPath.length), grant = uploads.get(token);
     uploads.delete(token);
     if (!grant || grant.until < Date.now()) return send(response, 403, { error: "invalid_token" });
-    const type = (request.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
-    if (!mediaPattern.test(type) || type.endsWith("/*") || (grant.types.length > 0 && !grant.types.some(t => t === type || (t.endsWith("/*") && type.startsWith(t.slice(0, -1)))))) return send(response, 415, { error: "type_refused" });
+    let type = (request.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+    if (!grant.visitor && (!mediaPattern.test(type) || type.endsWith("/*") || (grant.types.length > 0 && !accepted(grant.types, type)))) return send(response, 415, { error: "type_refused" });
     const data = await body(request, grant.maxSize);
     if (data === null) return send(response, 413, { error: "too_large" });
-    if (signatures[type] && !signatures[type]!(data)) return send(response, 400, { error: "type_mismatch" });
+    if (grant.visitor) {
+      const found = recognised.find(r => accepted(grant.types, r) && recognisers[r]!(data));
+      if (found === undefined) return send(response, 415, { error: "type_refused" });
+      type = found;
+    } else if (recognisers[type] && !recognisers[type]!(data)) return send(response, 400, { error: "type_mismatch" });
     const name = grant.name.endsWith("/") ? grant.name + randomBytes(10).toString("hex") + (extensions[type] ?? "") : grant.name;
     const total = [...files.entries()].reduce((sum, [n, f]) => n === name ? sum : sum + f.data.byteLength, 0);
     if (total + data.length > maxTotal || (!files.has(name) && files.size >= maxObjects)) return send(response, 429, { error: "quota_exceeded" });
@@ -652,6 +715,64 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     response.end();
   }
 
+  // Its sealed values: AES-256-GCM under a key of its own — the format and
+  // the rules of a Chest, not its cipher —, bound to the tool, the roles
+  // and the context; its tickets, HMAC under another, for 60 seconds.
+  const sealingKey = randomBytes(32), ticketKey = randomBytes(32);
+  const additional = (roles: string, context: string) => Buffer.from(`chest:sealed:1:\u0000${tool}\u0000${roles}\u0000${context}`);
+  const ticketMac = (id: string, expiry: string) => createHmac("sha256", ticketKey).update(`${id}\u0000${expiry}`).digest();
+  ticketOf = id => { const expiry = String(Math.floor(Date.now() / 1000) + ticketLife); return `1.${id}.${expiry}.${ticketMac(id, expiry).toString("base64url")}`; };
+  const ticketMember = (ticket: string | string[] | undefined): string | null => {
+    const parts = typeof ticket === "string" ? ticket.split(".") : [];
+    if (parts.length !== 4 || parts[0] !== "1" || !memberIdPattern.test(parts[1]!) || Number(parts[2]) < Date.now() / 1000) return null;
+    const mac = Buffer.from(parts[3]!, "base64url"), expected = ticketMac(parts[1]!, parts[2]!);
+    return mac.length === expected.length && timingSafeEqual(mac, expected) ? parts[1]! : null;
+  };
+  const isContext = (c: unknown): c is string | undefined => c === undefined || (typeof c === "string" && Buffer.byteLength(c) <= sealedContext);
+  async function sealedRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    if (!capabilities.has("sealed")) return send(response, 403, { error: "capability_not_granted" });
+    if (request.method !== "POST" || url.search || (url.pathname !== "/sealed/seal" && url.pathname !== "/sealed/open")) return send(response, 404, { error: "not_found" });
+    const id = url.pathname === "/sealed/open" ? ticketMember(request.headers["chest-opener"]) : null;
+    if (url.pathname === "/sealed/open" && id === null) return send(response, 401, { error: "member_required" });
+    const raw = await body(request, sealedBody);
+    if (raw === null) return send(response, 413, { error: "too_large" });
+    let items: unknown;
+    try { items = (JSON.parse(raw.toString()) as { items?: unknown }).items; } catch { items = undefined; }
+    if (!Array.isArray(items)) return send(response, 400, { error: "invalid_body" });
+    if (url.pathname === "/sealed/seal") {
+      const sealed: string[] = [];
+      for (const item of items as { value?: unknown; roles?: unknown; context?: unknown }[]) {
+        if (typeof item?.value !== "string" || Buffer.byteLength(item.value) > sealedValue || !isContext(item.context)) return send(response, 400, { error: "invalid_body" });
+        const roles = item.roles;
+        if (roles !== undefined && (!Array.isArray(roles) || roles.length === 0 || roles.length > maxRoles || !roles.every(r => typeof r === "string" && rolePattern.test(r) && (!options.roles || options.roles.includes(r))) || new Set(roles).size !== roles.length)) return send(response, 400, { error: "invalid_role" });
+        const joined = (roles as string[] | undefined)?.join(",") ?? "", nonce = randomBytes(12);
+        const cipher = createCipheriv("aes-256-gcm", sealingKey, nonce).setAAD(additional(joined, item.context ?? ""));
+        const box = Buffer.concat([nonce, cipher.update(item.value, "utf8"), cipher.final(), cipher.getAuthTag()]);
+        sealed.push(`chest:sealed:1:${joined}:${box.toString("base64url")}`);
+      }
+      return send(response, 200, { sealed });
+    }
+    const holder = chest.members.find(m => m.id === id);
+    if (!holder) return send(response, 403, { error: "access_removed" });
+    const values: ({ value: string } | { refused: "role" | "invalid" })[] = [];
+    for (const item of items as { sealed?: unknown; context?: unknown }[]) {
+      if (typeof item?.sealed !== "string" || !isContext(item.context)) return send(response, 400, { error: "invalid_body" });
+      const found = sealedText.exec(item.sealed), box = found ? Buffer.from(found[2]!, "base64url") : Buffer.alloc(0);
+      let value: string | null = null;
+      if (found && box.length >= 28) {
+        try {
+          const decipher = createDecipheriv("aes-256-gcm", sealingKey, box.subarray(0, 12)).setAAD(additional(found[1]!, item.context ?? ""));
+          decipher.setAuthTag(box.subarray(box.length - 16));
+          value = Buffer.concat([decipher.update(box.subarray(12, box.length - 16)), decipher.final()]).toString("utf8");
+        } catch { value = null; }
+      }
+      const roles = found?.[1] ? found[1].split(",") : [];
+      values.push(value === null ? { refused: "invalid" } : roles.length && !roles.includes(holder.role ?? "") ? { refused: "role" } : { value });
+    }
+    if (values.length) chest.opens.push({ member: holder.id, opened: values.filter(v => "value" in v).length, refused: values.filter(v => "refused" in v).length });
+    send(response, 200, { values });
+  }
+
   // The acknowledgment of an erasure the tool was told of (emit).
   async function erasuresRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     if (!receives.includes("member.*")) return send(response, 403, { error: "capability_not_granted" });
@@ -678,6 +799,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       : url.pathname.startsWith("/_chest/files/") ? front
       : url.pathname.startsWith("/erasures/") ? erasuresRoute
       : url.pathname.startsWith("/ai/") ? aiRoute
+      : url.pathname.startsWith("/sealed/") ? sealedRoute
       : url.pathname === "/members" || url.pathname.startsWith("/members/") || url.pathname === "/groups" ? members
       : url.pathname === "/files" || url.pathname.startsWith("/files/") ? filesRoute
       : url.pathname === "/badges" || url.pathname.startsWith("/badges/") || url.pathname.startsWith("/notifications") ? notificationsRoute : null;
@@ -723,6 +845,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   };
   chest.close = async () => {
     realtime.close();
+    ticketOf = null;
     server.closeAllConnections();
     await new Promise<void>(resolve => server.close(() => resolve()));
     for (const [name, value] of Object.entries(saved)) {

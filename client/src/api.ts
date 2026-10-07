@@ -1,4 +1,4 @@
-import { CapabilityNotGranted, ChestError, QuotaExceeded, RateLimited, TooLarge, Unavailable } from "./errors.js";
+import { CapabilityNotGranted, ChestError, QuotaExceeded, RateLimited, StorageFull, TooLarge, Unavailable } from "./errors.js";
 
 // The Chest's API as a server tool reaches it, shared by the modules that
 // call it (files, members): CHEST_API is http://127.0.0.1:<port>, the tool's
@@ -33,8 +33,8 @@ function base(capability: string): string {
 // is Unavailable. The request and the reading of its answer end after
 // deadline milliseconds (120 seconds unless said), or when the caller's
 // signal aborts: its reason is then thrown.
-export async function ask(capability: string, method: string, path: string, init: { body?: Uint8Array<ArrayBuffer> | string; type?: string; deadline?: number; signal?: AbortSignal } = {}): Promise<Response> {
-  const headers: Record<string, string> = {};
+export async function ask(capability: string, method: string, path: string, init: { body?: Uint8Array<ArrayBuffer> | string; type?: string; headers?: Record<string, string>; deadline?: number; signal?: AbortSignal } = {}): Promise<Response> {
+  const headers: Record<string, string> = { ...init.headers };
   if (init.type !== undefined) headers["Content-Type"] = init.type;
   const url = base(capability) + path;
   const timeout = AbortSignal.timeout(init.deadline ?? deadline);
@@ -80,18 +80,25 @@ export async function json(response: Response): Promise<unknown> {
   }
 }
 
-// refusal turns an answer that is not a success into what the tool tests.
-export async function refusal(response: Response, capability: string): Promise<ChestError> {
-  let code = "refused";
+// errorCode is the code of a refusal of the Chest ({"error": code}), or
+// "refused" for an answer that says none.
+export async function errorCode(response: Response): Promise<string> {
   try {
     const given = ((await json(response)) as { error?: unknown } | null)?.error;
-    if (typeof given === "string" && /^[a-z_]{1,40}$/u.test(given)) code = given;
+    if (typeof given === "string" && /^[a-z_]{1,40}$/u.test(given)) return given;
   } catch {
-    // The code stays "refused".
+    // No code of the Chest's.
   }
+  return "refused";
+}
+
+// refusal turns an answer that is not a success into what the tool tests.
+export async function refusal(response: Response, capability: string): Promise<ChestError> {
+  const code = await errorCode(response);
   if (response.status === 403) return new CapabilityNotGranted(capability);
   if (response.status === 413) return new TooLarge();
   if (response.status === 429) return code === "rate_limited" ? new RateLimited() : new QuotaExceeded();
+  if (response.status === 507 && code === "storage_full") return new StorageFull();
   if (response.status >= 500) return new Unavailable();
   return new ChestError(code, response.status, `the Chest refused: ${code}`);
 }

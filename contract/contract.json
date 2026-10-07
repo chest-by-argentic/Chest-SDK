@@ -68,9 +68,10 @@
       },
       {
         "key": "capabilities",
-        "rule": "What the tool uses of its Chest, each at most once, each approved as a permission: database (its own PostgreSQL), files (its private files), members (who has the tool), members.email (their addresses; with members), members.groups (every group of the Chest, and which of those members are in each; with members), notifications (badges and inbox items), ai (AI models through the Chest; with the key ai), realtime (live updates to its members' open pages; its channels in the key realtime).",
+        "rule": "What the tool uses of its Chest, each at most once, each approved as a permission: database (its own PostgreSQL), sealed (values it seals, which only its members open through it; every version of the tool then waits for the owner or an admin), files (its private files), members (who has the tool), members.email (their addresses; with members), members.groups (every group of the Chest, and which of those members are in each; with members), notifications (badges and inbox items), ai (AI models through the Chest; with the key ai), realtime (live updates to its members' open pages; its channels in the key realtime).",
         "example": [
           "database",
+          "sealed",
           "files",
           "members",
           "members.email",

@@ -79,7 +79,7 @@ could be a permission nobody approved.
 | `role_labels` |  | How declared roles are shown: an object giving roles of roles 1 to 40 printable characters each. Presentation only: never approved. | `{"manager":"Manager"}` |
 | `public` |  | true for a part served to anyone on the Internet, on the tool's public host, outside /chest. Approved as a permission; closed at installation until whoever runs the tool opens it. | `true` |
 | `csp` |  | "tool": the public part sends its own Content-Security-Policy (a nonce per response, as Next.js needs), and the Chest adds beside it only its floor policy instead of its default one. Requires public; approved as a permission. | `"tool"` |
-| `capabilities` |  | What the tool uses of its Chest, each at most once, each approved as a permission: database (its own PostgreSQL), files (its private files), members (who has the tool), members.email (their addresses; with members), members.groups (every group of the Chest, and which of those members are in each; with members), notifications (badges and inbox items), ai (AI models through the Chest; with the key ai), realtime (live updates to its members' open pages; its channels in the key realtime). | `["database","files","members","members.email","members.groups","notifications","ai","realtime"]` |
+| `capabilities` |  | What the tool uses of its Chest, each at most once, each approved as a permission: database (its own PostgreSQL), sealed (values it seals, which only its members open through it; every version of the tool then waits for the owner or an admin), files (its private files), members (who has the tool), members.email (their addresses; with members), members.groups (every group of the Chest, and which of those members are in each; with members), notifications (badges and inbox items), ai (AI models through the Chest; with the key ai), realtime (live updates to its members' open pages; its channels in the key realtime). | `["database","sealed","files","members","members.email","members.groups","notifications","ai","realtime"]` |
 | `files` |  | With the capability files: "quota" and "maxObject", sizes such as "5 GiB" or "100 MiB" — the quota from 100 MiB to 100 GiB (1 GiB without it), the largest object from 1 MiB to 512 MiB (32 MiB without it). | `{"quota":"5 GiB","maxObject":"100 MiB"}` |
 | `ai` |  | Required with the capability ai: "monthly", the whole euros a month the tool suggests, 1 to 1000 (5 without it; the owner's cap decides); "models", the aliases it calls among default, fast, smart, embedding, each once (default without it); "purpose", what it does with AI, 1 to 120 printable characters. | `{"monthly":5,"models":["default","embedding"],"purpose":"Summarises the tasks of a project"}` |
 | `realtime` |  | With the capability realtime: the channels the members' pages join, and the tables whose writes become live events. "channels", 1 to 32 patterns, no channel name matched by two: "name", segments of ^[a-z0-9_-]{1,64}$ joined by colons, 128 characters at most, its last segment possibly {member} (the joining member's own id only), * (any segment) or {key} (a membership table decides); "join", absent for every member who has the tool, a list of the tool's roles, or {"table", "key", "member"} — a member joins {key} when a row of table has the key in column key and their id in column member (requires database; a row deleted removes them at once); "send" true lets those who join send ephemeral messages; "presence" true lets them appear in its presence. "feeds", up to 16: "table", whose inserts, updates and deletes become events <table>.insert, .update, .delete on "channel" — a declared channel, or prefix:{column} of a variable pattern, the column giving the last segment —, each carrying "columns" (1 to 32, the primary key first) of the row. Names of tables and columns are ^[a-z_][a-z0-9_]{0,62}$. Never approved: only the capability is. | `{"channels":[{"name":"everyone","presence":true},{"name":"room:{id}","join":{"table":"room_members","key":"room_id","member":"member_id"},"send":true,"presence":true},{"name":"inbox:{member}"}],"feeds":[{"table":"messages","channel":"room:{room_id}","columns":["id","room_id","author","text","created_at"]}]}` |
@@ -157,6 +157,22 @@ previous version must keep working on the new schema.
   with a nonce per response: the Chest then adds beside it only its floor
   policy, which never blocks a script. An answer without a policy still gets
   the default one.
+- **Embedded in the company's website.** The owner or an admin may allow
+  sites (`https://acme.fr`) to frame the public part, in the tool's settings:
+  the Chest then writes them in `frame-ancestors` instead of `'none'` on the
+  public part only — its host and its custom domain —, never on `/chest`. A
+  page framed by one of them gets `<script src="/_chest/frame.js" async>`
+  right after its `<body>`, which tells the site the page's height; the
+  site's page loads `/_chest/embed.js` beside the frame (the snippet the
+  settings give). A tool with its own policy keeps it: `'self'` scripts (or
+  `strict-dynamic` with that script loaded by its own nonced code) let the
+  frame resize, and its own `frame-ancestors` still wins. Framed by another
+  site, a page is a third-party document: keep its state in the page — a
+  form's fields — rather than in cookies, which browsers block there unless
+  they are `SameSite=None; Secure; Partitioned`.
+- **`/_chest/` is the Chest's** on both hosts: the team host's sign-in, links
+  and uploads; the public part's visitors' uploads and embedding scripts.
+  The tool never receives a request under it.
 - **Inline styles.** React's `style={…}` writes style attributes, which
   `style-src` does not allow without `'unsafe-inline'`: add
   `style-src-attr 'unsafe-inline'` to the tool's own policy (attributes

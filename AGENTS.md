@@ -17,6 +17,7 @@ server-side:
 | The tool's own addresses, for links in an email or a feed | `chest.tool.teamUrl`, `chest.tool.publicUrl` from `@argentic/chest-sdk/chest` | nothing (`CHEST_TEAM_URL`, `CHEST_PUBLIC_URL` with `"public": true`) |
 | Will the Chest take this repository? | `npx chest check` (`--json`) from `@argentic/chest-check` | a clone of Chest-SDK (`check/`, not on npm yet), a Git repository |
 | The tool's own PostgreSQL database | `databaseUrl()` from `@argentic/chest-sdk/database` | `"capabilities": ["database"]` in `chest.json` |
+| Sensitive values (an IBAN, a salary, a confidential message) that only members open, never the Data tab, agents or backups | `seal`, `sealMany`, `open`, `openMany`, `isSealed` from `@argentic/chest-sdk/sealed` | `"capabilities": ["sealed"]` (and `"roles"` to seal for some) |
 | The tool's private files | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` (and `"files": {"quota", "maxObject"}` beyond 1 GiB, 32 MiB per object) |
 | Who else has the tool | `list`, `get`, `lookup`, `groups.list` from `@argentic/chest-sdk/members` | `"capabilities": ["members"]` (`"members.email"` too for addresses, `"members.groups"` for every group of the Chest — a tool open to everyone that offers “the Sales team”) |
 | Be told when members change, lose access, leave or ask to be erased | `handle`, `verify`, `acknowledgeErasure` from `@argentic/chest-sdk/events` | `"capabilities": ["members"]` and `"receives": ["member.*"]` |
@@ -24,7 +25,7 @@ server-side:
 | Tell members what needs their attention — some, or everyone who has the tool, or some groups or roles | `notify`, `broadcast`, `withdraw`, `badge.set`, `badge.setMany` from `@argentic/chest-sdk/notifications` | `"capabilities": ["notifications"]` |
 | Call AI models (chat, streamed or not, tools, embeddings) | `chat`, `embed`, `models`, `usage` from `@argentic/chest-sdk/ai` | `"capabilities": ["ai"]` and `"ai": {"monthly", "models", "purpose"}` |
 | Keep the members' pages live (chat, presence, typing, rows as they are written) | `connect` from `@argentic/chest-sdk/realtime/client` **in the browser**; `publish`, `send`, `online`, `presence` from `@argentic/chest-sdk/realtime` on the server | `"capabilities": ["realtime"]` and `"realtime": {"channels", "feeds"}` |
-| Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `Unavailable`, `AiCapReached`, `AiUnavailable`, `AiModelNotAllowed`, `AiRefused` from `@argentic/chest-sdk/errors` | — |
+| Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `Unavailable`, `MemberRequired`, `NotAllowed`, `SealedInvalid`, `SealedLocked`, `SealedLost`, `AiCapReached`, `AiUnavailable`, `AiModelNotAllowed`, `AiRefused` from `@argentic/chest-sdk/errors` | — |
 | Tests without a Chest | `fakeChest` (its `emit`, `run`, its links and uploads, its `realtime`, `chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
 
 ## Install
@@ -323,6 +324,25 @@ const { name } = await sent.json(); // 201 {name, type, size}
 // photos/) before recording it in its database
 ```
 
+## Let a visitor send a file (a CV, a screenshot)
+
+A tool with `"public": true` authorises a visitor's upload from a public
+route, with `public: true`: into a folder, of types the Chest recognises by
+their content (images, PDF, Office and OpenDocument documents, archives).
+
+```ts
+// app/api/apply/upload/route.ts — a public route: no member()
+const up = await files.uploadUrl("applications/", { public: true, types: ["application/pdf"], maxSize: 10 << 20 });
+return Response.json(up); // { url: "/_chest/files/upload/<token>", method: "PUT", expiresIn }
+```
+
+```ts
+// In the browser, on the public page (or the company's site framing it)
+const sent = await fetch(up.url, { method: "PUT", body: file }); // 201 {name, type, size}, 429 slow_down…
+// then post the name with the form; the tool stats it, checks it is under
+// applications/, and records it. Only members ever see the file.
+```
+
 Schema changes go in `migrations/NNNN_name.sql`; the Chest runs them in order
 at install and at every update.
 
@@ -370,6 +390,12 @@ at install and at every update.
 - **Business rules are yours.** The SDK is not a security boundary: the Chest
   enforces capabilities, but who may edit what inside your tool is your code.
 - **`databaseUrl()` is a secret.** Never log it, never send it to a browser.
+- **Seal what must stay between a member and the tool** (an IBAN, a payslip
+  amount, a medical note) with `seal(value, {context, roles?})`, the context
+  the row's kind and key; open it with `open(request, …)` in a `/chest`
+  route, on the member's request, only what the page shows. Never seal what
+  lists, sorts or searches need, never log or forward what you opened.
+  `MemberRequired` means no member is there (a public page, a schedule).
 - **Do not retry an uncertain write.** `Unavailable` means the Chest was not
   reached or did not answer as expected: the write may or may not have
   happened. Re-read before writing again.
@@ -383,9 +409,15 @@ at install and at every update.
   read-only root; store files through `files`, data in the database.
 - **Give signed file links only to members.** A `files.url()` link opens
   without sign-in for 15 minutes; never put it on a public page.
-- **Authorise uploads only in `/chest` routes, after `member()`.** The
-  `uploadUrl()` answer goes to that member's browser, never to a public page;
-  it serves once, within its `expiresIn`.
+- **Authorise members' uploads only in `/chest` routes, after `member()`.**
+  The `uploadUrl()` answer goes to that member's browser, never to a public
+  page; it serves once, within its `expiresIn`. A public page asks
+  `uploadUrl(folder, {public: true, types})`: a visitor's file, into a folder
+  of its own, of a type the Chest recognises.
+- **An embeddable public page keeps its state in the page.** Framed by the
+  company's website, cookies are third-party and blocked unless
+  `SameSite=None; Secure; Partitioned`: carry what a form needs in its
+  fields.
 - **Record an uploaded file after `stat` confirms it.** The browser may never
   send it, or the Chest may refuse it: write the name in your database only
   once `files.stat(name)` returns it (its type, size and `sha256` as the
@@ -426,7 +458,9 @@ at install and at every update.
 | A member abroad sees times shifted by hours | Times formatted in the Chest's zone or the server's: format with `timeZone: member.timeZone`. |
 | `CapabilityNotGranted` from `databaseUrl()` | Capability missing in `chest.json`, not approved yet, or `DATABASE_URL` set by the tool itself. |
 | The browser's `PUT` answers 403 `invalid_token` | The upload token was already used, expired (`expiresIn`), or was not made for this host: ask a new `uploadUrl` for each upload. |
-| The browser's `PUT` answers 415 `type_refused` or 400 `type_mismatch` | The file's `Content-Type` is not one of `types`, or its first bytes are not of the type sent. |
+| The browser's `PUT` answers 415 `type_refused` or 400 `type_mismatch` | The file's `Content-Type` is not one of `types`, or its first bytes are not of the type sent; for a visitor, its content is of none of `types`, whatever it is called. |
+| The browser's `PUT` answers 429 `slow_down` | A visitor sent too many files (10 a minute, a twentieth of the quota an hour): wait `Retry-After` seconds. |
+| `ChestError` `invalid_type` from `uploadUrl(…, {public: true})` | No `types`, or one the Chest cannot recognise by its content (plain text, CSV…). |
 | `TooLarge` from `uploadUrl` or `put` | Beyond the tool's largest object (32 MiB unless `chest.json` asks `"files": {"maxObject": …}`). |
 | `ChestError` with `invalid_name` | A file name outside the allowed shape (up to 8 segments of `[A-Za-z0-9._-]`, none starting with `.` or `-`). |
 | `member.email` is always undefined | The tool does not hold `members.email`: addresses are a permission of their own. |

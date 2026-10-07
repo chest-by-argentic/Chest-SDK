@@ -46,6 +46,15 @@ export class TooLarge extends ChestError {
   }
 }
 
+// The server of the Chest has no more disk for files, whatever the tool's
+// quota: nothing was kept. Its owner frees space or takes a larger server;
+// the tool says the file could not be kept, and may try again later.
+export class StorageFull extends ChestError {
+  constructor() {
+    super("storage_full", 507, "the Chest refused: its server's disk is full");
+  }
+}
+
 // The Chest did not answer, or not as it does: nothing is known of what was
 // asked — a write may or may not have happened.
 export class Unavailable extends ChestError {
@@ -95,5 +104,46 @@ export class AiModelNotAllowed extends ChestError {
 export class AiRefused extends ChestError {
   constructor() {
     super("content_refused", 422, "the AI provider refused the content of the request");
+  }
+}
+
+// Opening a sealed value needs a member on the request: none came with it,
+// or their ticket expired (a request lasts 60 seconds). A public page, a
+// schedule or an event opens nothing.
+export class MemberRequired extends ChestError {
+  constructor() {
+    super("member_required", 401, "the Chest refused: sealed values open only on the request of a member");
+  }
+}
+
+// The member may not open this: they lost the tool since the request
+// began, or the value was sealed for roles they do not hold.
+export class NotAllowed extends ChestError {
+  constructor() {
+    super("not_allowed", 403, "the Chest refused: this member may not open this value");
+  }
+}
+
+// The sealed value does not open: it was altered, it is another tool's, or
+// it was sealed in another context.
+export class SealedInvalid extends ChestError {
+  constructor() {
+    super("sealed_invalid", 400, "the sealed value does not open: altered, another tool's or of another context");
+  }
+}
+
+// The Chest was restored and its sealed data waits for the owner's recovery
+// code: nothing is sealed or opened until they enter it (Settings).
+export class SealedLocked extends ChestError {
+  constructor() {
+    super("sealed_locked", 503, "the Chest's sealed data is locked until its owner enters the recovery code");
+  }
+}
+
+// The key of this tool's sealed values is lost for good (the Chest key and
+// its recovery code both): its sealed values never open again.
+export class SealedLost extends ChestError {
+  constructor() {
+    super("sealed_lost", 503, "the key of this tool's sealed values is lost");
   }
 }

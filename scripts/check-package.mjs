@@ -16,13 +16,14 @@ const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const name = manifest.name;
 
 // What each subpath gives at run time (tool contract v2); the root gives them
-// all, files, members, notifications, events, schedules and ai as namespaces, never
+// all, sealed, files, members, notifications, events, schedules and ai as namespaces, never
 // testing.
 const expected = {
-  errors: ["AiCapReached", "AiModelNotAllowed", "AiRefused", "AiUnavailable", "CapabilityNotGranted", "ChestError", "QuotaExceeded", "RateLimited", "TooLarge", "Unavailable"],
+  errors: ["AiCapReached", "AiModelNotAllowed", "AiRefused", "AiUnavailable", "CapabilityNotGranted", "ChestError", "MemberRequired", "NotAllowed", "QuotaExceeded", "RateLimited", "SealedInvalid", "SealedLocked", "SealedLost", "StorageFull", "TooLarge", "Unavailable"],
   member: ["groupIdPattern", "languagePattern", "member", "memberIdPattern", "timeZonePattern"],
   chest: ["chest"],
   database: ["databaseUrl"],
+  sealed: ["isSealed", "open", "openMany", "seal", "sealMany"],
   files: ["delete", "get", "list", "move", "put", "stat", "uploadUrl", "url"],
   members: ["forget", "get", "groups", "list", "lookup"],
   notifications: ["badge", "broadcast", "notify", "withdraw"],
@@ -33,7 +34,7 @@ const expected = {
   "realtime/client": ["connect"],
   testing: ["fakeChest", "signAssertion", "withMember"],
 };
-const namespaces = ["files", "members", "notifications", "events", "schedules", "ai", "realtime"];
+const namespaces = ["sealed", "files", "members", "notifications", "events", "schedules", "ai", "realtime"];
 const rootExports = [...Object.entries(expected).filter(([sub]) => !namespaces.includes(sub) && sub !== "testing" && sub !== "realtime/client").flatMap(([, names]) => names), ...namespaces].sort();
 
 const subpaths = Object.keys(manifest.exports).filter(key => key !== "./package.json");
