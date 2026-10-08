@@ -25,8 +25,10 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gunzipSync } from "node:zlib";
 
-// What chest-check says of a source (cmd/chest-check of the Chest).
-export type Verdict = { checker: string; ok: boolean; reason?: string; detail?: string; contract?: string; name?: string; roles?: string[]; permissions?: string[]; migrations?: number };
+// What chest-check says of a source (cmd/chest-check of the Chest): warnings
+// are what the Chest takes but advises against, such as a migration that
+// breaks the version before it.
+export type Verdict = { checker: string; ok: boolean; reason?: string; detail?: string; contract?: string; name?: string; roles?: string[]; permissions?: string[]; migrations?: number; warnings?: string[] };
 
 // The package's root: the directory above this module that holds
 // check.wasm.gz — above dist/ once packed, above build/src/ in its tests.
@@ -106,6 +108,7 @@ function words(v: Verdict): string {
   if (v.roles?.length) lines.push(`  Roles: ${v.roles.join(", ")}`);
   lines.push(`  It asks: ${v.permissions?.length ? v.permissions.join(", ") : "nothing beyond its own address"}`);
   if (v.migrations) lines.push(`  Migrations: ${v.migrations}`);
+  for (const warning of v.warnings ?? []) lines.push(`  Warning: ${warning}`);
   return lines.join("\n") + "\n";
 }
 
