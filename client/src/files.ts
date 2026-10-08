@@ -2,9 +2,10 @@ import { chestLink, json, read, ask as chest, refusal as refused } from "./api.j
 import { ChestError, TooLarge, Unavailable } from "./errors.js";
 
 // The private files of a server tool whose chest.json declares
-// "capabilities": ["files"]: kept by its Chest (1 GiB, 10,000 objects, 32 MiB
-// each, unless the manifest asks otherwise: "files": {"quota", "maxObject"}),
-// never on the tool's own disk, through the Chest's API (CHEST_API, api.ts).
+// "capabilities": ["files"]: kept by its Chest (32 MiB each unless the
+// manifest asks otherwise: "files": {"maxObject"}; no quota — the tools of
+// a Chest share its server's workload volume —), never on the tool's own
+// disk, through the Chest's API (CHEST_API, api.ts).
 // A call reaches the tool's files only: its instance is its identity.
 //
 //   import * as files from "@argentic/chest-sdk/files";
@@ -15,8 +16,8 @@ import { ChestError, TooLarge, Unavailable } from "./errors.js";
 //
 // Names: up to 8 segments of 1–100 letters, digits, '.', '_' or '-',
 // separated by '/', none starting with '.' or '-'. Errors: CapabilityNotGranted
-// (403), TooLarge (413), QuotaExceeded (429), StorageFull (507: the server's
-// disk, whatever the quota), Unavailable (503, or the Chest not reached),
+// (403), TooLarge (413), StorageFull (507: the server's workload volume is
+// full), Unavailable (503, or the Chest not reached),
 // ChestError otherwise (invalid_name, invalid_type, no_thumbnail 400,
 // not_found 404, no_public_part 409…).
 
@@ -185,8 +186,8 @@ export async function url(name: string, options: { thumbnail?: 256 | 1024; downl
 // framed by the company's website:
 //   fetch(up.url, { method: "PUT", body: file })
 // The file is private like any other: only the tool's members see it,
-// through the tool. The Chest paces each visitor (10 uploads a minute, a
-// twentieth of the quota an hour; 429 slow_down with Retry-After) and
+// through the tool. The Chest paces each visitor (10 uploads a minute,
+// 64 MiB an hour; 429 slow_down with Retry-After) and
 // answers 201 {name, type, size} to the browser, which gives the name back
 // to the tool; stat it before recording it.
 export async function uploadUrl(name: string, options: { maxSize?: number; types?: string[]; expiresIn?: number; public?: boolean } = {}): Promise<{ url: string; method: "PUT"; expiresIn: number }> {

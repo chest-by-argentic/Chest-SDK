@@ -26,7 +26,7 @@ export type { FakeChannelRule, FakeFeed, FakePublished, FakeRealtime, FakeRealti
 // (checked against the "emits" of its chest.json, as the Chest checks them,
 // and kept in order) and realtime (the tool's publishes and sends, and the
 // Chest's side of its pages, which the browser client connects to) with the
-// Chest's bounds, quotas and errors; and that delivers an event — of the
+// Chest's bounds and errors; and that delivers an event — of the
 // members' lifecycle, or of another tool — or a run of a schedule to the
 // tool, signed as the Chest signs them.
 //
@@ -159,6 +159,10 @@ export type FakeChest = {
   members: Member[];
   groups: FakeGroup[];
   files: Map<string, FakeFile>;
+  // full, set by a test, has every write of a file refused as the Chest
+  // refuses one when its server's workload volume is full (507
+  // storage_full): a tool's files have no quota of their own.
+  full: boolean;
   notifications: FakeNotification[];
   badges: Map<string, number>;
   acknowledged: string[];
@@ -223,7 +227,7 @@ export function withMember<R extends Request | IncomingMessage>(request: R, memb
 
 // The bounds of a Chest (chest/toolmembers, chest/toolfiles).
 const maxLimit = 500, defaultLimit = 100, maxLookup = 200, callsPerMinute = 600;
-const maxObject = 32 << 20, maxObjects = 10000, maxTotal = 1 << 30;
+const maxObject = 32 << 20;
 const namePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}(\/[A-Za-z0-9][A-Za-z0-9._-]{0,99}){0,7}$/u;
 // Its links and uploads: their paths on the team host, their lives in
 // seconds, the images it makes thumbnails of, the types it recognises by
@@ -358,7 +362,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     const m = chest.members.find(x => x.id === id);
     return m ? m.role : undefined;
   });
-  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, notifications: [], badges: new Map(), acknowledged: [], ai: [], opens: [], realtime: realtime.realtime, emitted: [], deliver: async () => 0, run: async () => 0, close: async () => {} };
+  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, full: false, notifications: [], badges: new Map(), acknowledged: [], ai: [], opens: [], realtime: realtime.realtime, emitted: [], deliver: async () => 0, run: async () => 0, close: async () => {} };
   const former = [...(options.former ?? [])];
   let window = 0, calls = 0;
   // The groups the tool sees: those that give it, or all with members.groups;
@@ -472,8 +476,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     if (request.method === "PUT") {
       const data = await body(request, maxObject);
       if (data === null) return send(response, 413, { error: "too_large" });
-      const total = [...files.entries()].reduce((sum, [n, f]) => n === name ? sum : sum + f.data.byteLength, 0);
-      if (total + data.length > maxTotal || (!object && files.size >= maxObjects)) return send(response, 429, { error: "quota_exceeded" });
+      if (chest.full) return send(response, 507, { error: "storage_full" });
       const kept = { data: new Uint8Array(data), type: request.headers["content-type"] ?? "application/octet-stream", updated: new Date().toISOString() };
       files.set(name, kept);
       return send(response, 201, described(name, kept));
@@ -521,8 +524,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
       type = found;
     } else if (recognisers[type] && !recognisers[type]!(data)) return send(response, 400, { error: "type_mismatch" });
     const name = grant.name.endsWith("/") ? grant.name + randomBytes(10).toString("hex") + (extensions[type] ?? "") : grant.name;
-    const total = [...files.entries()].reduce((sum, [n, f]) => n === name ? sum : sum + f.data.byteLength, 0);
-    if (total + data.length > maxTotal || (!files.has(name) && files.size >= maxObjects)) return send(response, 429, { error: "quota_exceeded" });
+    if (chest.full) return send(response, 507, { error: "storage_full" });
     files.set(name, { data: new Uint8Array(data), type, updated: new Date().toISOString() });
     send(response, 201, { name, type, size: data.length });
   }

@@ -20,10 +20,9 @@ export class CapabilityNotGranted extends ChestError {
   }
 }
 
-// The call would take the tool beyond what its Chest gives it: for files,
-// their total (1 GiB unless its manifest asks more) or their count (10,000
-// objects); for notifications, 1,000 recipients an hour, 100 items per member
-// a day or 600 badge writes a minute. A refused call changes nothing.
+// The call would take the tool beyond what its Chest gives it: for
+// notifications, 1,000 recipients an hour, 100 items per member a day or
+// 600 badge writes a minute. A refused call changes nothing.
 export class QuotaExceeded extends ChestError {
   constructor() {
     super("quota_exceeded", 429, "the Chest refused: the tool's quota would be exceeded");
@@ -46,12 +45,13 @@ export class TooLarge extends ChestError {
   }
 }
 
-// The server of the Chest has no more disk for files, whatever the tool's
-// quota: nothing was kept. Its owner frees space or takes a larger server;
-// the tool says the file could not be kept, and may try again later.
+// The server of the Chest has no more room for its tools' files — they share
+// its workload volume, no tool has a quota of its own —: nothing was kept.
+// Its owner frees space or takes a larger server; the tool says the file
+// could not be kept, and may try again later.
 export class StorageFull extends ChestError {
   constructor() {
-    super("storage_full", 507, "the Chest refused: its server's disk is full");
+    super("storage_full", 507, "the Chest refused: its server's workload volume is full");
   }
 }
 
