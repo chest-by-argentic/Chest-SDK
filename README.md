@@ -896,21 +896,21 @@ sent otherwise (`ChestError`, `invalid_name`).
 
 ### Limits
 
-Per tool: 1 GiB, 10,000 objects and 32 MiB per object, unless its manifest
-asks otherwise — approved by the owner like any permission, and a later
-version that asks more is approved again:
+No quota: the tools of a Chest share its server's workload volume, each
+keeps what it uses, and a write is refused only when the volume is full
+(`StorageFull`, 507). One object is 32 MiB at most, unless its manifest asks
+otherwise — approved by the owner like any permission, and a later version
+that asks larger files is approved again:
 
 ```jsonc
 // chest.json
-{ "capabilities": ["files"], "files": { "quota": "5 GiB", "maxObject": "100 MiB" } }
+{ "capabilities": ["files"], "files": { "maxObject": "100 MiB" } }
 ```
 
-`quota` goes from 100 MiB to 100 GiB (10 GiB and more allow 100,000 objects),
-`maxObject` from 1 to 512 MiB; the owner or an admin may also set the quota
-by hand. The SDK refuses beyond 512 MiB before sending anything; the Chest
-holds the tool to its own bounds (`TooLarge`, `QuotaExceeded`). `put` and
-`get` carry the bytes through the tool's server: for large files, let the
-browser upload them itself.
+`maxObject` goes from 1 to 512 MiB. The SDK refuses beyond 512 MiB before
+sending anything; the Chest holds the tool to its own bound (`TooLarge`).
+`put` and `get` carry the bytes through the tool's server: for large files,
+let the browser upload them itself.
 
 ### Uploads from a member's browser
 
@@ -932,7 +932,7 @@ const up = await files.uploadUrl("invoices/2026/0042.pdf", {
 // Browser side, on a page under /chest: the member's session goes with it
 const response = await fetch(up.url, { method: "PUT", body: file, headers: { "Content-Type": file.type } });
 // 201 {name, type, size}; 403 invalid_token (used, expired), 415 type_refused,
-// 400 type_mismatch, 413 too_large, 429 quota_exceeded, 401 without a session
+// 400 type_mismatch, 413 too_large, 507 storage_full, 401 without a session
 ```
 
 ```ts
@@ -971,8 +971,8 @@ const up = await files.uploadUrl("applications/", {
 // Browser side, on the public page: to its own address
 const response = await fetch(up.url, { method: "PUT", body: file });
 // 201 {name, type, size}; 415 type_refused (not of a type granted, whatever
-// it is called), 429 slow_down (Retry-After), 411 length_required, 413, 429
-// quota_exceeded, 507 storage_full
+// it is called), 429 slow_down (Retry-After), 411 length_required, 413,
+// 507 storage_full
 ```
 
 What differs from a member's upload, because the visitor is anonymous:
@@ -992,10 +992,10 @@ What differs from a member's upload, because the visitor is anonymous:
   its members see it, through the tool (`url` on the team host). The Chest
   never serves it on the public part.
 - **Paced per visitor**, by client address: 10 uploads a minute, 2 at once,
-  and in an hour a twentieth of the tool's quota (never less than its
-  largest object); beyond, `429 slow_down` with `Retry-After`. Nothing caps
-  all the visitors together but the tool's quota and the server's disk
-  (`507 storage_full` when the disk is full).
+  and 64 MiB in an hour (never less than the tool's largest object);
+  beyond, `429 slow_down` with `Retry-After`. Nothing caps all the visitors
+  together but the server's workload volume (`507 storage_full` when it is
+  full).
 - **On whichever address the page is**: `url` is a path, so the same page
   works on the tool's public address, on its custom domain, and framed by the
   company's website.
@@ -1013,7 +1013,7 @@ it in a sandbox, displayed for an image, a PDF or plain text, downloaded
 otherwise, or always downloaded with `download: true`. `thumbnail: 256` or
 `1024` links to the image reduced to that many pixels (JPEG, PNG, GIF — its
 first frame — and WebP up to 40 megapixels; `ChestError` `no_thumbnail`
-otherwise); thumbnails are made once, not counted in the quota. `stat` gives
+otherwise); thumbnails are made once, not counted as the tool's files. `stat` gives
 `width` and `height` for these images. Give a link to a member's browser,
 never to a public page.
 
@@ -1030,8 +1030,8 @@ ever taken — so a tool a test starts in its own process (`next start` with
 the fake's environment) takes the fake's links as the test itself does.
 
 Errors: `CapabilityNotGranted` (a version without the capability, or no
-`CHEST_API`), `TooLarge` (413), `QuotaExceeded` (429), `StorageFull` (507: the
-server's disk is full, whatever the tool's quota), `Unavailable` (the Chest
+`CHEST_API`), `TooLarge` (413), `StorageFull` (507: the server's workload
+volume, which every tool's files share, is full), `Unavailable` (the Chest
 not reached, or an answer that is not its own: a write may or may not have
 happened), `ChestError` for the rest (`invalid_type`, `no_thumbnail`,
 `not_found` for `url` and `move`, `no_public_part` for a visitor's upload of
@@ -1270,7 +1270,7 @@ await chest.close();
 |---|---|
 | `signAssertion(member, {token?, tool?, now?})` | A `Chest-Member` header value signed like the Chest's for that `Member` (the token and tool of the environment by default), signed as given, so a language or a zone the Chest never sends makes `member()` refuse it |
 | `withMember(request, member, options?)` | The request carrying that assertion (the options of `signAssertion`): a new Web `Request`, or the same Node request |
-| `fakeChest({members?, former?, groups?, capabilities?, roles?, receives?, emits?, files?, ai?, realtime?, chest?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set), the Chest's `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_CURRENCY`, `CHEST_TEAM_URL`, `CHEST_PUBLIC_URL` (`chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`: `"Test organization"`, `"UTC"`, `"en"`, `"EUR"`, `https://<tool>-chest.chest.test`, `https://<tool>.chest.test` by default; `publicUrl: null` for a tool without a public part) and answers members, groups, files, badges, notifications, AI, erasure acknowledgments and emits with a Chest's bounds, quotas and errors; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `members.groups` shows the groups given `grants: false` — groups that do not give the tool —, in `groups.list()` (paged, each with its `size` among those who have the tool) and in each member's `groups`; a member whose `groups` is `null` is signed with the groups overage; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments; `emits` is what the tool's `chest.json` declares, `{type: {description, data: {field: kind}}}`, refused as the Chest refuses the manifest — none by default, which answers an emit `CapabilityNotGranted`). `former: [{id, name?, status?}]` are those the tool had who no longer have it: `lookup` answers them `no_access`, `former` (by default) or `erased`. With `sealed`, it seals and opens values with a Chest's format and rules — the roles a value is sealed for among `roles` (any of the grammar without), its context, the member's role, a member it keeps — under a key of its own, and `withMember` carries the member's ticket while it runs |
+| `fakeChest({members?, former?, groups?, capabilities?, roles?, receives?, emits?, files?, ai?, realtime?, chest?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set), the Chest's `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_CURRENCY`, `CHEST_TEAM_URL`, `CHEST_PUBLIC_URL` (`chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`: `"Test organization"`, `"UTC"`, `"en"`, `"EUR"`, `https://<tool>-chest.chest.test`, `https://<tool>.chest.test` by default; `publicUrl: null` for a tool without a public part) and answers members, groups, files, badges, notifications, AI, erasure acknowledgments and emits with a Chest's bounds and errors — a tool's files have no quota: set `chest.full = true` to have every write of a file refused as on a full server (`StorageFull`) —; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `members.groups` shows the groups given `grants: false` — groups that do not give the tool —, in `groups.list()` (paged, each with its `size` among those who have the tool) and in each member's `groups`; a member whose `groups` is `null` is signed with the groups overage; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments; `emits` is what the tool's `chest.json` declares, `{type: {description, data: {field: kind}}}`, refused as the Chest refuses the manifest — none by default, which answers an emit `CapabilityNotGranted`). `former: [{id, name?, status?}]` are those the tool had who no longer have it: `lookup` answers them `no_access`, `former` (by default) or `erased`. With `sealed`, it seals and opens values with a Chest's format and rules — the roles a value is sealed for among `roles` (any of the grammar without), its context, the member's role, a member it keeps — under a key of its own, and `withMember` carries the member's ticket while it runs |
 | Links and uploads | The fake serves the team host's part of the files on its own origin (`chest.api`): a link from `files.url` opens the content it was signed for (the image itself for a thumbnail — a fake does not reduce it; `no_thumbnail` for a file that is not a JPEG, PNG, GIF or WebP image), until it expires or the file changes; an address from `files.uploadUrl` takes one `PUT`, within its life, of the types and size it names and whose first bytes are those of its type (403 `invalid_token`, 415 `type_refused`, 400 `type_mismatch`, 413 `too_large`, as the Chest's), named by the Chest in a folder (20 hex characters and the type's ending), and answers `201 {name, type, size}`. A visitor's upload (`public: true`, 409 `no_public_part` with `chest.publicUrl: null`) is a path the test sends to the fake's origin (`fetch(new URL(up.url, chest.api), …)`), of the type its content is among those granted (415 `type_refused` otherwise; an office document told by the names of its parts). It checks no session and paces no visitor: a test's `fetch` is the browser |
 | `chest.deliver(event, to)` | Delivers an event signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-events`) or a function of a Web `Request` — and says the status it answered. A member event is `{type, data, id?, occurredAt?}`; a tool event, told apart by its `source` (the publisher's name), `{type, source, data, audience?, subject?, id?, occurredAt?}` (`audience` `"all"` by default, or the members of this tool who may see it). A new id and now by default: name an id to deliver the same event twice. The envelope is signed as given, so one the Chest never sends makes `handle` refuse it. A `member.erased` makes its erasure one the tool may acknowledge |
 | `chest.emitted` | The events the tool emitted, `{id, type, data, subject?, key?, occurredAt, audience?, cause?}` in order, each checked as the Chest checks it: a type of `emits` (`invalid_type`), its declared fields of their kinds, members the tool has or had (`invalid_data`, 16 KiB at most: `too_large`), an audience of its members, former members, groups and any role (`invalid_audience`), `subject`, `key`, `occurredAt`, `cause` (`invalid_event`); a key used again answers its first event for the same content (kept once), `key_reused` for other content. `cause` is the event whose handler emitted it. Each answers `receivers: 0` |

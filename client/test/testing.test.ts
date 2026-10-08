@@ -4,7 +4,7 @@ import { IncomingMessage } from "node:http";
 import { Socket } from "node:net";
 import { mock, test } from "node:test";
 import * as ai from "../src/ai.js";
-import { AiCapReached, AiModelNotAllowed, AiUnavailable, CapabilityNotGranted, ChestError, RateLimited, TooLarge } from "../src/errors.js";
+import { AiCapReached, AiModelNotAllowed, AiUnavailable, CapabilityNotGranted, ChestError, RateLimited, StorageFull, TooLarge } from "../src/errors.js";
 import * as files from "../src/files.js";
 import { member, type Member } from "../src/member.js";
 import * as members from "../src/members.js";
@@ -153,6 +153,11 @@ test("its bounds and refusals are a Chest's", async () => {
     await assert.rejects(files.url("none.txt"), (error: unknown) => error instanceof ChestError && error.code === "not_found");
     assert.equal(await files.delete("hello.txt"), true);
     await assert.rejects(files.put("big", new Uint8Array((32 << 20) + 1)), TooLarge);
+    // No quota: as many files as the test writes, until the volume is full.
+    for (let i = 0; i < 20; i++) await files.put(`many/${i}`, new Uint8Array(1 << 20));
+    chest.full = true;
+    await assert.rejects(files.put("one-more", "a"), (e: unknown) => e instanceof StorageFull && e.status === 507);
+    chest.full = false;
   } finally {
     await chest.close();
   }

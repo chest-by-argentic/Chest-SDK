@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from "node:net";
 import { createHash } from "node:crypto";
 import { after, afterEach, before, test } from "node:test";
-import { CapabilityNotGranted, ChestError, QuotaExceeded, StorageFull, TooLarge, Unavailable } from "../src/errors.js";
+import { CapabilityNotGranted, ChestError, StorageFull, TooLarge, Unavailable } from "../src/errors.js";
 import * as files from "../src/files.js";
 
 // A Chest's API as the broker answers it (chest/toolfiles of the Chest
@@ -118,7 +118,7 @@ test("put, get, list, delete and url, as the Chest's API answers them", async ()
 });
 
 test("the Chest's refusals are errors the tool tests", async () => {
-  for (const [status, code, kind] of [[403, "capability_not_granted", CapabilityNotGranted], [413, "too_large", TooLarge], [429, "quota_exceeded", QuotaExceeded], [503, "unavailable", Unavailable]] as const) {
+  for (const [status, code, kind] of [[403, "capability_not_granted", CapabilityNotGranted], [413, "too_large", TooLarge], [503, "unavailable", Unavailable]] as const) {
     refuse = { status, code };
     await assert.rejects(files.put("a", "x"), (error: unknown) => error instanceof kind && error instanceof ChestError && error.status === status && error.code === code, code);
   }
@@ -197,7 +197,7 @@ test("uploadUrl authorises a visitor's upload into a folder, of the types it nam
   await assert.rejects(files.uploadUrl("photos/"), Unavailable);
 });
 
-test("a full disk is StorageFull, whatever the quota", async () => {
+test("a full workload volume is StorageFull: a tool's files have no quota", async () => {
   refuse = { status: 507, code: "storage_full" };
   await assert.rejects(files.put("a.txt", "a"), (e: unknown) => e instanceof StorageFull && e.code === "storage_full" && e.status === 507);
 });
