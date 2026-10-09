@@ -1292,17 +1292,16 @@ tag `vX.Y.Z` (see `PUBLISHING.md`). Its MAJOR.MINOR is the version of the
 tool contract it is written for (`"chest"` in `chest.json`): 0.5.x for the
 contract 0.5. A new contract version is a new MINOR of the SDK.
 
-## The MCP server
-
-The MCP server an assistant runs to work on a Chest, `@argentic/chest-mcp`,
-lives in its own repository:
-[chest-by-argentic/Chest-MCP](https://github.com/chest-by-argentic/Chest-MCP).
-
 ## What this repository is not
 
 This repository is public and **is not a tool**: it has no `chest.json`, and a
 Chest's catalogue — which only lists the organisation's public repositories
 that carry a manifest — never offers it.
+
+Nor is it a client for external agents: an assistant or a script works on a
+Chest through the Chest's own HTTP API (`/api/v1`, described by
+`GET /api/v1/openapi.json`) with a member's personal access token — the
+supported way, which this package does not wrap.
 
 ## Develop
 
