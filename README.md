@@ -1229,6 +1229,10 @@ reconnect.
   restart or a network switch shows nothing. A join the Chest's memory
   cannot hold now is tried again with the same backoff, unseen; a page
   joins as many channels as it needs.
+  A reconnect preflight is aborted after 10 seconds and a socket without
+  the Chest's greeting is replaced after 15 seconds. Going offline or
+  closing cancels the pending preflight; late replies and messages from
+  replaced connections cannot change the current connection.
 - **Never trust content as HTML.** Render payloads and rows as text.
 - **Revocation is the Chest's.** A member whose access is taken back is
   closed `access_removed` at once; `closed` says it. `signed_out`: the
