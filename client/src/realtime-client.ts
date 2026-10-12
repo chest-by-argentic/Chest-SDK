@@ -42,6 +42,7 @@ const path = "/_chest/realtime";
 // The rhythm: the backoff's first and last delay; the ping that finds a
 // dead network, how long its answer may take, and how long when the page
 // wakes; how often the session is renewed; how long a cut stays untold.
+const requestWait = 10000, connectWait = 15000;
 const firstDelay = 500, lastDelay = 30000, pingEvery = 25000, pingWait = 10000, wakeWait = 5000, renewEvery = 300000, quietFor = 3000;
 
 // Someone present in a channel, and the state their page tracks.
@@ -192,6 +193,8 @@ export function connect(options: { url?: string } = {}): Live {
   let socket: WebSocket | undefined, ref = 0, attempts = 0, ended = false, connected = false, asking = false;
   let epoch: string | undefined, member: string | undefined, told: boolean | undefined, focused: string | null = null, focusSent = "";
   let timer: ReturnType<typeof setTimeout> | undefined, quiet: ReturnType<typeof setTimeout> | undefined, silence: ReturnType<typeof setTimeout> | undefined;
+  let probe: AbortController | undefined, attemptGeneration = 0;
+  let handshake: ReturnType<typeof setTimeout> | undefined;
   let pinger: ReturnType<typeof setInterval> | undefined, renewer: ReturnType<typeof setInterval> | undefined;
 
   const emit = <T extends unknown[]>(listeners: Set<(...args: T) => void>, ...args: T) => {
@@ -220,6 +223,7 @@ export function connect(options: { url?: string } = {}): Live {
   };
 
   // shown: the page is in the foreground (always, without a document).
+  const online = () => page.navigator?.onLine !== false;
   const shown = () => (page.document?.visibilityState ?? "visible") === "visible";
   // tellFocus tells the Chest the channel the page has on screen: the one
   // focused once joined and while shown, none otherwise — only when it
@@ -276,6 +280,8 @@ export function connect(options: { url?: string } = {}): Live {
     const ch = typeof m["ch"] === "string" ? channels.get(m["ch"]) : undefined;
     switch (m["op"]) {
       case "hello":
+        if (connected) return;
+        clearTimeout(handshake);
         epoch = m["epoch"] as string;
         member = m["member"] as string;
         attempts = 0;
@@ -331,6 +337,7 @@ export function connect(options: { url?: string } = {}): Live {
   };
   // unwatch stops what runs while connected.
   const unwatch = () => {
+    clearTimeout(handshake);
     clearInterval(pinger);
     clearInterval(renewer);
     clearTimeout(silence);
@@ -338,8 +345,15 @@ export function connect(options: { url?: string } = {}): Live {
   // lost forgets a connection that closed or went silent, tells the page
   // only if no other comes within quietFor, and connects again: at once, or
   // after the backoff.
+  const cancelProbe = () => {
+    attemptGeneration++;
+    probe?.abort();
+    probe = undefined;
+    asking = false;
+  };
   const lost = (s: WebSocket, now: boolean) => {
     if (socket !== s) return;
+    cancelProbe();
     socket = undefined;
     connected = false;
     unwatch();
@@ -356,6 +370,7 @@ export function connect(options: { url?: string } = {}): Live {
   // stop stops everything, for good.
   const stop = () => {
     ended = true;
+    cancelProbe();
     unwatch();
     clearTimeout(timer);
     clearTimeout(quiet);
@@ -390,11 +405,13 @@ export function connect(options: { url?: string } = {}): Live {
   // Chest asks. Offline, it waits for the network ("online").
   const attempt = async () => {
     timer = undefined;
-    if (page.navigator?.onLine === false) return;
+    if (!online()) return;
+    const generation = ++attemptGeneration;
     asking = true;
     const answer = await ask();
+    if (generation !== attemptGeneration) return;
     asking = false;
-    if (ended || socket) return;
+    if (ended || socket || !online()) return;
     if (answer?.status === 503) return reconnect(Math.max(backoff(), answer.retryAfter * 1000));
     open();
   };
@@ -403,21 +420,31 @@ export function connect(options: { url?: string } = {}): Live {
   // as access removed, 503 says when there is room again (Retry-After, in
   // seconds). A network down gives no answer.
   const ask = async (): Promise<{ status: number; retryAfter: number } | undefined> => {
+    probe?.abort();
+    const controller = new AbortController();
+    probe = controller;
+    const timeout = setTimeout(() => controller.abort(), requestWait);
     try {
-      const answer = await fetch(url.replace(/^ws/u, "http"), { credentials: "same-origin", cache: "no-store" });
+      const answer = await fetch(url.replace(/^ws/u, "http"), { credentials: "same-origin", cache: "no-store", signal: controller.signal });
       await answer.body?.cancel();
+      if (ended || controller.signal.aborted || probe !== controller) return undefined;
       if (answer.status === 401) end("signed_out");
       if (answer.status === 403) end("access_removed");
       return { status: answer.status, retryAfter: Number(answer.headers.get("Retry-After")) || 0 };
     } catch {
       return undefined;
+    } finally {
+      clearTimeout(timeout);
+      if (probe === controller) probe = undefined;
     }
   };
 
   const open = () => {
     const s = new WebSocket(url, protocol);
     socket = s;
+    handshake = setTimeout(() => lost(s, false), connectWait);
     s.onmessage = event => {
+      if (ended || socket !== s) return;
       let m: unknown;
       try { m = JSON.parse(String(event.data)); } catch { return; }
       if (m !== null && typeof m === "object" && !Array.isArray(m)) receive(m as Record<string, unknown>);
@@ -445,7 +472,13 @@ export function connect(options: { url?: string } = {}): Live {
   // gone: the browser says the network is gone — a Wi-Fi left, a cable
   // pulled —: the connection is dropped at once, and the page waits for it
   // to come back ("online") rather than for a ping to go unanswered.
-  const gone = () => { if (!ended && socket) lost(socket, false); };
+  const gone = () => {
+    if (ended) return;
+    cancelProbe();
+    clearTimeout(timer);
+    timer = undefined;
+    if (socket) lost(socket, false);
+  };
   // visibilitychange: shown, the page wakes; shown or hidden, the Chest is
   // told what it has on screen.
   const visible = () => {
