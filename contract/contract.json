@@ -1,5 +1,5 @@
 {
-  "contract": "0.5",
+  "contract": "0.6",
   "manifest": {
     "file": "chest.json",
     "maxBytes": 16384,
@@ -9,7 +9,7 @@
         "required": true,
         "rule": "The version of the tool contract the tool is written for, \"MAJOR.MINOR\" — the SDK's MAJOR.MINOR. A Chest serves every version up to its own; an older Chest refuses the tool before reading anything else: \"This tool needs a newer version of your Chest\".",
         "pattern": "^(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
-        "example": "0.5"
+        "example": "0.6"
       },
       {
         "key": "name",
@@ -39,6 +39,20 @@
         "rule": "A picture of the tool for the catalogue, a file of the chest/ directory: PNG, JPEG or WebP, 512 KiB at most.",
         "pattern": "^chest/[a-z0-9][a-z0-9._-]{0,63}\\.(png|jpg|jpeg|webp)$",
         "example": "chest/preview.png"
+      },
+      {
+        "key": "description_file",
+        "rule": "Optional long description: a local UTF-8 Markdown file, 32 KiB at most, never fetched from a URL. Render as text-based Markdown, never raw HTML; links only HTTP(S), no embedded remote media.",
+        "pattern": "^chest/[a-z0-9][a-z0-9._-]{0,63}\\.md$",
+        "example": "chest/description.md"
+      },
+      {
+        "key": "previews",
+        "rule": "Ordered gallery: 1 to 6 distinct preview paths under chest/, each PNG, JPEG or WebP, 512 KiB at most. Without previews, the gallery uses preview if present; preview remains the list thumbnail.",
+        "example": [
+          "chest/board.png",
+          "chest/calendar.png"
+        ]
       },
       {
         "key": "roles",

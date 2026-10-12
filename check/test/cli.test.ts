@@ -30,7 +30,7 @@ function repository(files: Record<string, string>, commit = true): string {
 
 test("the Chest's verdict on a repository it would take: what the tool is and asks", async () => {
   const verdict = await check(repository({ "migrations/0001_tasks.sql": "create table tasks (id serial primary key);" }));
-  assert.deepEqual(verdict, { checker: "0.5", ok: true, contract: "0.4", name: "tasks", roles: ["manager", "member"], permissions: ["database"], migrations: 1 });
+  assert.deepEqual(verdict, { checker: "0.6", ok: true, contract: "0.4", name: "tasks", roles: ["manager", "member"], permissions: ["database"], migrations: 1 });
 });
 
 test("a migration that breaks the version before it is taken, with a warning; the contract step is not", async () => {
