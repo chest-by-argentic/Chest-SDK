@@ -91,7 +91,7 @@ test("the command: its exit status, its words, and outside a repository", async 
   const dir = repository({});
   let printed = "";
   assert.equal(await main(["check", dir], text => { printed += text; }), 0);
-  assert.match(printed, /^OK: the Chest \(tool contract 0\.5\) would take tasks/u);
+  assert.match(printed, /^OK: the Chest \(tool contract 0\.6\) would take tasks/u);
   printed = "";
   assert.equal(await main(["check", dir, "--json"], text => { printed += text; }), 0);
   assert.equal(JSON.parse(printed).ok, true);
@@ -105,6 +105,6 @@ test("the command: its exit status, its words, and outside a repository", async 
   assert.equal(await main(["deploy"], () => {}), 2);
   printed = "";
   assert.equal(await main(["--version"], text => { printed += text; }), 0);
-  assert.match(printed, /^0\.5\.\d+\n$/u);
+  assert.match(printed, /^0\.6\.\d+\n$/u);
   assert.ok(archive(dir).length > 0);
 });
