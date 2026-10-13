@@ -6,7 +6,7 @@ Content-Security-Policy it adds. The SDK (`../README.md`) is the other half:
 what a running tool calls.
 
 <!-- contract:version -->
-Version **0.5** — `"chest": "0.5"`, the SDK 0.5.x.
+Version **0.6** — `"chest": "0.6"`, the SDK 0.6.x.
 <!-- /contract:version -->
 
 **One source.** The rules below are the Chest's own code: the tables and
@@ -69,12 +69,14 @@ could be a permission nobody approved.
 
 | Key | | Rule | Example |
 |---|---|---|---|
-| `chest` | required | The version of the tool contract the tool is written for, "MAJOR.MINOR" — the SDK's MAJOR.MINOR. A Chest serves every version up to its own; an older Chest refuses the tool before reading anything else: "This tool needs a newer version of your Chest". Grammar: `^(0\|[1-9][0-9]{0,2})\.(0\|[1-9][0-9]{0,2})$`. | `"0.5"` |
+| `chest` | required | The version of the tool contract the tool is written for, "MAJOR.MINOR" — the SDK's MAJOR.MINOR. A Chest serves every version up to its own; an older Chest refuses the tool before reading anything else: "This tool needs a newer version of your Chest". Grammar: `^(0\|[1-9][0-9]{0,2})\.(0\|[1-9][0-9]{0,2})$`. | `"0.6"` |
 | `name` | required | The tool's name and the label of its address: a lowercase letter, then up to 47 lowercase letters, digits or dashes; never login, node, nor a name ending in -chest. Whoever installs the tool may give it another address. Grammar: `^[a-z][a-z0-9-]{0,47}$`. | `"tasks"` |
 | `title` |  | Shown in lists: 1 to 48 printable characters. | `"Tasks"` |
 | `description` |  | Shown in the catalogue: 1 to 160 printable characters. | `"The team's tasks, by project."` |
 | `icon` |  | The tool's icon, a file of the chest/ directory: SVG or PNG, 64 KiB at most. Grammar: `^chest/[a-z0-9][a-z0-9._-]{0,63}\.(svg\|png)$`. | `"chest/icon.svg"` |
 | `preview` |  | A picture of the tool for the catalogue, a file of the chest/ directory: PNG, JPEG or WebP, 512 KiB at most. Grammar: `^chest/[a-z0-9][a-z0-9._-]{0,63}\.(png\|jpg\|jpeg\|webp)$`. | `"chest/preview.png"` |
+| `description_file` |  | Optional long description: a local UTF-8 Markdown file, 32 KiB at most, never fetched from a URL. Render as text-based Markdown, never raw HTML; links only HTTP(S), no embedded remote media. Grammar: `^chest/[a-z0-9][a-z0-9._-]{0,63}\.md$`. | `"chest/description.md"` |
+| `previews` |  | Ordered gallery: 1 to 6 distinct preview paths under chest/, each PNG, JPEG or WebP, 512 KiB at most. Without previews, the gallery uses preview if present; preview remains the list thumbnail. | `["chest/board.png","chest/calendar.png"]` |
 | `roles` |  | The roles a member holds in the tool, the first the default: 1 to 16 distinct identifiers, each of the grammar of name. The tool is told each member's role; its own code decides what a role may do. Grammar: `^[a-z][a-z0-9-]{0,47}$`. | `["manager","member"]` |
 | `role_labels` |  | How declared roles are shown: an object giving roles of roles 1 to 40 printable characters each. Presentation only: never approved. | `{"manager":"Manager"}` |
 | `public` |  | true for a part served to anyone on the Internet, on the tool's public host, outside /chest. Approved as a permission; closed at installation until whoever runs the tool opens it. | `true` |

@@ -1,6 +1,6 @@
 # Chest SDK
 
-`@argentic/chest-sdk` is what a server tool (tool contract 0.5) embeds to talk
+`@argentic/chest-sdk` is what a server tool (tool contract 0.6) embeds to talk
 with its Chest: the member the Chest asserts on a request, the Chest itself
 (its organization, time zone, language and currency, and where the tool is
 reached), the other members who have the tool, the address of the tool's own
@@ -127,7 +127,7 @@ the archive it is given, and needs no network and no Chest. Details:
 [`contract/README.md`](contract/README.md#check-a-repository).
 
 `chest.json` names the version of the contract the tool is written for,
-`"chest": "0.5"` — the MAJOR.MINOR of this SDK. A Chest older than that
+`"chest": "0.6"` — the MAJOR.MINOR of this SDK. A Chest older than that
 refuses the tool with “This tool needs a newer version of your Chest”;
 up to its own version, a key it does not know is refused, never ignored.
 
@@ -1293,8 +1293,8 @@ await chest.close();
 
 The package version is `version` in `package.json` (semver), published by a
 tag `vX.Y.Z` (see `PUBLISHING.md`). Its MAJOR.MINOR is the version of the
-tool contract it is written for (`"chest"` in `chest.json`): 0.5.x for the
-contract 0.5. A new contract version is a new MINOR of the SDK.
+tool contract it is written for (`"chest"` in `chest.json`): 0.6.x for the
+contract 0.6. A new contract version is a new MINOR of the SDK.
 
 ## What this repository is not
 

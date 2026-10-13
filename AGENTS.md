@@ -6,7 +6,7 @@ is the short path and the mistakes to avoid.
 
 ## What it is
 
-A Chest server tool (tool contract 0.5) is an ordinary web server that runs in
+A Chest server tool (tool contract 0.6) is an ordinary web server that runs in
 a container without network, started by its Chest. The SDK gives it, all
 server-side:
 
@@ -43,7 +43,7 @@ Node 22 or later, ESM only, no runtime dependency. TypeScript projects need
 ```jsonc
 // chest.json (repository root): every key and its rule in contract/README.md
 {
-  "chest": "0.5",
+  "chest": "0.6",
   "name": "tasks",
   "capabilities": ["database", "files"],
   "build": { "runtime": "node", "install": "npm ci", "command": "npm run build", "start": "npm start", "port": 3000 }
