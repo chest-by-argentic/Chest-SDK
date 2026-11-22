@@ -5,7 +5,7 @@ import type { Duplex } from "node:stream";
 import type { Alias, Provider } from "./ai.js";
 import type { AiUnavailableReason } from "./errors.js";
 import { clockSkew, eventWindow, fieldNamePattern, fieldOf, instantOf, isAudience, isDeclaredData, isToolEventType, itemIdPattern, maxData, rolePattern } from "./eventrules.js";
-import type { ChestEvent, EmitAudience, ToolEvent } from "./events.js";
+import type { ChestEvent, EmitAudience, FolderEvent, ToolEvent } from "./events.js";
 import { groupIdPattern, languagePattern, memberIdPattern, type Member } from "./member.js";
 import { forget } from "./members.js";
 import { eventChannel, json, object, scheduleChannel, sign, signClaims, type Channel } from "./signed.js";
@@ -130,7 +130,7 @@ export type FakeEmits = { description: string; data: Record<string, string> };
 // twice. It is signed as given: an envelope the Chest would never send
 // makes handle() refuse it.
 export type FakeEvent =
-  | { [K in ChestEvent["type"]]: { type: K; data: Extract<ChestEvent, { type: K }>["data"]; id?: string; occurredAt?: string } }[ChestEvent["type"]]
+  | { [K in (ChestEvent | FolderEvent)["type"]]: { type: K; data: Extract<ChestEvent | FolderEvent, { type: K }>["data"]; id?: string; occurredAt?: string } }[(ChestEvent | FolderEvent)["type"]]
   | { type: string; source: string; data: Record<string, unknown>; audience?: ToolEvent["audience"]; subject?: string; id?: string; occurredAt?: string };
 
 // An event the tool emitted, as the fake Chest took it: its id, type and

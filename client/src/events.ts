@@ -68,12 +68,12 @@ export type FolderEventFile = { id: string; name: string; type: string; size: nu
 export type FolderFileAdded = { id: string; type: "folders.file.added"; occurredAt: string; data: { folder: string; file: FolderEventFile } };
 // A document was removed to Recently removed.
 export type FolderFileRemoved = { id: string; type: "folders.file.removed"; occurredAt: string; data: { folder: string; file: FolderEventFile } };
-// An event of the members' lifecycle.
-export type MemberEvent = MemberUpdated | AccessRevoked | MemberRemoved | MemberErased;
-// An event the Chest tells, of the members' lifecycle or of the folders of
-// Files, told apart by its type.
-export type ChestEvent = MemberEvent | FolderFileAdded | FolderFileRemoved;
+// An event of the members' lifecycle, told apart by its type.
+export type ChestEvent = MemberUpdated | AccessRevoked | MemberRemoved | MemberErased;
 export type ChestEventType = ChestEvent["type"];
+// An event of the documents of the folders of Files the tool is given.
+export type FolderEvent = FolderFileAdded | FolderFileRemoved;
+export type FolderEventType = FolderEvent["type"];
 
 // An event another tool of the Chest told (emit): its id ("evt_…", the same
 // on every delivery of it), its type, the tool that told it (source, stamped
@@ -85,18 +85,20 @@ export type ChestEventType = ChestEvent["type"];
 // delivers an item none of them may see; honouring the list is the tool's
 // rule). Read data defensively: a publisher's later version may add fields.
 export type ToolEvent = { id: string; type: string; source: string; occurredAt: string; subject?: string; audience: "all" | string[]; data: Record<string, unknown> };
-// What a delivery carries: an event of the members' lifecycle, or of a tool.
-export type ReceivedEvent = ChestEvent | ToolEvent;
+// What a delivery carries: an event of the members' lifecycle, of the
+// folders of Files, or of a tool.
+export type ReceivedEvent = ChestEvent | FolderEvent | ToolEvent;
 
 // The type of an event between tools as a handler is keyed: dotted words.
 export type ToolEventType = `${string}.${string}`;
 // What handle() calls for an event of type K: the event of the members'
-// lifecycle of that type, or a tool event.
-export type Handler<K extends string> = (event: K extends ChestEventType ? Extract<ChestEvent, { type: K }> : ToolEvent) => void | Promise<void>;
-// What handle() calls for each type — a member type ("access.revoked"),
-// given its own event, or a type of another tool ("quote.accepted"), given a
+// lifecycle or of the folders of that type, or a tool event.
+export type Handler<K extends string> = (event: K extends ChestEventType ? Extract<ChestEvent, { type: K }> : K extends FolderEventType ? Extract<FolderEvent, { type: K }> : ToolEvent) => void | Promise<void>;
+// What handle() calls for each type — a member type ("access.revoked") or
+// a folders type ("folders.file.added"), given its own event, or a type of
+// another tool ("quote.accepted"), given a
 // ToolEvent; a type left out is accepted and ignored.
-export type Handlers<K extends ToolEventType = ChestEventType | ToolEventType> = { [P in K]?: Handler<P> };
+export type Handlers<K extends ToolEventType = ChestEventType | FolderEventType | ToolEventType> = { [P in K]?: Handler<P> };
 
 // Where handle() remembers the ids of the events already handled (Seen), and
 // memorySeen, which keeps them in this process: shared with schedules.
@@ -121,7 +123,7 @@ function folderEvent(data: Record<string, unknown>): FolderFileAdded["data"] | n
 // chestEvent reads the envelope of an event of the Chest (its four keys):
 // the event when it is one this SDK reads, known false for a type of a
 // later Chest, null for one its type cannot say.
-function chestEvent(e: Record<string, unknown>, id: string): { event: ChestEvent; known: true } | { known: false } | null {
+function chestEvent(e: Record<string, unknown>, id: string): { event: ChestEvent | FolderEvent; known: true } | { known: false } | null {
   if (Object.keys(e).length !== 4 || typeof e["type"] !== "string" || !instant(e["occurredAt"])) return null;
   const data = object(e["data"]);
   if (!data) return null;

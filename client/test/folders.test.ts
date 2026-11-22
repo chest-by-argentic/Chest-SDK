@@ -143,7 +143,7 @@ test("an answer that is not the Chest's is Unavailable: a link elsewhere is neve
 test("the Chest tells the tool of the documents of its folders, never who; no tool tells one in its name", async t => {
   const chest = await fakeChest({ capabilities: ["folders"], folders: given(), emits: { "receipt.filed": { description: "A receipt is filed", data: { receipt: "id" } } } });
   t.after(() => chest.close());
-  const told: events.ChestEvent[] = [];
+  const told: events.FolderEvent[] = [];
   const tool = (request: Request) => events.handle(request, { "folders.file.added": e => { told.push(e); }, "folders.file.removed": e => { told.push(e); } }).then(status => new Response(null, { status }));
   const file = { id: "d".repeat(32), name: "May.pdf", type: "application/pdf", size: 9 };
   assert.equal(await chest.deliver({ type: "folders.file.added", data: { folder: receipts, file } }, tool), 204);
