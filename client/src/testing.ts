@@ -9,8 +9,10 @@ import type { ChestEvent, EmitAudience, ToolEvent } from "./events.js";
 import { groupIdPattern, languagePattern, memberIdPattern, type Member } from "./member.js";
 import { forget } from "./members.js";
 import { eventChannel, json, object, scheduleChannel, sign, signClaims, type Channel } from "./signed.js";
+import { fakeFolders, type FakeFolders, type FakeFoldersOptions } from "./testing-folders.js";
 import { fakeRealtime, type FakeRealtime, type FakeRealtimeOptions } from "./testing-realtime.js";
 
+export type { FakeDocument, FakeDocumentOpen, FakeFolder, FakeFolders, FakeFoldersOptions } from "./testing-folders.js";
 export type { FakeChannelRule, FakeFeed, FakePublished, FakeRealtime, FakeRealtimeOptions, FakeSent } from "./testing-realtime.js";
 
 // For a tool's own tests, never imported by its production code: a member's
@@ -18,6 +20,8 @@ export type { FakeChannelRule, FakeFeed, FakePublished, FakeRealtime, FakeRealti
 // process that answers members, groups, files (stat, move, links and
 // uploads — its members' and its visitors' —, which it serves and takes
 // itself as the team host and the public part would, on its own origin),
+// the folders of Files it gives the tool (their links and uploads served
+// and taken as the documents host would, on its own origin),
 // sealed values (sealed and opened under a key of its own,
 // for the members and roles it keeps; withMember carries the member's
 // ticket), badges, notifications and broadcasts, AI (chat,
@@ -91,7 +95,8 @@ export type FakeOpen = { member: string; opened: number; refused: number };
 // values), the roles the tool declares (any role of the grammar a value is
 // sealed for, when not said), the events it receives (["member.*"] by default, [] to answer
 // an acknowledgment 403), the events the tool emits (chest.json "emits":
-// none by default, which answers an emit 403), the files it keeps, its AI, and what the Chest is
+// none by default, which answers an emit 403), the files it keeps, the
+// folders of Files it gives (with the capability folders), its AI, and what the Chest is
 // (the chest module: "Test organization", UTC, English and euros by default;
 // the tool at https://<tool>-chest.chest.test, its public part at
 // https://<tool>.chest.test), and its realtime: the channels and feeds of
@@ -105,6 +110,7 @@ export type FakeChestOptions = {
   receives?: string[];
   emits?: Record<string, FakeEmits>;
   files?: Record<string, { data: Uint8Array | string; type?: string }>;
+  folders?: FakeFoldersOptions;
   ai?: FakeAi;
   realtime?: FakeRealtimeOptions;
   chest?: { organization?: string; timeZone?: string; language?: string; currency?: string; teamUrl?: string; publicUrl?: string | null };
@@ -140,8 +146,8 @@ export type FakeRun = { id?: string; scheduledAt?: string; attempt?: number };
 
 // A fake Chest in the test's process: its address — its API, and the origin
 // where it serves the links and takes the uploads it signs —, the token and
-// the tool it set in the environment, what it keeps (members, groups and files a test
-// changes or reads; the notifications the tool sent, in the order sent, a
+// the tool it set in the environment, what it keeps (members, groups, files
+// and folders a test changes or reads; the notifications the tool sent, in the order sent, a
 // replaced one last; each member's badge; the erasures the tool
 // acknowledged; its calls to AI, in order; its opens of sealed values, in
 // order; the events it emitted, in order; its realtime: what the tool
@@ -159,6 +165,9 @@ export type FakeChest = {
   members: Member[];
   groups: FakeGroup[];
   files: Map<string, FakeFile>;
+  // folders are the folders of Files given, their documents and the opens
+  // of the tool, journaled.
+  folders: FakeFolders;
   // full, set by a test, has every write of a file refused as the Chest
   // refuses one when its server's workload volume is full (507
   // storage_full): a tool's files have no quota of their own.
@@ -260,6 +269,10 @@ const recognisers: Record<string, (data: Buffer) => boolean> = {
 // The types recognised, an office document before the archive it also is.
 const precise = (type: string): boolean => type.includes("officedocument") || type.includes("opendocument");
 const recognised = Object.keys(recognisers).sort((a, b) => Number(precise(b)) - Number(precise(a)) || (a < b ? -1 : a > b ? 1 : 0));
+// contentType is the type a content is, as the Chest recognises it: one
+// recognised, else text when its first 512 bytes hold no binary byte, else
+// bytes (officefiles recognise, Go's DetectContentType).
+const contentType = (data: Buffer): string => recognised.find(r => recognisers[r]!(data)) ?? (data.subarray(0, 512).some(b => b <= 0x08 || b === 0x0b || (b >= 0x0e && b <= 0x1a) || (b >= 0x1c && b <= 0x1f)) ? "application/octet-stream" : "text/plain");
 const accepted = (types: string[], type: string): boolean => types.some(t => t === type || (t.endsWith("/*") && type.startsWith(t.slice(0, -1))));
 const extensions: Record<string, string> = {
   "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp", "image/avif": ".avif", "image/heic": ".heic", "image/bmp": ".bmp", "image/tiff": ".tiff",
@@ -362,7 +375,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     const m = chest.members.find(x => x.id === id);
     return m ? m.role : undefined;
   });
-  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, full: false, notifications: [], badges: new Map(), acknowledged: [], ai: [], opens: [], realtime: realtime.realtime, emitted: [], deliver: async () => 0, run: async () => 0, close: async () => {} };
+  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, folders: { given: [], documents: new Map(), opens: [] }, full: false, notifications: [], badges: new Map(), acknowledged: [], ai: [], opens: [], realtime: realtime.realtime, emitted: [], deliver: async () => 0, run: async () => 0, close: async () => {} };
   const former = [...(options.former ?? [])];
   let window = 0, calls = 0;
   // The groups the tool sees: those that give it, or all with members.groups;
@@ -774,6 +787,15 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     const mac = Buffer.from(parts[3]!, "base64url"), expected = ticketMac(parts[1]!, parts[2]!);
     return mac.length === expected.length && timingSafeEqual(mac, expected) ? parts[1]! : null;
   };
+  // The folders of Files given: the tool's API and the documents host,
+  // their members' tickets those of the sealed values.
+  const folders = fakeFolders(options.folders ?? {}, { origin: () => chest.api, ticketMember, members: () => chest.members, typeOf: contentType, body, send });
+  chest.folders = folders.folders;
+  async function foldersRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    if (!capabilities.has("folders")) return send(response, 403, { error: "capability_not_granted" });
+    return folders.api(request, response, url);
+  }
+
   const isContext = (c: unknown): c is string | undefined => c === undefined || (typeof c === "string" && Buffer.byteLength(c) <= sealedContext);
   async function sealedRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     if (!capabilities.has("sealed")) return send(response, 403, { error: "capability_not_granted" });
@@ -877,6 +899,8 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     const route = url.pathname === "/_chest/realtime" || url.pathname.startsWith("/realtime/") ? realtimeRoute
       : url.pathname.startsWith("/_chest/files/") ? front
+      : url.pathname.startsWith("/d/") || url.pathname.startsWith("/u/") ? folders.host
+      : url.pathname === "/folders" || url.pathname.startsWith("/folders/") || url.pathname.startsWith("/documents/") ? foldersRoute
       : url.pathname.startsWith("/erasures/") ? erasuresRoute
       : url.pathname === "/events" ? eventsRoute
       : url.pathname.startsWith("/ai/") ? aiRoute

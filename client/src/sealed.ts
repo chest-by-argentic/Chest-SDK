@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import { ask as chest, errorCode, json, refusal } from "./api.js";
+import { ask as chest, errorCode, json, openerTicket as ticketOf, refusal } from "./api.js";
 import { CapabilityNotGranted, ChestError, MemberRequired, NotAllowed, SealedInvalid, SealedLocked, SealedLost, Unavailable } from "./errors.js";
 
 // Sealed values, for a server tool whose chest.json declares
@@ -59,14 +59,6 @@ const bytes = (s: string): number => Buffer.byteLength(s, "utf8");
 // it opens is the Chest's to say).
 export function isSealed(text: unknown): text is string {
   return typeof text === "string" && text.length <= maxSealed && sealedPattern.test(text);
-}
-
-// The ticket of the member of a request, as the Chest's front sends it
-// (Chest-Opener); null without one.
-function ticketOf(request: IncomingMessage | Request): string | null {
-  const headers = request.headers as Headers | IncomingMessage["headers"];
-  const value = typeof (headers as Headers).get === "function" ? (headers as Headers).get("chest-opener") : (headers as IncomingMessage["headers"])["chest-opener"];
-  return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : null;
 }
 
 function checkContext(context: unknown): string {
