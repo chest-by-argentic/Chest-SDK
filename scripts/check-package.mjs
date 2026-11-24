@@ -187,7 +187,7 @@ import type { AiModel, AiUsage, ChatChunk, ChatMessage, ChatResult, ChatTool, Em
 import { fakeChest, signAssertion, withMember, type FakeAi, type FakeAiCall, type FakeChest, type FakeEmitted, type FakeEvent, type FakeNotification } from "${name}/testing";
 
 export function who(request: Request | IncomingMessage): Member | null { return member(request); }
-export function where(): [Chest, string, string, string | null] { return [theChest, theChest.currency, new URL("/chest", theChest.tool.teamUrl).href, theChest.tool.publicUrl]; }
+export function where(): [Chest, string, string | null] { return [theChest, new URL("/chest", theChest.tool.teamUrl).href, theChest.tool.publicUrl]; }
 export const url: string = databaseUrl();
 export async function keep(): Promise<[FileObject, FileData | null, FilePage, boolean, { url: string; expiresIn: number }]> {
   return [await files.put("a.txt", "a", "text/plain"), await files.get("a.txt"), await files.list({ prefix: "a" }), await files.delete("a.txt"), await sdk.files.url("a.txt")];

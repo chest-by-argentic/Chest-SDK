@@ -13,7 +13,7 @@ server-side:
 | Need | Import | Requires |
 |---|---|---|
 | Who is signed in on this request, the language to speak to them | `member(request)` from `@argentic/chest-sdk/member` | nothing (the Chest sets `CHEST_TOKEN`, `CHEST_TOOL`) |
-| The Chest itself: its organization's name, its time zone and today's date there, its language, its currency — on a request or not | `chest` from `@argentic/chest-sdk/chest` | nothing (the Chest sets `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_CURRENCY`) |
+| The Chest itself: its organization's name, its time zone and today's date there, its language — on a request or not | `chest` from `@argentic/chest-sdk/chest` | nothing (the Chest sets `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`) |
 | The tool's own addresses, for links in an email or a feed | `chest.tool.teamUrl`, `chest.tool.publicUrl` from `@argentic/chest-sdk/chest` | nothing (`CHEST_TEAM_URL`, `CHEST_PUBLIC_URL` with `"public": true`) |
 | Will the Chest take this repository? | `npx chest check` (`--json`) from `@argentic/chest-check` | a clone of Chest-SDK (`check/`, not on npm yet), a Git repository |
 | The tool's own PostgreSQL database | `databaseUrl()` from `@argentic/chest-sdk/database` | `"capabilities": ["database"]` in `chest.json` |
@@ -28,7 +28,7 @@ server-side:
 | Call AI models (chat, streamed or not, tools, embeddings) | `chat`, `embed`, `models`, `usage` from `@argentic/chest-sdk/ai` | `"capabilities": ["ai"]` and `"ai": {"monthly", "models", "purpose"}` |
 | Keep the members' pages live (chat, presence, typing, rows as they are written) | `connect` from `@argentic/chest-sdk/realtime/client` **in the browser**; `publish`, `send`, `online`, `presence` from `@argentic/chest-sdk/realtime` on the server | `"capabilities": ["realtime"]` and `"realtime": {"channels", "feeds"}` |
 | Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `StorageFull`, `Unavailable`, `MemberRequired`, `NotAllowed`, `SealedInvalid`, `SealedLocked`, `SealedLost`, `AiCapReached`, `AiUnavailable`, `AiModelNotAllowed`, `AiRefused` from `@argentic/chest-sdk/errors` | — |
-| Tests without a Chest | `fakeChest` (its `deliver`, `emitted`, `emits`, `run`, its links and uploads, its `folders`, its `realtime`, `chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
+| Tests without a Chest | `fakeChest` (its `deliver`, `emitted`, `emits`, `run`, its links and uploads, its `folders`, its `realtime`, `chest: {organization, timeZone, language, teamUrl, publicUrl}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
 
 ## Install
 
@@ -460,8 +460,8 @@ events (`folders.file.added`, `folders.file.removed`) come to
   tells the host (a scheduled job, a digest), write `new URL(path,
   chest.tool.teamUrl)` for members, `chest.tool.publicUrl` for visitors; never
   a host read from a header, never an address stored in the database.
-- **Amounts are in `chest.currency`.** Never ask your own admin for the
-  company's currency.
+- **An amount keeps its own currency.** There is no Chest currency: store
+  the ISO 4217 code beside each amount; never ask your own admin for one.
 - **The public host has no member.** The Chest never sends an assertion there;
   public pages must work for anonymous visitors.
 - **Business rules are yours.** The SDK is not a security boundary: the Chest

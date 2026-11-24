@@ -2,7 +2,7 @@
 
 `@argentic/chest-sdk` is what a server tool (tool contract 0.7) embeds to talk
 with its Chest: the member the Chest asserts on a request, the Chest itself
-(its organization, time zone, language and currency, and where the tool is
+(its organization, time zone and language, and where the tool is
 reached), the other members who have the tool, the address of the tool's own
 database, its private files, the folders of Files it is given, the badges and notifications it shows members
 inside the Chest, the events of its members' lifecycle and between tools, AI
@@ -31,7 +31,7 @@ client and the testing module are not in the root).
 | Import | Gives |
 |---|---|
 | `@argentic/chest-sdk/member` | `member(request)`, type `Member`: the member of a request on the team host of a server tool, with the language the Chest speaks to them and the zone they work in, read from the `Chest-Member` assertion and verified; `null` without a valid assertion. `memberIdPattern`, `groupIdPattern`, `languagePattern`, `timeZonePattern`: the grammars of the identifiers (`mbr_…`, `grp_…`), of a language and of a zone |
-| `@argentic/chest-sdk/chest` | `chest`, type `Chest`: the Chest the tool runs in — `chest.organization.name`, `chest.timeZone`, `chest.language`, `chest.currency`, `chest.today()` — and where the tool is reached — `chest.tool.teamUrl`, `chest.tool.publicUrl` —, the same for every member, on a request or outside one |
+| `@argentic/chest-sdk/chest` | `chest`, type `Chest`: the Chest the tool runs in — `chest.organization.name`, `chest.timeZone`, `chest.language`, `chest.today()` — and where the tool is reached — `chest.tool.teamUrl`, `chest.tool.publicUrl` —, the same for every member, on a request or outside one |
 | `@argentic/chest-sdk/members` | `list`, `get`, `lookup`, `groups.list`, `forget`, types `MemberPage`, `Lookup`, `FormerMember`, `Group`: the members who have the tool (capability `members`, their addresses with `members.email`, every group of the Chest with `members.groups`) |
 | `@argentic/chest-sdk/notifications` | `notify`, `broadcast`, `withdraw`, `badge.set`, `badge.setMany`, types `Notice`, `Words`, `Audience`, `Delivery`, `BadgeCount`, `BadgeWrite`: counters on the tool's tile and items in members' inboxes, inside the Chest (capability `notifications`) |
 | `@argentic/chest-sdk/events` | `handle`, `verify`, `emit`, `acknowledgeErasure`, `memorySeen`, `erasureIdPattern`, types `ChestEvent`, `ChestEventType`, `MemberUpdated`, `AccessRevoked`, `MemberRemoved`, `MemberErased`, `MemberChange`, `FolderEvent`, `FolderEventType`, `FolderFileAdded`, `FolderFileRemoved`, `FolderEventFile`, `ToolEvent`, `ToolEventType`, `ReceivedEvent`, `Handler`, `Handlers`, `EmitOptions`, `EmitAudience`, `Emitted`, `Seen`: the events of the members' lifecycle (`"receives": ["member.*"]`), of the documents of the folders it is given (capability `folders`) and of other tools (`"receives": ["quote.accepted"]`) the Chest posts to the tool's `/chest-events`, verified, deduplicated by id; the events the tool tells the others (`"emits"`); and the acknowledgment of an erasure |
@@ -229,38 +229,42 @@ const shown = new Intl.DateTimeFormat(who.language, { timeZone: who.timeZone, da
 import { chest } from "@argentic/chest-sdk/chest";
 
 chest.organization.name; // "Acme SAS": the organization the Chest is of, as its owner wrote it
-chest.timeZone;          // "Europe/Paris": an IANA zone, "UTC" until the owner sets one
+chest.timeZone;          // "Europe/Paris": the company's reference zone, IANA
 chest.language;          // "fr": the Chest's own language (a member's is member(request).language)
-chest.currency;          // "EUR": the Chest's currency, ISO 4217
 chest.tool.teamUrl;      // "https://tasks-chest.acme.argentic.work": where members open /chest
 chest.tool.publicUrl;    // "https://status.acme.com": the public part (its custom domain), or null
 chest.today();           // "2026-09-30": the date now in the Chest's zone (or chest.today(at))
 ```
 
 The Chest gives these to every tool in its environment at each start
-(`CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_CURRENCY`,
+(`CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`,
 `CHEST_TEAM_URL`, `CHEST_PUBLIC_URL`), and starts every tool that is awake
-again when one changes — the owner changes the first four in Settings →
-General; a custom domain served, or no longer, changes the public address —;
+again when one changes — the owner renames the organization or changes its
+language in Settings → General; a custom domain served, or no longer,
+changes the public address —;
 a tool asleep reads them when it wakes. The tool never asks its own admin for
-the company's name, zone or currency, nor guesses its own address from a
+the company's name or zone, nor guesses its own address from a
 request. They are there outside a
 request too: a scheduled job, a start-up task, an export. No capability is
 needed: nothing here is more than what the Chest's pages show its members.
 
 - `organization.name` is plain text of 2 to 80 characters: show it in a
   header, a document or an email, never as HTML.
-- `timeZone` is the day of “due today” and the hour of a reminder. The Chest
-  also makes it the `TimeZone` of the tool's database sessions: there,
+- `timeZone` is the company's day: a document's date, “every day at 09:00”
+  for the whole company. It is taken from the owner's browser when the
+  Chest is opened and never follows anyone's travels; no screen sets it.
+  What concerns one member — their reminder, “today” on their page — uses
+  `member.timeZone` instead, the zone of their browser, which follows them
+  at once. The Chest also makes `timeZone` the `TimeZone` of the tool's database sessions: there,
   `current_date`, `now()::date` and a `timestamptz` shown as text are in the
   Chest's zone. A session may set its own (`SET TIME ZONE`), for itself.
 - `language` is the language of what the tool writes for no one in
   particular: a public page before the visitor chooses, an export's default.
   A page of `/chest` speaks `member(request).language` instead.
-- `currency` is the ISO 4217 code of the Chest's currency (`"EUR"` until
-  the owner sets one): the amounts of a quote, a price, an expense. Format
-  them with `Intl.NumberFormat(language, { style: "currency", currency:
-  chest.currency })`.
+- There is no Chest currency: a company may work in several. An amount
+  keeps its own ISO 4217 code beside it, in the tool's data (a quote in
+  `GBP`, an expense in `USD`), formatted with `Intl.NumberFormat(language,
+  { style: "currency", currency })`.
 - `tool.teamUrl` and `tool.publicUrl` are origins, without a path: build a
   link where no request tells the host — an email sent from a scheduled job,
   a calendar feed — with `new URL("/chest/tasks/42", chest.tool.teamUrl)`.
@@ -275,7 +279,7 @@ Each value is read from the environment at each access, and checked: outside a
 Chest (a development server without the variables), or for a value the Chest
 never gives, reading it throws a `ChestError` with the code `not_in_chest` —
 a wrong zone read silently is exactly what this module exists to prevent. In
-tests, `fakeChest({chest: {organization, timeZone, language, currency,
+tests, `fakeChest({chest: {organization, timeZone, language,
 teamUrl, publicUrl}})` sets them.
 
 ## `members` — who has the tool
@@ -1367,7 +1371,7 @@ await chest.close();
 |---|---|
 | `signAssertion(member, {token?, tool?, now?})` | A `Chest-Member` header value signed like the Chest's for that `Member` (the token and tool of the environment by default), signed as given, so a language or a zone the Chest never sends makes `member()` refuse it |
 | `withMember(request, member, options?)` | The request carrying that assertion (the options of `signAssertion`): a new Web `Request`, or the same Node request |
-| `fakeChest({members?, former?, groups?, capabilities?, roles?, receives?, emits?, files?, folders?, ai?, realtime?, chest?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set), the Chest's `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_CURRENCY`, `CHEST_TEAM_URL`, `CHEST_PUBLIC_URL` (`chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`: `"Test organization"`, `"UTC"`, `"en"`, `"EUR"`, `https://<tool>-chest.chest.test`, `https://<tool>.chest.test` by default; `publicUrl: null` for a tool without a public part) and answers members, groups, files, badges, notifications, AI, erasure acknowledgments and emits with a Chest's bounds and errors — a tool's files have no quota: set `chest.full = true` to have every write of a file refused as on a full server (`StorageFull`) —; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `members.groups` shows the groups given `grants: false` — groups that do not give the tool —, in `groups.list()` (paged, each with its `size` among those who have the tool) and in each member's `groups`; a member whose `groups` is `null` is signed with the groups overage; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments; `emits` is what the tool's `chest.json` declares, `{type: {description, data: {field: kind}}}`, refused as the Chest refuses the manifest — none by default, which answers an emit `CapabilityNotGranted`). `former: [{id, name?, status?}]` are those the tool had who no longer have it: `lookup` answers them `no_access`, `former` (by default) or `erased`. With `sealed`, it seals and opens values with a Chest's format and rules — the roles a value is sealed for among `roles` (any of the grammar without), its context, the member's role, a member it keeps — under a key of its own, and `withMember` carries the member's ticket while it runs |
+| `fakeChest({members?, former?, groups?, capabilities?, roles?, receives?, emits?, files?, folders?, ai?, realtime?, chest?})` | An HTTP server on `127.0.0.1` that sets `CHEST_API`, `CHEST_TOKEN`, `CHEST_TOOL` (`tool` unless set), the Chest's `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_TEAM_URL`, `CHEST_PUBLIC_URL` (`chest: {organization, timeZone, language, teamUrl, publicUrl}`: `"Test organization"`, `"UTC"`, `"en"`, `https://<tool>-chest.chest.test`, `https://<tool>.chest.test` by default; `publicUrl: null` for a tool without a public part) and answers members, groups, files, badges, notifications, AI, erasure acknowledgments and emits with a Chest's bounds and errors — a tool's files have no quota: set `chest.full = true` to have every write of a file refused as on a full server (`StorageFull`) —; a capability left out answers 403 (`members`, `files`, `notifications` and `ai` by default; `members.email` adds the addresses; `members.groups` shows the groups given `grants: false` — groups that do not give the tool —, in `groups.list()` (paged, each with its `size` among those who have the tool) and in each member's `groups`; a member whose `groups` is `null` is signed with the groups overage; `receives` is `["member.*"]` by default, `[]` refuses acknowledgments; `emits` is what the tool's `chest.json` declares, `{type: {description, data: {field: kind}}}`, refused as the Chest refuses the manifest — none by default, which answers an emit `CapabilityNotGranted`). `former: [{id, name?, status?}]` are those the tool had who no longer have it: `lookup` answers them `no_access`, `former` (by default) or `erased`. With `sealed`, it seals and opens values with a Chest's format and rules — the roles a value is sealed for among `roles` (any of the grammar without), its context, the member's role, a member it keeps — under a key of its own, and `withMember` carries the member's ticket while it runs |
 | Links and uploads | The fake serves the team host's part of the files on its own origin (`chest.api`): a link from `files.url` opens the content it was signed for (the image itself for a thumbnail — a fake does not reduce it; `no_thumbnail` for a file that is not a JPEG, PNG, GIF or WebP image), until it expires or the file changes; an address from `files.uploadUrl` takes one `PUT`, within its life, of the types and size it names and whose first bytes are those of its type (403 `invalid_token`, 415 `type_refused`, 400 `type_mismatch`, 413 `too_large`, as the Chest's), named by the Chest in a folder (20 hex characters and the type's ending), and answers `201 {name, type, size}`. A visitor's upload (`public: true`, 409 `no_public_part` with `chest.publicUrl: null`) is a path the test sends to the fake's origin (`fetch(new URL(up.url, chest.api), …)`), of the type its content is among those granted (415 `type_refused` otherwise; an office document told by the names of its parts). It checks no session and paces no visitor: a test's `fetch` is the browser |
 | `folders: {level?, given?}` | The folders of Files the fake Chest gives the tool, with the capability `folders` in `capabilities`: `level`, what its version asks (`"edit"` by default; `"view"` answers every write `CapabilityNotGranted`); `given`, the folders the owner gave it, each `{id?, name, level?, members?, files?, folders?}` — its identifier (32 hex characters, a new one by default), the tool's grant (on a folder given, the version's level by default, never above it), the members who see it and at which level (`{[memberId]: "view" \| "edit"}`, inherited by the folders inside, which may give more), its documents by name (`Uint8Array` or text; their type is what their content is) and the folders inside it. It answers as the Chest does: on a member's request (`withMember` carries their ticket) the lower of the tool's and the member's level, nothing the member does not see (`not_found`); for nobody, the tool's grants; a ticket of no member 401, of one no longer in `chest.members` 403 `access_removed`; a folder it may only view `forbidden`. Links and upload links are served on its own origin (`/d/…`, `/u/…`, an upload taken once), each checked again for the member it was signed for |
 | `chest.folders` | `given`, the folders as given, with their identifiers; `documents`, every document by identifier, `{id, folder, name, type, data, added, updated, removed, versions}` (a document put again under its name, letter case aside, is a new version of it; one removed is in Recently removed); `opens`, the tool's opens of documents, `{document, member}` in order (`member` null for nobody), as the Chest journals them |

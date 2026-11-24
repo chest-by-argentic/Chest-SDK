@@ -113,7 +113,7 @@ export type FakeChestOptions = {
   folders?: FakeFoldersOptions;
   ai?: FakeAi;
   realtime?: FakeRealtimeOptions;
-  chest?: { organization?: string; timeZone?: string; language?: string; currency?: string; teamUrl?: string; publicUrl?: string | null };
+  chest?: { organization?: string; timeZone?: string; language?: string; teamUrl?: string; publicUrl?: string | null };
 };
 
 // A type a tool emits, as its chest.json declares it in "emits": what
@@ -918,13 +918,13 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     realtime.upgrade(request, socket, url);
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  const saved = Object.fromEntries(["CHEST_API", "CHEST_TOKEN", "CHEST_TOOL", "CHEST_ORGANIZATION", "CHEST_TIME_ZONE", "CHEST_LANGUAGE", "CHEST_CURRENCY", "CHEST_TEAM_URL", "CHEST_PUBLIC_URL"].map(name => [name, process.env[name]]));
+  const saved = Object.fromEntries(["CHEST_API", "CHEST_TOKEN", "CHEST_TOOL", "CHEST_ORGANIZATION", "CHEST_TIME_ZONE", "CHEST_LANGUAGE", "CHEST_TEAM_URL", "CHEST_PUBLIC_URL"].map(name => [name, process.env[name]]));
   chest.api = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
   // Its links are on its own origin, the CHEST_API it sets: the files
   // module takes them there (api.ts, chestLink), in this process or in a
   // tool it starts with this environment.
   const publicUrl = options.chest?.publicUrl === undefined ? `https://${tool}.chest.test` : options.chest.publicUrl;
-  Object.assign(process.env, { CHEST_API: chest.api, CHEST_TOKEN: token, CHEST_TOOL: tool, CHEST_ORGANIZATION: options.chest?.organization ?? "Test organization", CHEST_TIME_ZONE: options.chest?.timeZone ?? "UTC", CHEST_LANGUAGE: options.chest?.language ?? "en", CHEST_CURRENCY: options.chest?.currency ?? "EUR", CHEST_TEAM_URL: options.chest?.teamUrl ?? `https://${tool}-chest.chest.test` });
+  Object.assign(process.env, { CHEST_API: chest.api, CHEST_TOKEN: token, CHEST_TOOL: tool, CHEST_ORGANIZATION: options.chest?.organization ?? "Test organization", CHEST_TIME_ZONE: options.chest?.timeZone ?? "UTC", CHEST_LANGUAGE: options.chest?.language ?? "en", CHEST_TEAM_URL: options.chest?.teamUrl ?? `https://${tool}-chest.chest.test` });
   if (publicUrl === null) delete process.env["CHEST_PUBLIC_URL"];
   else process.env["CHEST_PUBLIC_URL"] = publicUrl;
   forget();
