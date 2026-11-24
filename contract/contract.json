@@ -82,7 +82,7 @@
       },
       {
         "key": "capabilities",
-        "rule": "What the tool uses of its Chest, each at most once, each approved as a permission: database (its own PostgreSQL), sealed (values it seals, which only its members open through it; every version of the tool then waits for the owner or an admin), files (its private files), members (who has the tool), members.email (their addresses; with members), members.groups (every group of the Chest, and which of those members are in each; with members), notifications (badges and inbox items), ai (AI models through the Chest; with the key ai), folders (the folders of Files, the company's storage, that the owner or an admin gives the tool after it is installed; with the key folders), realtime (live updates to its members' open pages; its channels in the key realtime).",
+        "rule": "What the tool uses of its Chest, each at most once, each approved as a permission: database (its own PostgreSQL), sealed (values it seals, which only its members open through it; every version of the tool then waits for the owner or an admin), files (its private files), members (who has the tool), members.email (their addresses; with members), members.groups (every group of the Chest, and which of those members are in each; with members), notifications (badges and inbox items), ai (AI models through the Chest; with the key ai), folders (the folders of Files, the company's storage, that the owner or an admin gives the tool after it is installed; with the key folders), realtime (live updates to its members' open pages; its channels in the key realtime), todo (items in its members' To do, each warned of on its date, a week or a month before).",
         "example": [
           "database",
           "sealed",
@@ -93,7 +93,8 @@
           "notifications",
           "ai",
           "folders",
-          "realtime"
+          "realtime",
+          "todo"
         ]
       },
       {
@@ -185,6 +186,37 @@
         ]
       },
       {
+        "key": "actions",
+        "rule": "What Perseus may read and do in the tool, 1 to 16, by name: one to three words of lowercase letters and digits joined by dashes (48 characters at most), each {\"description\", \"input\", \"changes\"} — what it does in a sentence a member reads in Perseus's proposal, 1 to 80 printable characters; every field of its input with its kind: id, text, number, boolean, time, date, member, members, document, amount, ? after the kind for an optional field (camelCase names, up to 16; {} for none), a document being a link to a document of Files the member may read, which the tool opens once, an amount {\"value\": \"240.00\", \"currency\": \"GBP\"} (ISO 4217); \"changes\", false for an action that only reads, which Perseus calls by itself, true for one Perseus only proposes and the member's Confirm calls. The Chest posts {\"input\": {…}} (64 KiB at most) to POST /chest-actions/\u003cname\u003e, signed (Chest-Action) and in the member's name (Chest-Member), with an input of exactly that shape, and waits 10 seconds for {\"said\", \"data\"}: the sentence Perseus shows, and what a read returns (64 KiB at most). Each action approved as a permission.",
+        "example": {
+          "add-paper": {
+            "description": "Add a paper to a section of the company",
+            "input": {
+              "section": "text",
+              "document": "document",
+              "valid": "date?"
+            },
+            "changes": true
+          },
+          "record": {
+            "description": "Read the company's record",
+            "input": {},
+            "changes": false
+          }
+        }
+      },
+      {
+        "key": "papers",
+        "rule": "With the capability folders: the sections of the tool that take papers, 1 to 16, by key (the grammar of an action's name), each {\"name\", \"folder\"} — how it is shown (1 to 40 printable characters) and the folder of Files given to the tool that keeps its papers (1 to 80) — and an optional \"action\", a declared action that changes and takes a required document, which the mail room calls once it filed a paper there. The mail room offers them beside the folders of Files. Never approved: the tool only reaches the folders it is given.",
+        "example": {
+          "insurance": {
+            "name": "Insurance",
+            "folder": "Company",
+            "action": "add-paper"
+          }
+        }
+      },
+      {
         "key": "schedules",
         "rule": "Work the tool does by itself at set times, 1 to 8: each {\"name\", \"cron\"} — a name of its own (^[a-z][a-z0-9-]{0,31}$) and a five-field cron line (minute hour day month weekday: numbers, *, ranges, lists and steps, one space apart, Sunday 0 or 7, no names nor macros) read on the wall clock of the Chest's time zone, its runs 15 minutes apart at least. Each run is posted, signed, to POST /chest-schedules, the tool woken if it sleeps, and answered within 5 minutes. Each schedule approved as a permission; running by itself is what is approved.",
         "example": [
@@ -257,7 +289,7 @@
       },
       {
         "key": "build.static",
-        "rule": "The path prefixes of built files, served as they are on both hosts: up to 4, each \"/…/\" (/_next/static/ without it); never /chest/, /_chest/, /chest-events/ or /chest-schedules/.",
+        "rule": "The path prefixes of built files, served as they are on both hosts: up to 4, each \"/…/\" (/_next/static/ without it); never /chest/, /_chest/, /chest-events/, /chest-schedules/ or /chest-actions/.",
         "example": [
           "/_next/static/"
         ]

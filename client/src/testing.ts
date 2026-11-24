@@ -8,7 +8,7 @@ import { clockSkew, eventWindow, fieldNamePattern, fieldOf, instantOf, isAudienc
 import type { ChestEvent, EmitAudience, FolderEvent, ToolEvent } from "./events.js";
 import { groupIdPattern, languagePattern, memberIdPattern, type Member } from "./member.js";
 import { forget } from "./members.js";
-import { eventChannel, json, object, scheduleChannel, sign, signClaims, type Channel } from "./signed.js";
+import { actionChannel, eventChannel, json, object, scheduleChannel, sign, signClaims, type Channel } from "./signed.js";
 import { fakeFolders, type FakeFolders, type FakeFoldersOptions } from "./testing-folders.js";
 import { fakeRealtime, type FakeRealtime, type FakeRealtimeOptions } from "./testing-realtime.js";
 
@@ -155,7 +155,9 @@ export type FakeRun = { id?: string; scheduledAt?: string; attempt?: number };
 // committed, a membership row removed), deliver, which delivers an event to the tool — POST
 // /chest-events of its address, or a handler of Web Requests — and says the
 // status it answered, run, which delivers a run of a schedule the same way
-// on /chest-schedules, and close, which stops it and restores the
+// on /chest-schedules, act, which calls an action in a member's name on
+// /chest-actions/<name> and says the status and the body answered, and
+// close, which stops it and restores the
 // environment. Its members are those who have the tool: the others are
 // skipped.
 export type FakeChest = {
@@ -181,6 +183,7 @@ export type FakeChest = {
   emitted: FakeEmitted[];
   deliver(event: FakeEvent, to: string | ((request: Request) => Response | Promise<Response>)): Promise<number>;
   run(name: string, to: string | ((request: Request) => Response | Promise<Response>), run?: FakeRun): Promise<number>;
+  act(name: string, input: Record<string, unknown>, member: Member, to: string | ((request: Request) => Response | Promise<Response>)): Promise<{ status: number; body: unknown }>;
   close(): Promise<void>;
 };
 
@@ -375,7 +378,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     const m = chest.members.find(x => x.id === id);
     return m ? m.role : undefined;
   });
-  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, folders: { given: [], documents: new Map(), opens: [] }, full: false, notifications: [], badges: new Map(), acknowledged: [], ai: [], opens: [], realtime: realtime.realtime, emitted: [], deliver: async () => 0, run: async () => 0, close: async () => {} };
+  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, folders: { given: [], documents: new Map(), opens: [] }, full: false, notifications: [], badges: new Map(), acknowledged: [], ai: [], opens: [], realtime: realtime.realtime, emitted: [], deliver: async () => 0, run: async () => 0, act: async () => ({ status: 0, body: null }), close: async () => {} };
   const former = [...(options.former ?? [])];
   let window = 0, calls = 0;
   // The groups the tool sees: those that give it, or all with members.groups;
@@ -930,25 +933,32 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
   forget();
   // post delivers what the Chest posts to the tool on a channel — at its
   // address, or to a handler — and says the status it answered.
-  const post = async (path: string, channel: Channel, id: string, body: string, to: string | ((request: Request) => Response | Promise<Response>)): Promise<number> => {
-    const request = new Request((typeof to === "string" ? to.replace(/\/$/u, "") : "http://tool.test") + path, { method: "POST", headers: { "Content-Type": "application/json", [channel.header]: sign(channel, id, body, { token, tool }) }, body });
-    const answer = typeof to === "string" ? await fetch(request, { redirect: "manual" }) : await to(request);
-    await answer.body?.cancel();
-    return answer.status;
+  const post = async (path: string, channel: Channel, id: string, body: string, to: string | ((request: Request) => Response | Promise<Response>), headers: Record<string, string> = {}): Promise<Response> => {
+    const request = new Request((typeof to === "string" ? to.replace(/\/$/u, "") : "http://tool.test") + path, { method: "POST", headers: { "Content-Type": "application/json", [channel.header]: sign(channel, id, body, { token, tool }), ...headers }, body });
+    return typeof to === "string" ? await fetch(request, { redirect: "manual" }) : await to(request);
+  };
+  const status = async (answer: Promise<Response>): Promise<number> => {
+    const response = await answer;
+    await response.body?.cancel();
+    return response.status;
   };
   chest.deliver = async (event, to) => {
     const id = event.id ?? newId("evt_"), occurredAt = event.occurredAt ?? new Date().toISOString();
     if ("source" in event) {
       const body = JSON.stringify({ id, type: event.type, source: event.source, occurredAt, ...(event.subject === undefined ? {} : { subject: event.subject }), audience: event.audience ?? "all", data: event.data });
-      return post("/chest-events", eventChannel, id, body, to);
+      return status(post("/chest-events", eventChannel, id, body, to));
     }
     if (event.type === "member.erased") erasures.add(event.data.erasure);
-    return post("/chest-events", eventChannel, id, JSON.stringify({ id, type: event.type, occurredAt, data: event.data }), to);
+    return status(post("/chest-events", eventChannel, id, JSON.stringify({ id, type: event.type, occurredAt, data: event.data }), to));
   };
   chest.run = async (name, to, run = {}) => {
     const id = run.id ?? newId("run_");
     const body = JSON.stringify({ id, name, scheduledAt: run.scheduledAt ?? new Date().toISOString(), attempt: run.attempt ?? 1 });
-    return post("/chest-schedules", scheduleChannel, id, body, to);
+    return status(post("/chest-schedules", scheduleChannel, id, body, to));
+  };
+  chest.act = async (name, input, member, to) => {
+    const answer = await post("/chest-actions/" + name, actionChannel, newId("act_"), JSON.stringify({ input }), to, { "Chest-Member": signAssertion(member, { token, tool }) });
+    return { status: answer.status, body: json(await answer.text()) };
   };
   chest.close = async () => {
     realtime.close();

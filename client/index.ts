@@ -1,9 +1,9 @@
 // The package root: every published module a tool's server code uses (tool
 // contract 0.7). Each one is also its own subpath (@argentic/chest-sdk/member,
 // /chest, /database, /sealed, /files, /folders, /members, /notifications,
-// /events, /schedules, /ai, /realtime, /errors), which pulls in nothing else.
-// The sealed, files, folders, members, notifications, events, schedules, ai
-// and realtime APIs are namespaces here, as their names (seal, open, get,
+// /events, /schedules, /actions, /ai, /realtime, /errors), which pulls in
+// nothing else. The sealed, files, folders, members, notifications, events,
+// schedules, actions, ai and realtime APIs are namespaces here, as their names (seal, open, get,
 // list, stat, move, notify, verify, chat, publish…) are too plain to stand
 // alone.
 // @argentic/chest-sdk/realtime/client runs in the browser, and
@@ -19,5 +19,6 @@ export * as members from "./src/members.js";
 export * as notifications from "./src/notifications.js";
 export * as events from "./src/events.js";
 export * as schedules from "./src/schedules.js";
+export * as actions from "./src/actions.js";
 export * as ai from "./src/ai.js";
 export * as realtime from "./src/realtime.js";

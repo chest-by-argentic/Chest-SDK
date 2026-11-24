@@ -23,8 +23,8 @@ Node 22 or later. ESM only, compiled JavaScript with its type declarations.
 
 Each module is its own subpath and pulls in nothing else; the root gives them
 all, with the sealed, files, folders, members, notifications, events,
-schedules, ai and realtime APIs as the namespaces `sealed`, `files`,
-`folders`, `members`, `notifications`, `events`, `schedules`, `ai` and
+schedules, actions, ai and realtime APIs as the namespaces `sealed`, `files`,
+`folders`, `members`, `notifications`, `events`, `schedules`, `actions`, `ai` and
 `realtime` (the browser
 client and the testing module are not in the root).
 
@@ -36,6 +36,7 @@ client and the testing module are not in the root).
 | `@argentic/chest-sdk/notifications` | `notify`, `broadcast`, `withdraw`, `badge.set`, `badge.setMany`, types `Notice`, `Words`, `Audience`, `Delivery`, `BadgeCount`, `BadgeWrite`: counters on the tool's tile and items in members' inboxes, inside the Chest (capability `notifications`) |
 | `@argentic/chest-sdk/events` | `handle`, `verify`, `emit`, `acknowledgeErasure`, `memorySeen`, `erasureIdPattern`, types `ChestEvent`, `ChestEventType`, `MemberUpdated`, `AccessRevoked`, `MemberRemoved`, `MemberErased`, `MemberChange`, `FolderEvent`, `FolderEventType`, `FolderFileAdded`, `FolderFileRemoved`, `FolderEventFile`, `ToolEvent`, `ToolEventType`, `ReceivedEvent`, `Handler`, `Handlers`, `EmitOptions`, `EmitAudience`, `Emitted`, `Seen`: the events of the members' lifecycle (`"receives": ["member.*"]`), of the documents of the folders it is given (capability `folders`) and of other tools (`"receives": ["quote.accepted"]`) the Chest posts to the tool's `/chest-events`, verified, deduplicated by id; the events the tool tells the others (`"emits"`); and the acknowledgment of an erasure |
 | `@argentic/chest-sdk/schedules` | `handle`, `verify`, types `Run`, `Handlers`, `Seen`: the runs of the tool's schedules (`"schedules"` in `chest.json`) the Chest posts to its `/chest-schedules` at their times, verified, deduplicated by id |
+| `@argentic/chest-sdk/actions` | `handle`, `read`, `answer`, `Refused`, types `Call`, `Answer`, `Handlers`: the actions Perseus calls in a member's name (`"actions"` in `chest.json`), posted to the tool's `/chest-actions/<name>`, verified, with the member |
 | `@argentic/chest-sdk/ai` | `chat`, `embed`, `models`, `usage`, types `Alias`, `Provider`, `ChatMessage`, `ChatTool`, `ToolChoice`, `ResponseFormat`, `ChatOptions`, `ChatResult`, `ChatChunk`, `ToolCall`, `ToolCallDelta`, `Usage`, `EmbedOptions`, `Embeddings`, `AiModel`, `AiUsage`: AI models through the Chest, on the owner's connectors, metered against the tool's monthly cap (capability `ai`) |
 | `@argentic/chest-sdk/realtime` | `publish`, `send`, `online`, `presence`, `channelPattern`, `eventPattern`, type `Present`: live updates of the members' pages, the Chest holding their connections (capability `realtime`, the key `realtime` of `chest.json`) |
 | `@argentic/chest-sdk/realtime/client` | `connect`, `peerEventPattern`, types `Live`, `Channel`, `Listener`, `EventInfo`, `PeerListener`, `RefusedListener`, `Present`, `ClosedReason`: **the browser's side**, the one module that runs in a page — it joins the tool's channels on the Chest and hears its feeds' rows and its events, apart from the other members' messages, and who is present; it tells the Chest which channel the member has on screen |
@@ -45,7 +46,7 @@ client and the testing module are not in the root).
 | `@argentic/chest-sdk/folders` | `list`, `files`, `get`, `url`, `put`, `uploadUrl`, `remove`, types `Asker`, `Level`, `Folder`, `FolderFile`, `FolderPage`, `FolderFileData`: the folders of Files — the company's storage — the owner gives the tool (capability `folders`), for the member of a request (what they also see) or for nobody (a schedule, an event), a 5-minute link to a document and uploads from a member's browser, on the Chest's documents host |
 | `@argentic/chest-sdk/errors` | `ChestError` (`code`, `status`), `CapabilityNotGranted` (403), `TooLarge` (413), `QuotaExceeded` (429), `RateLimited` (429), `StorageFull` (507), `Unavailable` (503), for sealed values and folders on a member's request `MemberRequired` (401), `NotAllowed` (403), `SealedInvalid` (400), `SealedLocked` (503), `SealedLost` (503), and for AI `AiCapReached` (402), `AiModelNotAllowed` (403), `AiRefused` (422), `AiUnavailable` (502, 503), type `AiUnavailableReason`: what the SDK throws when the Chest does not give what a tool asks |
 | `@argentic/chest-sdk/testing` | `signAssertion`, `withMember`, `fakeChest`, types `AssertionOptions`, `FakeChest`, `FakeChestOptions`, `FakeGroup`, `FakeFile`, `FakeFolder`, `FakeFolders`, `FakeFoldersOptions`, `FakeDocument`, `FakeDocumentOpen`, `FakeFormer`, `FakeNotification`, `FakeEvent`, `FakeEmits`, `FakeEmitted`, `FakeRun`, `FakeAi`, `FakeAiModel`, `FakeAiReply`, `FakeAiCall`, `FakeOpen`, `FakeRealtime`, `FakeRealtimeOptions`, `FakeChannelRule`, `FakeFeed`, `FakePublished`, `FakeSent`: for the tool's own tests only |
-| `@argentic/chest-sdk` | all of the above but `realtime/client` and `testing`; `sealed`, `files`, `folders`, `members`, `notifications`, `events`, `schedules`, `ai` and `realtime` as namespaces |
+| `@argentic/chest-sdk` | all of the above but `realtime/client` and `testing`; `sealed`, `files`, `folders`, `members`, `notifications`, `events`, `schedules`, `actions`, `ai` and `realtime` as namespaces |
 
 ```ts
 import { member } from "@argentic/chest-sdk/member";
@@ -93,8 +94,9 @@ A tool is an ordinary web server in a container without network, run by
 its Chest. The Chest's front is the only one to reach it; the tool reaches only
 what its launcher gives it on `127.0.0.1` (its database, the Chest's API for
 its files, its members, its notifications, its events and AI), and the Chest posts it the
-events it receives on `/chest-events` and the runs of its schedules on
-`/chest-schedules`, through the same launcher. Rights come
+events it receives on `/chest-events`, the runs of its schedules on
+`/chest-schedules` and the calls of its actions on `/chest-actions/<name>`,
+through the same launcher. Rights come
 from the Chest — the signed member, the capabilities approved for the
 version — and the Chest enforces them even outside the SDK:
 the SDK makes the calls easier, it is not a security boundary. The contract
@@ -1208,6 +1210,65 @@ export async function POST(request: Request) {
   agent reads `GET /api/v1/tools/<tool>/schedules` and runs one with
   `POST /api/v1/tools/<tool>/schedules/run {name}` (a token that writes).
 
+## `actions` — what Perseus reads and does in the tool
+
+A tool says what Perseus, the Chest's assistant, may read and do in it, in a
+member's name: “File this letter in Company › Insurance”, “What is our VAT
+number?”. Each action is declared in `chest.json` and approved at install,
+in its own sentence (“Perseus may: Add a paper to a section of the
+company”):
+
+```json
+{ "actions": {
+    "add-paper": { "description": "Add a paper to a section of the company",
+                   "input": { "section": "text", "document": "document", "valid": "date?" },
+                   "changes": true },
+    "record":    { "description": "Read the company's record", "input": {}, "changes": false } } }
+```
+
+```ts
+// app/chest-actions/[name]/route.ts — at the root, outside /chest: the Chest calls
+// it through the launcher only, never a browser.
+import * as actions from "@argentic/chest-sdk/actions";
+
+export async function POST(request: Request) {
+  const { status, body } = await actions.handle(request, {
+    "add-paper": async ({ input, member }) => ({ said: `Filed in ${await file(input, member)}` }),
+    record: async () => ({ said: "The company's record", data: await record() }),
+  });
+  return new Response(body, { status, headers: { "Content-Type": "application/json" } });
+}
+```
+
+- **Declaration**: 16 actions at most, each named by one to three words of
+  lowercase letters and digits joined by dashes (48 characters); a
+  `description` of 1 to 80 characters in the member's words; an `input` of
+  up to 16 camelCase fields with their kinds — those of an event's data
+  (`id`, `text`, `number`, `boolean`, `time`, `date`, `member`, `members`;
+  `?` for an optional one), `document` (the id of a document of Files the
+  member reads in a folder given to the tool: open it with `folders`) and
+  `amount` (`{ "value": "240.00", "currency": "GBP" }`, ISO 4217) —; and
+  `changes`, `false` for an action that only reads.
+- **Who decides**: Perseus calls an action that only reads by itself; one
+  that changes only once the member confirmed Perseus's proposal. The
+  call is the member's own: `call.member` is who it is for, and the tool
+  applies its own rules to them as on any request of theirs.
+- **Delivery**: `POST /chest-actions/<name>` through the launcher only,
+  signed (`Chest-Action`) and with the member's assertion (`Chest-Member`),
+  `{"input": {…}}` of 64 KiB at most, already checked by the Chest against
+  the declaration (an input of another shape never reaches the tool). The
+  tool answers within 10 seconds.
+- **Answer**: `{ said, data? }` — `said`, the sentence Perseus shows (1 to
+  280 characters), `data`, what a read returns (JSON, 64 KiB at most).
+  Throw `new actions.Refused("invalid_input")` for an input the tool cannot
+  take, `new actions.Refused("refused")` for what the member may not do;
+  any other error answers 500.
+- **Papers**: a tool with the capability `folders` names in `"papers"` the
+  sections that take papers, each the folder of Files it keeps them in —
+  `{"insurance": {"name": "Insurance", "folder": "Company", "action":
+  "add-paper"}}` —; the mail room offers them beside the folders of Files,
+  files the paper there, then calls the action named, with the document.
+
 ## `realtime` — live updates of the members' pages
 
 The Chest holds every connection of the tool's pages: the tool writes no
@@ -1379,6 +1440,7 @@ await chest.close();
 | `chest.emitted` | The events the tool emitted, `{id, type, data, subject?, key?, occurredAt, audience?, cause?}` in order, each checked as the Chest checks it: a type of `emits` (`invalid_type`), its declared fields of their kinds, members the tool has or had (`invalid_data`, 16 KiB at most: `too_large`), an audience of its members, former members, groups and any role (`invalid_audience`), `subject`, `key`, `occurredAt`, `cause` (`invalid_event`); a key used again answers its first event for the same content (kept once), `key_reused` for other content. `cause` is the event whose handler emitted it. Each answers `receivers: 0` |
 | `ai: {models?, reply?, cap?, unavailable?}` | The fake Chest's AI, deterministic and without any provider. `models`: the aliases the tool declared, `{alias, model, provider?, input?, output?}` (all four by default, `fake-default`…`fake-embedding`, provider `openrouter`, 1 and 2 USD per million tokens); another alias answers `model_not_allowed`. `reply(request)`: what a chat answers, given the wire request — a string, or `{text?, toolCalls?: {name, arguments, id?}[]}` (by default the last user message, echoed); streamed, it comes word by word, each tool call's arguments in two pieces, then the finish reason and the usage. Embeddings are unit vectors from a hash of each text (8 dimensions unless `dimensions`). Tokens count one per 4 characters; once the spending reaches `cap` (euros, 5 by default; 0 refuses at once) a call answers `cap_reached`. `unavailable` (`no_connector`, `provider_key_invalid`, `provider_unavailable`) makes chat and embeddings answer it. 60 requests a minute |
 | `chest.run(name, to, {id?, scheduledAt?, attempt?})` | Delivers a run of the schedule `name` (a new id, now and attempt 1 by default; name an id to deliver the same run twice) signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-schedules`) or a function of a Web `Request` — and says the status it answered |
+| `chest.act(name, input, member, to)` | Calls the action `name` with `input` in the name of `member`, signed as the Chest signs it, to `to` — the tool's address (`POST <to>/chest-actions/<name>`) or a function of a Web `Request` — and says the status and the body (JSON) it answered |
 | `chest.ai` | The tool's calls to AI, `{path, body}` in order (`body` null for a `GET`) |
 | `chest.acknowledged` | The erasures the tool acknowledged, each once |
 | `chest.opens` | The tool's opens of sealed values, `{member, opened, refused}` in order, as the Chest journals them |

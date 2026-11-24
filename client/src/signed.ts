@@ -2,7 +2,8 @@ import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 
 // What the Chest signs for a server tool — the events of its members and
-// of other tools (events), the runs of its schedules (schedules), posted through its
+// of other tools (events), the runs of its schedules (schedules), the calls
+// of its actions in a member's name (actions), posted through its
 // launcher only (never from the Internet), each on a route of its own —: one
 // mechanism, shared by the modules that read it and by testing, which signs
 // as the Chest. Not a published module. member.ts reads the Chest-Member
@@ -30,6 +31,9 @@ export type Channel = { header: string; label: string; id: RegExp; maxBody: numb
 export const eventChannel: Channel = { header: "Chest-Event", label: "Chest-Event v1", id: /^evt_[a-z2-7]{26}$/u, maxBody: (32 << 20) + (64 << 10) };
 // The runs of the schedules (schedules): POST /chest-schedules.
 export const scheduleChannel: Channel = { header: "Chest-Schedule", label: "Chest-Schedule v1", id: /^run_[a-z2-7]{26}$/u, maxBody: 1024 };
+// The calls of the actions, in a member's name (actions): POST
+// /chest-actions/<name>, an input of 64 KiB under {"input": …}.
+export const actionChannel: Channel = { header: "Chest-Action", label: "Chest-Action v1", id: /^act_[a-z2-7]{26}$/u, maxBody: (64 << 10) + 16 };
 
 const claims = ["aud", "iat", "exp", "jti", "digest"] as const;
 // Clocks of the Chest and of the container may differ by this much, in seconds.
