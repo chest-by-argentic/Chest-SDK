@@ -203,8 +203,8 @@ where nobody is signed in, keep their own switch. The members API answers
 it too: a notification or an email to another member is written in *their*
 language (`members.get(id).language`), not in the sender's. A tool that does not
 speak that language uses its own default. `timeZone` is the zone the member
-works in: the one they chose in their profile, else the one their browser
-is in, else the Chest's. The members API answers it too, so a tool reminds
+is in: the one their browser was last in, never chosen — it follows them at
+once when they travel —, else the Chest's. The members API answers it too, so a tool reminds
 each member at their own hour. What is the same for every member — the
 organization, the company's time zone — is not the member's: it is the
 Chest's (below).
