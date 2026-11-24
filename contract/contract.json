@@ -205,17 +205,6 @@
         }
       },
       {
-        "key": "papers",
-        "rule": "With the capability folders: the sections of the tool that take papers, 1 to 16, by key (the grammar of an action's name), each {\"name\", \"folder\"} — how it is shown (1 to 40 printable characters) and the folder of Files given to the tool that keeps its papers (1 to 80) — and an optional \"action\", a declared action that changes and takes a required document, which the mail room calls once it filed a paper there, in the reviewer's name: its document field the paper, a text field named section the section's key, and each other field named as a value read (due, date, issuer, reference) of its kind. The mail room offers them beside the folders of Files, to whoever can edit that folder with the tool. Never approved: the tool only reaches the folders it is given.",
-        "example": {
-          "insurance": {
-            "name": "Insurance",
-            "folder": "Company",
-            "action": "add-paper"
-          }
-        }
-      },
-      {
         "key": "schedules",
         "rule": "Work the tool does by itself at set times, 1 to 8: each {\"name\", \"cron\"} — a name of its own (^[a-z][a-z0-9-]{0,31}$) and a five-field cron line (minute hour day month weekday: numbers, *, ranges, lists and steps, one space apart, Sunday 0 or 7, no names nor macros) read on the wall clock of the Chest's time zone, its runs 15 minutes apart at least. Each run is posted, signed, to POST /chest-schedules, the tool woken if it sleeps, and answered within 5 minutes. Each schedule approved as a permission; running by itself is what is approved.",
         "example": [

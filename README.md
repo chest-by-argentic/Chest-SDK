@@ -1263,11 +1263,6 @@ export async function POST(request: Request) {
   Throw `new actions.Refused("invalid_input")` for an input the tool cannot
   take, `new actions.Refused("refused")` for what the member may not do;
   any other error answers 500.
-- **Papers**: a tool with the capability `folders` names in `"papers"` the
-  sections that take papers, each the folder of Files it keeps them in —
-  `{"insurance": {"name": "Insurance", "folder": "Company", "action":
-  "add-paper"}}` —; the mail room offers them beside the folders of Files,
-  files the paper there, then calls the action named, with the document.
 
 ## `realtime` — live updates of the members' pages
 
