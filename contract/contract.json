@@ -206,7 +206,7 @@
       },
       {
         "key": "papers",
-        "rule": "With the capability folders: the sections of the tool that take papers, 1 to 16, by key (the grammar of an action's name), each {\"name\", \"folder\"} — how it is shown (1 to 40 printable characters) and the folder of Files given to the tool that keeps its papers (1 to 80) — and an optional \"action\", a declared action that changes and takes a required document, which the mail room calls once it filed a paper there. The mail room offers them beside the folders of Files. Never approved: the tool only reaches the folders it is given.",
+        "rule": "With the capability folders: the sections of the tool that take papers, 1 to 16, by key (the grammar of an action's name), each {\"name\", \"folder\"} — how it is shown (1 to 40 printable characters) and the folder of Files given to the tool that keeps its papers (1 to 80) — and an optional \"action\", a declared action that changes and takes a required document, which the mail room calls once it filed a paper there, in the reviewer's name: its document field the paper, a text field named section the section's key, and each other field named as a value read (due, date, issuer, reference) of its kind. The mail room offers them beside the folders of Files, to whoever can edit that folder with the tool. Never approved: the tool only reaches the folders it is given.",
         "example": {
           "insurance": {
             "name": "Insurance",
