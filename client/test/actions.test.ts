@@ -64,7 +64,7 @@ test("handle answers the handler's sentence, its refusals by their code", async 
     const tool = async (request: Request) => {
       const { status, body } = await actions.handle(request, {
         "add-paper": ({ input, member }) => {
-          if (input["section"] === "hr") throw new actions.Refused("refused");
+          if (input["section"] === "hr") throw new actions.Refused("refused", "not for this member");
           if (typeof input["section"] !== "string") throw new actions.Refused("invalid_input");
           return { said: ` Filed in ${input["section"]} for ${member.firstName} ` };
         },

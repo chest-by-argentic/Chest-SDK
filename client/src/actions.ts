@@ -54,7 +54,7 @@ export type Handlers = Record<string, (call: Call) => Answer | Promise<Answer>>;
 // A refusal of the handler, as the Chest tells Perseus.
 export class Refused extends Error {
   readonly code: "invalid_input" | "refused";
-  constructor(code: "invalid_input" | "refused", message = code) {
+  constructor(code: "invalid_input" | "refused", message: string = code) {
     super(message);
     this.name = "Refused";
     this.code = code;
