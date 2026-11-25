@@ -1213,17 +1213,16 @@ export async function POST(request: Request) {
 ## `actions` — what Perseus reads and does in the tool
 
 A tool says what Perseus, the Chest's assistant, may read and do in it, in a
-member's name: “File this letter in Company › Insurance”, “What is our VAT
-number?”. Each action is declared in `chest.json` and approved at install,
-in its own sentence (“Perseus may: Add a paper to a section of the
-company”):
+member's name: “Add a task to renew the insurance”, “What is left to do
+this week?”. Each action is declared in `chest.json` and approved at
+install, in its own sentence (“Perseus may: Add a task”):
 
 ```json
 { "actions": {
-    "add-paper": { "description": "Add a paper to a section of the company",
-                   "input": { "section": "text", "document": "document", "valid": "date?" },
-                   "changes": true },
-    "record":    { "description": "Read the company's record", "input": {}, "changes": false } } }
+    "add-task": { "description": "Add a task",
+                  "input": { "title": "text", "due": "date?", "document": "document?" },
+                  "changes": true },
+    "tasks":    { "description": "List my open tasks", "input": {}, "changes": false } } }
 ```
 
 ```ts
@@ -1233,8 +1232,8 @@ import * as actions from "@argentic/chest-sdk/actions";
 
 export async function POST(request: Request) {
   const { status, body } = await actions.handle(request, {
-    "add-paper": async ({ input, member }) => ({ said: `Filed in ${await file(input, member)}` }),
-    record: async () => ({ said: "The company's record", data: await record() }),
+    "add-task": async ({ input, member }) => ({ said: `Added “${await addTask(input, member)}”` }),
+    tasks: async ({ member }) => ({ said: "Your open tasks", data: await openTasks(member) }),
   });
   return new Response(body, { status, headers: { "Content-Type": "application/json" } });
 }

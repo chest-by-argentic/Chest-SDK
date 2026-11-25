@@ -188,17 +188,17 @@
         "key": "actions",
         "rule": "What Perseus may read and do in the tool, 1 to 16, by name: one to three words of lowercase letters and digits joined by dashes (48 characters at most), each {\"description\", \"input\", \"changes\"} — what it does in a sentence a member reads in Perseus's proposal, 1 to 80 printable characters; every field of its input with its kind: id, text, number, boolean, time, date, member, members, document, amount, ? after the kind for an optional field (camelCase names, up to 16; {} for none), a document being a link to a document of Files the member may read, which the tool opens once, an amount {\"value\": \"240.00\", \"currency\": \"GBP\"} (ISO 4217); \"changes\", false for an action that only reads, which Perseus calls by itself, true for one Perseus only proposes and the member's Confirm calls. The Chest posts {\"input\": {…}} (64 KiB at most) to POST /chest-actions/\u003cname\u003e, signed (Chest-Action) and in the member's name (Chest-Member), with an input of exactly that shape, and waits 10 seconds for {\"said\", \"data\"}: the sentence Perseus shows, and what a read returns (64 KiB at most). Each action approved as a permission.",
         "example": {
-          "add-paper": {
-            "description": "Add a paper to a section of the company",
+          "add-task": {
+            "description": "Add a task",
             "input": {
-              "section": "text",
-              "document": "document",
-              "valid": "date?"
+              "title": "text",
+              "due": "date?",
+              "document": "document?"
             },
             "changes": true
           },
-          "record": {
-            "description": "Read the company's record",
+          "tasks": {
+            "description": "List my open tasks",
             "input": {},
             "changes": false
           }

@@ -5,13 +5,13 @@ import { actionChannel, delivery, json, object } from "./signed.js";
 // What Perseus may read and do in a server tool, in a member's name: its
 // chest.json declares each action, a sentence the member reads and the
 // shape of its input, and whether it changes anything; each is approved
-// at install (“Perseus may: Add a paper to a section of the company”):
+// at install (“Perseus may: Add a task”):
 //
 //   "actions": {
-//     "add-paper": { "description": "Add a paper to a section of the company",
-//                    "input": { "section": "text", "document": "document", "valid": "date?" },
-//                    "changes": true },
-//     "record":    { "description": "Read the company's record", "input": {}, "changes": false }
+//     "add-task": { "description": "Add a task",
+//                   "input": { "title": "text", "due": "date?", "document": "document?" },
+//                   "changes": true },
+//     "tasks":    { "description": "List my open tasks", "input": {}, "changes": false }
 //   }
 //
 // The kinds of a field are those of an event's data (id, text, number,
@@ -29,14 +29,14 @@ import { actionChannel, delivery, json, object } from "./signed.js";
 //   import * as actions from "@argentic/chest-sdk/actions";
 //   export async function POST(request: Request) {
 //     const { status, body } = await actions.handle(request, {
-//       "add-paper": async ({ input, member }) => ({ said: `Filed in ${await file(input, member)}` }),
-//       record: async () => ({ said: "The company's record", data: await record() }),
+//       "add-task": async ({ input, member }) => ({ said: `Added “${await addTask(input, member)}”` }),
+//       tasks: async ({ member }) => ({ said: "Your open tasks", data: await openTasks(member) }),
 //     });
 //     return new Response(body, { status, headers: { "Content-Type": "application/json" } });
 //   }
 //
 // The tool answers within 10 seconds { said, data? }: said, the sentence
-// Perseus shows the member (“Filed in Insurance; renew by 12 March”), 1 to
+// Perseus shows the member (“Added “Renew the insurance”, due 1 March”), 1 to
 // 280 characters; data, what a read returns, JSON of 64 KiB at most. A
 // handler refuses with Refused: “invalid_input” for an input it cannot
 // take, “refused” for what the member may not do.
