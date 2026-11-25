@@ -16,7 +16,7 @@ const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 const name = manifest.name;
 
 // What each subpath gives at run time (tool contract v2); the root gives them
-// all, sealed, files, members, notifications, events, schedules and ai as namespaces, never
+// all, sealed, files, folders, members, notifications, events, schedules and ai as namespaces, never
 // testing.
 const expected = {
   errors: ["AiCapReached", "AiModelNotAllowed", "AiRefused", "AiUnavailable", "CapabilityNotGranted", "ChestError", "MemberRequired", "NotAllowed", "QuotaExceeded", "RateLimited", "SealedInvalid", "SealedLocked", "SealedLost", "StorageFull", "TooLarge", "Unavailable"],
@@ -25,6 +25,7 @@ const expected = {
   database: ["databaseUrl"],
   sealed: ["isSealed", "open", "openMany", "seal", "sealMany"],
   files: ["delete", "get", "list", "move", "put", "stat", "uploadUrl", "url"],
+  folders: ["files", "get", "list", "put", "remove", "uploadUrl", "url"],
   members: ["forget", "get", "groups", "list", "lookup"],
   notifications: ["badge", "broadcast", "notify", "withdraw"],
   events: ["acknowledgeErasure", "emit", "erasureIdPattern", "handle", "memorySeen", "verify"],
@@ -34,7 +35,7 @@ const expected = {
   "realtime/client": ["connect", "peerEventPattern"],
   testing: ["fakeChest", "signAssertion", "withMember"],
 };
-const namespaces = ["sealed", "files", "members", "notifications", "events", "schedules", "ai", "realtime"];
+const namespaces = ["sealed", "files", "folders", "members", "notifications", "events", "schedules", "ai", "realtime"];
 const rootExports = [...Object.entries(expected).filter(([sub]) => !namespaces.includes(sub) && sub !== "testing" && sub !== "realtime/client").flatMap(([, names]) => names), ...namespaces].sort();
 
 const subpaths = Object.keys(manifest.exports).filter(key => key !== "./package.json");
@@ -186,7 +187,7 @@ import type { AiModel, AiUsage, ChatChunk, ChatMessage, ChatResult, ChatTool, Em
 import { fakeChest, signAssertion, withMember, type FakeAi, type FakeAiCall, type FakeChest, type FakeEmitted, type FakeEvent, type FakeNotification } from "${name}/testing";
 
 export function who(request: Request | IncomingMessage): Member | null { return member(request); }
-export function where(): [Chest, string, string, string | null] { return [theChest, theChest.currency, new URL("/chest", theChest.tool.teamUrl).href, theChest.tool.publicUrl]; }
+export function where(): [Chest, string, string | null] { return [theChest, new URL("/chest", theChest.tool.teamUrl).href, theChest.tool.publicUrl]; }
 export const url: string = databaseUrl();
 export async function keep(): Promise<[FileObject, FileData | null, FilePage, boolean, { url: string; expiresIn: number }]> {
   return [await files.put("a.txt", "a", "text/plain"), await files.get("a.txt"), await files.list({ prefix: "a" }), await files.delete("a.txt"), await sdk.files.url("a.txt")];

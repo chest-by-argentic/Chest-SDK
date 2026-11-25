@@ -6,19 +6,20 @@ is the short path and the mistakes to avoid.
 
 ## What it is
 
-A Chest server tool (tool contract 0.6) is an ordinary web server that runs in
+A Chest server tool (tool contract 0.7) is an ordinary web server that runs in
 a container without network, started by its Chest. The SDK gives it, all
 server-side:
 
 | Need | Import | Requires |
 |---|---|---|
 | Who is signed in on this request, the language to speak to them | `member(request)` from `@argentic/chest-sdk/member` | nothing (the Chest sets `CHEST_TOKEN`, `CHEST_TOOL`) |
-| The Chest itself: its organization's name, its time zone and today's date there, its language, its currency — on a request or not | `chest` from `@argentic/chest-sdk/chest` | nothing (the Chest sets `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`, `CHEST_CURRENCY`) |
+| The Chest itself: its organization's name, its time zone and today's date there, its language — on a request or not | `chest` from `@argentic/chest-sdk/chest` | nothing (the Chest sets `CHEST_ORGANIZATION`, `CHEST_TIME_ZONE`, `CHEST_LANGUAGE`) |
 | The tool's own addresses, for links in an email or a feed | `chest.tool.teamUrl`, `chest.tool.publicUrl` from `@argentic/chest-sdk/chest` | nothing (`CHEST_TEAM_URL`, `CHEST_PUBLIC_URL` with `"public": true`) |
 | Will the Chest take this repository? | `npx chest check` (`--json`) from `@argentic/chest-check` | a clone of Chest-SDK (`check/`, not on npm yet), a Git repository |
 | The tool's own PostgreSQL database | `databaseUrl()` from `@argentic/chest-sdk/database` | `"capabilities": ["database"]` in `chest.json` |
 | Sensitive values (an IBAN, a salary, a confidential message) that only members open, never the Data tab, agents or backups | `seal`, `sealMany`, `open`, `openMany`, `isSealed` from `@argentic/chest-sdk/sealed` | `"capabilities": ["sealed"]` (and `"roles"` to seal for some) |
 | The tool's private files | `put`, `get`, `stat`, `list`, `move`, `delete`, `url`, `uploadUrl` from `@argentic/chest-sdk/files` | `"capabilities": ["files"]` in `chest.json` (and `"files": {"maxObject"}` beyond 32 MiB per object; no quota: the tools share the server's workload volume) |
+| The company's folders of Files the owner gives the tool (receipts, contracts), for a member or for a schedule | `list`, `files`, `get`, `url`, `put`, `uploadUrl`, `remove` from `@argentic/chest-sdk/folders` | `"capabilities": ["folders"]` and `"folders": {"purpose", "level": "view" \| "edit"}` |
 | Who else has the tool | `list`, `get`, `lookup`, `groups.list` from `@argentic/chest-sdk/members` | `"capabilities": ["members"]` (`"members.email"` too for addresses, `"members.groups"` for every group of the Chest — a tool open to everyone that offers “the Sales team”) |
 | Be told when members change, lose access, leave or ask to be erased | `handle`, `verify`, `acknowledgeErasure` from `@argentic/chest-sdk/events` | `"capabilities": ["members"]` and `"receives": ["member.*"]` |
 | Tell other tools what happened (a quote accepted), and be told what they tell | `emit`, `handle` from `@argentic/chest-sdk/events` | `"emits": {"quote.accepted": {"description", "data": {field: kind}}}` to tell; `"receives": ["quote.accepted"]` to be told |
@@ -27,7 +28,7 @@ server-side:
 | Call AI models (chat, streamed or not, tools, embeddings) | `chat`, `embed`, `models`, `usage` from `@argentic/chest-sdk/ai` | `"capabilities": ["ai"]` and `"ai": {"monthly", "models", "purpose"}` |
 | Keep the members' pages live (chat, presence, typing, rows as they are written) | `connect` from `@argentic/chest-sdk/realtime/client` **in the browser**; `publish`, `send`, `online`, `presence` from `@argentic/chest-sdk/realtime` on the server | `"capabilities": ["realtime"]` and `"realtime": {"channels", "feeds"}` |
 | Typed errors | `ChestError`, `CapabilityNotGranted`, `TooLarge`, `QuotaExceeded`, `RateLimited`, `StorageFull`, `Unavailable`, `MemberRequired`, `NotAllowed`, `SealedInvalid`, `SealedLocked`, `SealedLost`, `AiCapReached`, `AiUnavailable`, `AiModelNotAllowed`, `AiRefused` from `@argentic/chest-sdk/errors` | — |
-| Tests without a Chest | `fakeChest` (its `deliver`, `emitted`, `emits`, `run`, its links and uploads, its `realtime`, `chest: {organization, timeZone, language, currency, teamUrl, publicUrl}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
+| Tests without a Chest | `fakeChest` (its `deliver`, `emitted`, `emits`, `run`, its links and uploads, its `folders`, its `realtime`, `chest: {organization, timeZone, language, teamUrl, publicUrl}`), `withMember`, `signAssertion` from `@argentic/chest-sdk/testing` | tests only |
 
 ## Install
 
@@ -43,7 +44,7 @@ Node 22 or later, ESM only, no runtime dependency. TypeScript projects need
 ```jsonc
 // chest.json (repository root): every key and its rule in contract/README.md
 {
-  "chest": "0.6",
+  "chest": "0.7",
   "name": "tasks",
   "capabilities": ["database", "files"],
   "build": { "runtime": "node", "install": "npm ci", "command": "npm run build", "start": "npm start", "port": 3000 }
@@ -398,6 +399,30 @@ const sent = await fetch(up.url, { method: "PUT", body: file }); // 201 {name, t
 Schema changes go in `migrations/NNNN_name.sql`; the Chest runs them in order
 at install and at every update.
 
+## Reach the company's folders
+
+Files is the company's storage: the owner gives the tool folders, one by
+one, after it is installed (nothing at install). Every call names who acts:
+the member's request — the tool then reaches only what that member also
+sees — or `null` for nobody (a schedule, an event: the tool's grants).
+
+```ts
+// app/chest/api/receipts/route.ts — on a member's request: pass the request
+import * as folders from "@argentic/chest-sdk/folders";
+
+export async function POST(request: Request) {
+  const [receipts] = await folders.list(request);  // only folders this member also sees
+  if (!receipts) return Response.json({ error: "no_folder" }, { status: 409 }); // say: ask the owner to give one
+  const up = await folders.uploadUrl(request, receipts.id, "Taxi.pdf", 48213);
+  return Response.json(up); // the browser PUTs the file to up.url
+}
+```
+
+Never pass `null` on a member's request to “see more”: the member would
+reach through the tool what the owner never shared with them. Folder
+events (`folders.file.added`, `folders.file.removed`) come to
+`/chest-events` with the capability alone.
+
 ## Rules that keep a tool correct
 
 - **Server only.** Never import the SDK in a `"use client"` module or ship it
@@ -435,8 +460,8 @@ at install and at every update.
   tells the host (a scheduled job, a digest), write `new URL(path,
   chest.tool.teamUrl)` for members, `chest.tool.publicUrl` for visitors; never
   a host read from a header, never an address stored in the database.
-- **Amounts are in `chest.currency`.** Never ask your own admin for the
-  company's currency.
+- **An amount keeps its own currency.** There is no Chest currency: store
+  the ISO 4217 code beside each amount; never ask your own admin for one.
 - **The public host has no member.** The Chest never sends an assertion there;
   public pages must work for anonymous visitors.
 - **Business rules are yours.** The SDK is not a security boundary: the Chest

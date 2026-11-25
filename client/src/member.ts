@@ -23,8 +23,9 @@ import type { IncomingMessage } from "node:http";
 //   ("en", "fr"…). The tool's private part (/chest) speaks it to them; a
 //   notification or an email to them is written in it.
 // - timeZone is the IANA zone the member works in ("America/New_York"):
-//   the one they chose in their profile, else their browser's, else the
-//   Chest's. Show them times in it; remind them at their hour in it. The
+//   their browser's when they last opened the Chest (no one chooses it; it
+//   follows them at once when they travel), else the Chest's until they
+//   have. Show them times in it; remind them at their hour in it. The
 //   company's day and business rules are the Chest's (chest.timeZone).
 // - email is there only when the tool holds "members.email".
 export type Member = {

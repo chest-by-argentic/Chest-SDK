@@ -107,20 +107,21 @@ export class AiRefused extends ChestError {
   }
 }
 
-// Opening a sealed value needs a member on the request: none came with it,
-// or their ticket expired (a request lasts 60 seconds). A public page, a
+// A call on a member's request — opening a sealed value, reaching folders
+// of Files for them — needs a member on the request: none came with it, or
+// their ticket expired (a request lasts 60 seconds). A public page, a
 // schedule or an event opens nothing.
 export class MemberRequired extends ChestError {
   constructor() {
-    super("member_required", 401, "the Chest refused: sealed values open only on the request of a member");
+    super("member_required", 401, "the Chest refused: this is done only on the request of a member");
   }
 }
 
-// The member may not open this: they lost the tool since the request
-// began, or the value was sealed for roles they do not hold.
+// The member may not do this: they lost the tool since the request began,
+// or the value was sealed for roles they do not hold.
 export class NotAllowed extends ChestError {
   constructor() {
-    super("not_allowed", 403, "the Chest refused: this member may not open this value");
+    super("not_allowed", 403, "the Chest refused: this member may not do this");
   }
 }
 

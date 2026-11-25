@@ -15,6 +15,9 @@ import { delivery, eventChannel, instant, json, memorySeen, object, type Seen } 
 // - its members' lifecycle (member.updated, access.revoked, member.removed,
 //   member.erased), for a tool whose chest.json declares "capabilities":
 //   ["members"] and "receives": ["member.*"];
+// - the documents of the folders of Files it is given (folders.file.added,
+//   folders.file.removed), for a tool whose chest.json declares
+//   "capabilities": ["folders"] — no "receives" needed;
 // - events between tools: those another tool of the Chest emits
 //   ("quote.accepted"), for a tool whose chest.json "receives" names their
 //   type, once the owner approved the link between the two tools.
@@ -42,6 +45,8 @@ import { delivery, eventChannel, instant, json, memorySeen, object, type Seen } 
 // tool out of sync (it reconciles by listing its members, members.list, at
 // its next start) and a tool event is kept as a failed delivery an admin
 // may send again. Every member event also empties what members.lookup keeps.
+// The Chest's own events (members, folders) carry no source: a tool never
+// emits one of their types.
 
 // What changed of a member the tool sees; "email" only with members.email;
 // "language" and "timeZone": the language the Chest speaks to them and the
@@ -56,9 +61,19 @@ export type MemberRemoved = { id: string; type: "member.removed"; occurredAt: st
 // The owner asked for this person's data to be erased: delete or anonymise
 // what the tool keeps of them before deadline, then acknowledgeErasure(erasure).
 export type MemberErased = { id: string; type: "member.erased"; occurredAt: string; data: { id: string; erasure: string; deadline: string } };
+// A document of a folder of Files the tool is given, or of a folder inside
+// it, as an event names it: never who added or removed it.
+export type FolderEventFile = { id: string; name: string; type: string; size: number };
+// A document was added to a folder (a new one, or a new version of one).
+export type FolderFileAdded = { id: string; type: "folders.file.added"; occurredAt: string; data: { folder: string; file: FolderEventFile } };
+// A document was removed to Recently removed.
+export type FolderFileRemoved = { id: string; type: "folders.file.removed"; occurredAt: string; data: { folder: string; file: FolderEventFile } };
 // An event of the members' lifecycle, told apart by its type.
 export type ChestEvent = MemberUpdated | AccessRevoked | MemberRemoved | MemberErased;
 export type ChestEventType = ChestEvent["type"];
+// An event of the documents of the folders of Files the tool is given.
+export type FolderEvent = FolderFileAdded | FolderFileRemoved;
+export type FolderEventType = FolderEvent["type"];
 
 // An event another tool of the Chest told (emit): its id ("evt_…", the same
 // on every delivery of it), its type, the tool that told it (source, stamped
@@ -70,18 +85,20 @@ export type ChestEventType = ChestEvent["type"];
 // delivers an item none of them may see; honouring the list is the tool's
 // rule). Read data defensively: a publisher's later version may add fields.
 export type ToolEvent = { id: string; type: string; source: string; occurredAt: string; subject?: string; audience: "all" | string[]; data: Record<string, unknown> };
-// What a delivery carries: an event of the members' lifecycle, or of a tool.
-export type ReceivedEvent = ChestEvent | ToolEvent;
+// What a delivery carries: an event of the members' lifecycle, of the
+// folders of Files, or of a tool.
+export type ReceivedEvent = ChestEvent | FolderEvent | ToolEvent;
 
 // The type of an event between tools as a handler is keyed: dotted words.
 export type ToolEventType = `${string}.${string}`;
 // What handle() calls for an event of type K: the event of the members'
-// lifecycle of that type, or a tool event.
-export type Handler<K extends string> = (event: K extends ChestEventType ? Extract<ChestEvent, { type: K }> : ToolEvent) => void | Promise<void>;
-// What handle() calls for each type — a member type ("access.revoked"),
-// given its own event, or a type of another tool ("quote.accepted"), given a
+// lifecycle or of the folders of that type, or a tool event.
+export type Handler<K extends string> = (event: K extends ChestEventType ? Extract<ChestEvent, { type: K }> : K extends FolderEventType ? Extract<FolderEvent, { type: K }> : ToolEvent) => void | Promise<void>;
+// What handle() calls for each type — a member type ("access.revoked") or
+// a folders type ("folders.file.added"), given its own event, or a type of
+// another tool ("quote.accepted"), given a
 // ToolEvent; a type left out is accepted and ignored.
-export type Handlers<K extends ToolEventType = ChestEventType | ToolEventType> = { [P in K]?: Handler<P> };
+export type Handlers<K extends ToolEventType = ChestEventType | FolderEventType | ToolEventType> = { [P in K]?: Handler<P> };
 
 // Where handle() remembers the ids of the events already handled (Seen), and
 // memorySeen, which keeps them in this process: shared with schedules.
@@ -91,15 +108,32 @@ export { memorySeen, type Seen } from "./signed.js";
 export const erasureIdPattern = /^era_[a-z2-7]{26}$/u;
 const changes: readonly string[] = ["name", "photo", "role", "groups", "email", "language", "timeZone"];
 
-// memberEvent reads the envelope of a member event (its four keys): the
-// event when it is one this SDK reads, known false for a type of a later
-// Chest, null for one its type cannot say.
-function memberEvent(e: Record<string, unknown>, id: string): { event: ChestEvent; known: true } | { known: false } | null {
+// The identifier of a folder or a document of Files.
+const folderIdPattern = /^[0-9a-f]{32}$/u;
+// folderEvent reads the data of an event of the folders of Files: null for
+// anything else.
+function folderEvent(data: Record<string, unknown>): FolderFileAdded["data"] | null {
+  const file = object(data["file"]);
+  if (Object.keys(data).sort().join(",") !== "file,folder" || typeof data["folder"] !== "string" || !folderIdPattern.test(data["folder"]) || !file || Object.keys(file).sort().join(",") !== "id,name,size,type") return null;
+  const { id, name, type, size } = file;
+  if (typeof id !== "string" || !folderIdPattern.test(id) || typeof name !== "string" || name.length < 1 || name.length > 1024 || typeof type !== "string" || type.length > 255 || typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) return null;
+  return { folder: data["folder"], file: { id, name, type, size } };
+}
+
+// chestEvent reads the envelope of an event of the Chest (its four keys):
+// the event when it is one this SDK reads, known false for a type of a
+// later Chest, null for one its type cannot say.
+function chestEvent(e: Record<string, unknown>, id: string): { event: ChestEvent | FolderEvent; known: true } | { known: false } | null {
   if (Object.keys(e).length !== 4 || typeof e["type"] !== "string" || !instant(e["occurredAt"])) return null;
   const data = object(e["data"]);
-  if (!data || typeof data["id"] !== "string" || !memberIdPattern.test(data["id"])) return null;
-  const keys = Object.keys(data).sort().join(",");
+  if (!data) return null;
   const base = { id, occurredAt: e["occurredAt"] as string };
+  if (e["type"] === "folders.file.added" || e["type"] === "folders.file.removed") {
+    const told = folderEvent(data);
+    return told ? { known: true, event: { ...base, type: e["type"], data: told } } : null;
+  }
+  if (typeof data["id"] !== "string" || !memberIdPattern.test(data["id"])) return null;
+  const keys = Object.keys(data).sort().join(",");
   switch (e["type"]) {
     case "member.updated": {
       const changed = data["changed"];
@@ -131,23 +165,23 @@ function toolEvent(e: Record<string, unknown>, id: string): ToolEvent | null {
 }
 
 // envelope reads a signed delivery: the event when the signature, the tool,
-// the time and the digest of the body hold and the envelope is one of a
-// member event or of a tool event (it carries a source); known false for a
-// member event of a type this SDK does not read.
+// the time and the digest of the body hold and the envelope is one of an
+// event of the Chest or of a tool event (it carries a source); known false
+// for an event of the Chest of a type this SDK does not read.
 async function envelope(request: IncomingMessage | Request): Promise<{ event: ReceivedEvent; known: true } | { known: false } | null> {
   const signed = await delivery(request, eventChannel);
   if (!signed) return null;
   const e = object(json(signed.body.toString("utf8")));
   if (!e || e["id"] !== signed.id) return null;
-  if (!Object.hasOwn(e, "source")) return memberEvent(e, signed.id);
+  if (!Object.hasOwn(e, "source")) return chestEvent(e, signed.id);
   const event = toolEvent(e, signed.id);
   return event ? { known: true, event } : null;
 }
 
 // verify returns the event a delivery carries, or null when it is not one
 // the Chest made for this tool — no or another signature, for another tool,
-// expired, a body that is not the one signed, not a POST — or when it is a
-// member event of a type this SDK does not know. It reads the body (32 MiB
+// expired, a body that is not the one signed, not a POST — or when it is an
+// event of the Chest of a type this SDK does not know. It reads the body (32 MiB
 // at most, once its signature holds: a tool event names who may see it,
 // up to a whole team): call it before anything else reads it. It never
 // throws for what a request carries.
@@ -164,7 +198,7 @@ const handling = new AsyncLocalStorage<string>();
 // handle verifies one delivery and hands the event to its handler, once:
 // the status to answer the Chest. 401 for a delivery that is not the
 // Chest's; 204 for an event handled, one already seen (seen.has), a type
-// without a handler or a member type this SDK does not know. A handler that
+// without a handler or a type of the Chest this SDK does not know. A handler that
 // throws leaves the event unseen and handle throws: answer 500, the Chest
 // delivers it again. seen is the store of the ids handled (memorySeen by
 // default, lost at a restart: give a durable one). An emit made by the
@@ -181,7 +215,7 @@ export async function handle<K extends ToolEventType>(request: IncomingMessage |
     if (handler) await handling.run(event.id, () => handler(event));
   } else {
     // A member changed or left: what lookup kept of them is stale.
-    forget();
+    if (!event.type.startsWith("folders.")) forget();
     if (handler) await handler(event);
   }
   await seen.add(event.id);
@@ -226,7 +260,7 @@ function audienceOf(given: EmitAudience): Audience {
 // nothing), Unavailable (the event may or may not be told: emit again with
 // the same key).
 export async function emit(type: string, data: Record<string, unknown>, options: EmitOptions = {}): Promise<Emitted> {
-  if (!isToolEventType(type)) throw new ChestError("invalid_type", 400, "a type is two to four dotted lowercase words (quote.accepted), not member.* nor access.*");
+  if (!isToolEventType(type)) throw new ChestError("invalid_type", 400, "a type is two to four dotted lowercase words (quote.accepted), not member.*, access.* nor folders.*");
   if (!object(data)) throw new ChestError("invalid_data", 400, "data is an object of the fields the type declares");
   let size: number;
   try {

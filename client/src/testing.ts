@@ -5,12 +5,14 @@ import type { Duplex } from "node:stream";
 import type { Alias, Provider } from "./ai.js";
 import type { AiUnavailableReason } from "./errors.js";
 import { clockSkew, eventWindow, fieldNamePattern, fieldOf, instantOf, isAudience, isDeclaredData, isToolEventType, itemIdPattern, maxData, rolePattern } from "./eventrules.js";
-import type { ChestEvent, EmitAudience, ToolEvent } from "./events.js";
+import type { ChestEvent, EmitAudience, FolderEvent, ToolEvent } from "./events.js";
 import { groupIdPattern, languagePattern, memberIdPattern, type Member } from "./member.js";
 import { forget } from "./members.js";
-import { eventChannel, json, object, scheduleChannel, sign, signClaims, type Channel } from "./signed.js";
+import { actionChannel, eventChannel, json, object, scheduleChannel, sign, signClaims, type Channel } from "./signed.js";
+import { fakeFolders, type FakeFolders, type FakeFoldersOptions } from "./testing-folders.js";
 import { fakeRealtime, type FakeRealtime, type FakeRealtimeOptions } from "./testing-realtime.js";
 
+export type { FakeDocument, FakeDocumentOpen, FakeFolder, FakeFolders, FakeFoldersOptions } from "./testing-folders.js";
 export type { FakeChannelRule, FakeFeed, FakePublished, FakeRealtime, FakeRealtimeOptions, FakeSent } from "./testing-realtime.js";
 
 // For a tool's own tests, never imported by its production code: a member's
@@ -18,6 +20,8 @@ export type { FakeChannelRule, FakeFeed, FakePublished, FakeRealtime, FakeRealti
 // process that answers members, groups, files (stat, move, links and
 // uploads — its members' and its visitors' —, which it serves and takes
 // itself as the team host and the public part would, on its own origin),
+// the folders of Files it gives the tool (their links and uploads served
+// and taken as the documents host would, on its own origin),
 // sealed values (sealed and opened under a key of its own,
 // for the members and roles it keeps; withMember carries the member's
 // ticket), badges, notifications and broadcasts, AI (chat,
@@ -91,7 +95,8 @@ export type FakeOpen = { member: string; opened: number; refused: number };
 // values), the roles the tool declares (any role of the grammar a value is
 // sealed for, when not said), the events it receives (["member.*"] by default, [] to answer
 // an acknowledgment 403), the events the tool emits (chest.json "emits":
-// none by default, which answers an emit 403), the files it keeps, its AI, and what the Chest is
+// none by default, which answers an emit 403), the files it keeps, the
+// folders of Files it gives (with the capability folders), its AI, and what the Chest is
 // (the chest module: "Test organization", UTC, English and euros by default;
 // the tool at https://<tool>-chest.chest.test, its public part at
 // https://<tool>.chest.test), and its realtime: the channels and feeds of
@@ -105,9 +110,10 @@ export type FakeChestOptions = {
   receives?: string[];
   emits?: Record<string, FakeEmits>;
   files?: Record<string, { data: Uint8Array | string; type?: string }>;
+  folders?: FakeFoldersOptions;
   ai?: FakeAi;
   realtime?: FakeRealtimeOptions;
-  chest?: { organization?: string; timeZone?: string; language?: string; currency?: string; teamUrl?: string; publicUrl?: string | null };
+  chest?: { organization?: string; timeZone?: string; language?: string; teamUrl?: string; publicUrl?: string | null };
 };
 
 // A type a tool emits, as its chest.json declares it in "emits": what
@@ -124,7 +130,7 @@ export type FakeEmits = { description: string; data: Record<string, string> };
 // twice. It is signed as given: an envelope the Chest would never send
 // makes handle() refuse it.
 export type FakeEvent =
-  | { [K in ChestEvent["type"]]: { type: K; data: Extract<ChestEvent, { type: K }>["data"]; id?: string; occurredAt?: string } }[ChestEvent["type"]]
+  | { [K in (ChestEvent | FolderEvent)["type"]]: { type: K; data: Extract<ChestEvent | FolderEvent, { type: K }>["data"]; id?: string; occurredAt?: string } }[(ChestEvent | FolderEvent)["type"]]
   | { type: string; source: string; data: Record<string, unknown>; audience?: ToolEvent["audience"]; subject?: string; id?: string; occurredAt?: string };
 
 // An event the tool emitted, as the fake Chest took it: its id, type and
@@ -140,8 +146,8 @@ export type FakeRun = { id?: string; scheduledAt?: string; attempt?: number };
 
 // A fake Chest in the test's process: its address — its API, and the origin
 // where it serves the links and takes the uploads it signs —, the token and
-// the tool it set in the environment, what it keeps (members, groups and files a test
-// changes or reads; the notifications the tool sent, in the order sent, a
+// the tool it set in the environment, what it keeps (members, groups, files
+// and folders a test changes or reads; the notifications the tool sent, in the order sent, a
 // replaced one last; each member's badge; the erasures the tool
 // acknowledged; its calls to AI, in order; its opens of sealed values, in
 // order; the events it emitted, in order; its realtime: what the tool
@@ -149,7 +155,9 @@ export type FakeRun = { id?: string; scheduledAt?: string; attempt?: number };
 // committed, a membership row removed), deliver, which delivers an event to the tool — POST
 // /chest-events of its address, or a handler of Web Requests — and says the
 // status it answered, run, which delivers a run of a schedule the same way
-// on /chest-schedules, and close, which stops it and restores the
+// on /chest-schedules, act, which calls an action in a member's name on
+// /chest-actions/<name> and says the status and the body answered, and
+// close, which stops it and restores the
 // environment. Its members are those who have the tool: the others are
 // skipped.
 export type FakeChest = {
@@ -159,6 +167,9 @@ export type FakeChest = {
   members: Member[];
   groups: FakeGroup[];
   files: Map<string, FakeFile>;
+  // folders are the folders of Files given, their documents and the opens
+  // of the tool, journaled.
+  folders: FakeFolders;
   // full, set by a test, has every write of a file refused as the Chest
   // refuses one when its server's workload volume is full (507
   // storage_full): a tool's files have no quota of their own.
@@ -172,6 +183,7 @@ export type FakeChest = {
   emitted: FakeEmitted[];
   deliver(event: FakeEvent, to: string | ((request: Request) => Response | Promise<Response>)): Promise<number>;
   run(name: string, to: string | ((request: Request) => Response | Promise<Response>), run?: FakeRun): Promise<number>;
+  act(name: string, input: Record<string, unknown>, member: Member, to: string | ((request: Request) => Response | Promise<Response>)): Promise<{ status: number; body: unknown }>;
   close(): Promise<void>;
 };
 
@@ -260,6 +272,10 @@ const recognisers: Record<string, (data: Buffer) => boolean> = {
 // The types recognised, an office document before the archive it also is.
 const precise = (type: string): boolean => type.includes("officedocument") || type.includes("opendocument");
 const recognised = Object.keys(recognisers).sort((a, b) => Number(precise(b)) - Number(precise(a)) || (a < b ? -1 : a > b ? 1 : 0));
+// contentType is the type a content is, as the Chest recognises it: one
+// recognised, else text when its first 512 bytes hold no binary byte, else
+// bytes (officefiles recognise, Go's DetectContentType).
+const contentType = (data: Buffer): string => recognised.find(r => recognisers[r]!(data)) ?? (data.subarray(0, 512).some(b => b <= 0x08 || b === 0x0b || (b >= 0x0e && b <= 0x1a) || (b >= 0x1c && b <= 0x1f)) ? "application/octet-stream" : "text/plain");
 const accepted = (types: string[], type: string): boolean => types.some(t => t === type || (t.endsWith("/*") && type.startsWith(t.slice(0, -1))));
 const extensions: Record<string, string> = {
   "image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp", "image/avif": ".avif", "image/heic": ".heic", "image/bmp": ".bmp", "image/tiff": ".tiff",
@@ -362,7 +378,7 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     const m = chest.members.find(x => x.id === id);
     return m ? m.role : undefined;
   });
-  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, full: false, notifications: [], badges: new Map(), acknowledged: [], ai: [], opens: [], realtime: realtime.realtime, emitted: [], deliver: async () => 0, run: async () => 0, close: async () => {} };
+  const chest: FakeChest = { api: "", token, tool, members: [...(options.members ?? [])], groups: [...(options.groups ?? [])], files, folders: { given: [], documents: new Map(), opens: [] }, full: false, notifications: [], badges: new Map(), acknowledged: [], ai: [], opens: [], realtime: realtime.realtime, emitted: [], deliver: async () => 0, run: async () => 0, act: async () => ({ status: 0, body: null }), close: async () => {} };
   const former = [...(options.former ?? [])];
   let window = 0, calls = 0;
   // The groups the tool sees: those that give it, or all with members.groups;
@@ -774,6 +790,15 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     const mac = Buffer.from(parts[3]!, "base64url"), expected = ticketMac(parts[1]!, parts[2]!);
     return mac.length === expected.length && timingSafeEqual(mac, expected) ? parts[1]! : null;
   };
+  // The folders of Files given: the tool's API and the documents host,
+  // their members' tickets those of the sealed values.
+  const folders = fakeFolders(options.folders ?? {}, { origin: () => chest.api, ticketMember, members: () => chest.members, typeOf: contentType, body, send });
+  chest.folders = folders.folders;
+  async function foldersRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
+    if (!capabilities.has("folders")) return send(response, 403, { error: "capability_not_granted" });
+    return folders.api(request, response, url);
+  }
+
   const isContext = (c: unknown): c is string | undefined => c === undefined || (typeof c === "string" && Buffer.byteLength(c) <= sealedContext);
   async function sealedRoute(request: IncomingMessage, response: ServerResponse, url: URL): Promise<void> {
     if (!capabilities.has("sealed")) return send(response, 403, { error: "capability_not_granted" });
@@ -877,6 +902,8 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     const route = url.pathname === "/_chest/realtime" || url.pathname.startsWith("/realtime/") ? realtimeRoute
       : url.pathname.startsWith("/_chest/files/") ? front
+      : url.pathname.startsWith("/d/") || url.pathname.startsWith("/u/") ? folders.host
+      : url.pathname === "/folders" || url.pathname.startsWith("/folders/") || url.pathname.startsWith("/documents/") ? foldersRoute
       : url.pathname.startsWith("/erasures/") ? erasuresRoute
       : url.pathname === "/events" ? eventsRoute
       : url.pathname.startsWith("/ai/") ? aiRoute
@@ -894,37 +921,44 @@ export async function fakeChest(options: FakeChestOptions = {}): Promise<FakeChe
     realtime.upgrade(request, socket, url);
   });
   await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
-  const saved = Object.fromEntries(["CHEST_API", "CHEST_TOKEN", "CHEST_TOOL", "CHEST_ORGANIZATION", "CHEST_TIME_ZONE", "CHEST_LANGUAGE", "CHEST_CURRENCY", "CHEST_TEAM_URL", "CHEST_PUBLIC_URL"].map(name => [name, process.env[name]]));
+  const saved = Object.fromEntries(["CHEST_API", "CHEST_TOKEN", "CHEST_TOOL", "CHEST_ORGANIZATION", "CHEST_TIME_ZONE", "CHEST_LANGUAGE", "CHEST_TEAM_URL", "CHEST_PUBLIC_URL"].map(name => [name, process.env[name]]));
   chest.api = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
   // Its links are on its own origin, the CHEST_API it sets: the files
   // module takes them there (api.ts, chestLink), in this process or in a
   // tool it starts with this environment.
   const publicUrl = options.chest?.publicUrl === undefined ? `https://${tool}.chest.test` : options.chest.publicUrl;
-  Object.assign(process.env, { CHEST_API: chest.api, CHEST_TOKEN: token, CHEST_TOOL: tool, CHEST_ORGANIZATION: options.chest?.organization ?? "Test organization", CHEST_TIME_ZONE: options.chest?.timeZone ?? "UTC", CHEST_LANGUAGE: options.chest?.language ?? "en", CHEST_CURRENCY: options.chest?.currency ?? "EUR", CHEST_TEAM_URL: options.chest?.teamUrl ?? `https://${tool}-chest.chest.test` });
+  Object.assign(process.env, { CHEST_API: chest.api, CHEST_TOKEN: token, CHEST_TOOL: tool, CHEST_ORGANIZATION: options.chest?.organization ?? "Test organization", CHEST_TIME_ZONE: options.chest?.timeZone ?? "UTC", CHEST_LANGUAGE: options.chest?.language ?? "en", CHEST_TEAM_URL: options.chest?.teamUrl ?? `https://${tool}-chest.chest.test` });
   if (publicUrl === null) delete process.env["CHEST_PUBLIC_URL"];
   else process.env["CHEST_PUBLIC_URL"] = publicUrl;
   forget();
   // post delivers what the Chest posts to the tool on a channel — at its
   // address, or to a handler — and says the status it answered.
-  const post = async (path: string, channel: Channel, id: string, body: string, to: string | ((request: Request) => Response | Promise<Response>)): Promise<number> => {
-    const request = new Request((typeof to === "string" ? to.replace(/\/$/u, "") : "http://tool.test") + path, { method: "POST", headers: { "Content-Type": "application/json", [channel.header]: sign(channel, id, body, { token, tool }) }, body });
-    const answer = typeof to === "string" ? await fetch(request, { redirect: "manual" }) : await to(request);
-    await answer.body?.cancel();
-    return answer.status;
+  const post = async (path: string, channel: Channel, id: string, body: string, to: string | ((request: Request) => Response | Promise<Response>), headers: Record<string, string> = {}): Promise<Response> => {
+    const request = new Request((typeof to === "string" ? to.replace(/\/$/u, "") : "http://tool.test") + path, { method: "POST", headers: { "Content-Type": "application/json", [channel.header]: sign(channel, id, body, { token, tool }), ...headers }, body });
+    return typeof to === "string" ? await fetch(request, { redirect: "manual" }) : await to(request);
+  };
+  const status = async (answer: Promise<Response>): Promise<number> => {
+    const response = await answer;
+    await response.body?.cancel();
+    return response.status;
   };
   chest.deliver = async (event, to) => {
     const id = event.id ?? newId("evt_"), occurredAt = event.occurredAt ?? new Date().toISOString();
     if ("source" in event) {
       const body = JSON.stringify({ id, type: event.type, source: event.source, occurredAt, ...(event.subject === undefined ? {} : { subject: event.subject }), audience: event.audience ?? "all", data: event.data });
-      return post("/chest-events", eventChannel, id, body, to);
+      return status(post("/chest-events", eventChannel, id, body, to));
     }
     if (event.type === "member.erased") erasures.add(event.data.erasure);
-    return post("/chest-events", eventChannel, id, JSON.stringify({ id, type: event.type, occurredAt, data: event.data }), to);
+    return status(post("/chest-events", eventChannel, id, JSON.stringify({ id, type: event.type, occurredAt, data: event.data }), to));
   };
   chest.run = async (name, to, run = {}) => {
     const id = run.id ?? newId("run_");
     const body = JSON.stringify({ id, name, scheduledAt: run.scheduledAt ?? new Date().toISOString(), attempt: run.attempt ?? 1 });
-    return post("/chest-schedules", scheduleChannel, id, body, to);
+    return status(post("/chest-schedules", scheduleChannel, id, body, to));
+  };
+  chest.act = async (name, input, member, to) => {
+    const answer = await post("/chest-actions/" + name, actionChannel, newId("act_"), JSON.stringify({ input }), to, { "Chest-Member": signAssertion(member, { token, tool }) });
+    return { status: answer.status, body: json(await answer.text()) };
   };
   chest.close = async () => {
     realtime.close();

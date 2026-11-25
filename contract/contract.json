@@ -1,5 +1,5 @@
 {
-  "contract": "0.6",
+  "contract": "0.7",
   "manifest": {
     "file": "chest.json",
     "maxBytes": 16384,
@@ -9,12 +9,12 @@
         "required": true,
         "rule": "The version of the tool contract the tool is written for, \"MAJOR.MINOR\" — the SDK's MAJOR.MINOR. A Chest serves every version up to its own; an older Chest refuses the tool before reading anything else: \"This tool needs a newer version of your Chest\".",
         "pattern": "^(0|[1-9][0-9]{0,2})\\.(0|[1-9][0-9]{0,2})$",
-        "example": "0.6"
+        "example": "0.7"
       },
       {
         "key": "name",
         "required": true,
-        "rule": "The tool's name and the label of its address: a lowercase letter, then up to 47 lowercase letters, digits or dashes; never login, node, nor a name ending in -chest. Whoever installs the tool may give it another address.",
+        "rule": "The tool's name and the label of its address: a lowercase letter, then up to 47 lowercase letters, digits or dashes; never login, node, documents, nor a name ending in -chest. Whoever installs the tool may give it another address.",
         "pattern": "^[a-z][a-z0-9-]{0,47}$",
         "example": "tasks"
       },
@@ -82,7 +82,7 @@
       },
       {
         "key": "capabilities",
-        "rule": "What the tool uses of its Chest, each at most once, each approved as a permission: database (its own PostgreSQL), sealed (values it seals, which only its members open through it; every version of the tool then waits for the owner or an admin), files (its private files), members (who has the tool), members.email (their addresses; with members), members.groups (every group of the Chest, and which of those members are in each; with members), notifications (badges and inbox items), ai (AI models through the Chest; with the key ai), realtime (live updates to its members' open pages; its channels in the key realtime).",
+        "rule": "What the tool uses of its Chest, each at most once, each approved as a permission: database (its own PostgreSQL), sealed (values it seals, which only its members open through it; every version of the tool then waits for the owner or an admin), files (its private files), members (who has the tool), members.email (their addresses; with members), members.groups (every group of the Chest, and which of those members are in each; with members), notifications (badges and inbox items), ai (AI models through the Chest; with the key ai), folders (the folders of Files, the company's storage, that the owner or an admin gives the tool after it is installed; with the key folders), realtime (live updates to its members' open pages; its channels in the key realtime).",
         "example": [
           "database",
           "sealed",
@@ -92,6 +92,7 @@
           "members.groups",
           "notifications",
           "ai",
+          "folders",
           "realtime"
         ]
       },
@@ -112,6 +113,14 @@
             "embedding"
           ],
           "purpose": "Summarises the tasks of a project"
+        }
+      },
+      {
+        "key": "folders",
+        "rule": "Required with the capability folders: \"level\", \"view\" (open and read the documents) or \"edit\" (also add and remove them), the most any folder given to the tool lets it do; \"purpose\", what it keeps there, 1 to 120 printable characters. Installing gives no folder: the owner or an admin gives each one from the tool's page. On a member's request (its Chest-Opener ticket) the tool reaches only what that member also sees.",
+        "example": {
+          "purpose": "Keeps receipts with their expenses",
+          "level": "edit"
         }
       },
       {
@@ -154,7 +163,7 @@
       },
       {
         "key": "emits",
-        "rule": "The events the tool tells the other tools of the Chest, by type: two to four dotted words of lowercase letters, digits and dashes (64 characters at most; never member.* nor access.*), each {\"description\", \"data\"} — what happened in a sentence of 1 to 80 printable characters, and every field its data carries with its kind: id, text, number, boolean, time, date, member, members, ? after the kind for an optional field (camelCase names; {} for none). Data with any other field is refused, 16 KiB at most. Each type approved as a permission, with the tools it reaches; a type's data only grows from one version to the next: a field is never removed, retyped nor made optional — a new shape is a new type.",
+        "rule": "The events the tool tells the other tools of the Chest, by type: two to four dotted words of lowercase letters, digits and dashes (64 characters at most; never member.*, access.* nor folders.*), each {\"description\", \"data\"} — what happened in a sentence of 1 to 80 printable characters, and every field its data carries with its kind: id, text, number, boolean, time, date, member, members, ? after the kind for an optional field (camelCase names; {} for none). Data with any other field is refused, 16 KiB at most. Each type approved as a permission, with the tools it reaches; a type's data only grows from one version to the next: a field is never removed, retyped nor made optional — a new shape is a new type.",
         "example": {
           "task.done": {
             "description": "A task is done",
@@ -174,6 +183,26 @@
           "member.*",
           "quote.accepted"
         ]
+      },
+      {
+        "key": "actions",
+        "rule": "What Perseus may read and do in the tool, 1 to 16, by name: one to three words of lowercase letters and digits joined by dashes (48 characters at most), each {\"description\", \"input\", \"changes\"} — what it does in a sentence a member reads in Perseus's proposal, 1 to 80 printable characters; every field of its input with its kind: id, text, number, boolean, time, date, member, members, document, amount, ? after the kind for an optional field (camelCase names, up to 16; {} for none), a document being a link to a document of Files the member may read, which the tool opens once, an amount {\"value\": \"240.00\", \"currency\": \"GBP\"} (ISO 4217); \"changes\", false for an action that only reads, which Perseus calls by itself, true for one Perseus only proposes and the member's Confirm calls. The Chest posts {\"input\": {…}} (64 KiB at most) to POST /chest-actions/\u003cname\u003e, signed (Chest-Action) and in the member's name (Chest-Member), with an input of exactly that shape, and waits 10 seconds for {\"said\", \"data\"}: the sentence Perseus shows, and what a read returns (64 KiB at most). Each action approved as a permission.",
+        "example": {
+          "add-task": {
+            "description": "Add a task",
+            "input": {
+              "title": "text",
+              "due": "date?",
+              "document": "document?"
+            },
+            "changes": true
+          },
+          "tasks": {
+            "description": "List my open tasks",
+            "input": {},
+            "changes": false
+          }
+        }
       },
       {
         "key": "schedules",
@@ -248,7 +277,7 @@
       },
       {
         "key": "build.static",
-        "rule": "The path prefixes of built files, served as they are on both hosts: up to 4, each \"/…/\" (/_next/static/ without it); never /chest/, /_chest/, /chest-events/ or /chest-schedules/.",
+        "rule": "The path prefixes of built files, served as they are on both hosts: up to 4, each \"/…/\" (/_next/static/ without it); never /chest/, /_chest/, /chest-events/, /chest-schedules/ or /chest-actions/.",
         "example": [
           "/_next/static/"
         ]

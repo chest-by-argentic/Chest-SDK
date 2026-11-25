@@ -28,7 +28,7 @@ test("a fake Chest points the environment at itself, and restores it when closed
     assert.match(chest.api, /^http:\/\/127\.0\.0\.1:[0-9]+$/u);
     assert.equal(process.env["CHEST_TOKEN"], chest.token);
     assert.equal(chest.tool, "notes");
-    assert.deepEqual([theChest.organization.name, theChest.timeZone, theChest.language, theChest.currency], ["Test organization", "UTC", "en", "EUR"]);
+    assert.deepEqual([theChest.organization.name, theChest.timeZone, theChest.language], ["Test organization", "UTC", "en"]);
     assert.deepEqual(theChest.tool, { teamUrl: "https://notes-chest.chest.test", publicUrl: "https://notes.chest.test" });
   } finally {
     await chest.close();

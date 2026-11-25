@@ -7,11 +7,12 @@ import { groupIdPattern, memberIdPattern } from "./member.js";
 // refuses with them. Not a published module.
 
 // A type: two to four dotted segments of lowercase letters, digits and
-// dashes, each starting with a letter, 64 characters at most; member.* and
-// access.* are the Chest's own (the members' lifecycle).
+// dashes, each starting with a letter, 64 characters at most; member.*,
+// access.* and folders.* are the Chest's own (the members' lifecycle, the
+// documents of the folders of Files).
 const typePattern = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*){1,3}$/u;
 export const isToolEventType = (value: unknown): value is string =>
-  typeof value === "string" && value.length <= 64 && typePattern.test(value) && !value.startsWith("member.") && !value.startsWith("access.");
+  typeof value === "string" && value.length <= 64 && typePattern.test(value) && !value.startsWith("member.") && !value.startsWith("access.") && !value.startsWith("folders.");
 
 // An identifier of the publisher's own: the "id" kind of a field, an
 // event's subject and its idempotency key.
